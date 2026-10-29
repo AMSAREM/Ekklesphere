@@ -49,7 +49,9 @@ export const AdminDashboard: React.FC = () => {
 
   // Active sub-navigation tabs inside Admin
   const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
-  const [activeSideNav, setActiveSideNav] = useState<string>('dashboard');
+  const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages'>('dashboard');
+
+  const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -156,149 +158,16 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <div className="relative max-w-[1360px] mx-auto my-6 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[36px] p-6 sm:p-8 lg:py-8 lg:pr-10 lg:pl-28 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
-      {/* Curved Sidebar Nav (Exact match to 1001403593.jpg template) */}
-      <nav
-        className="hidden lg:flex side-curved-tab absolute left-0 top-[112px] w-[60px] bg-[#6D5CF2] rounded-r-[32px] flex-col items-center gap-1.5 py-3.5 z-20 shadow-lg shadow-indigo-600/20"
-        aria-label="Admin Side Navigation"
-      >
-        <button
-          onClick={() => {
-            setActiveSideNav('dashboard');
-            setActiveTab('dashboard');
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'dashboard'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Dashboard"
-          title="Dashboard"
-        >
-          <Grid className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('members');
-            setActiveTab('workflows');
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'members'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Members"
-          title="Members Roster"
-        >
-          <Users className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('attendance');
-            setActiveTab('dashboard');
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'attendance'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Attendance"
-          title="Attendance Live Records"
-        >
-          <PieChart className="w-5 h-5" />
-          <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2]" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('notifications');
-            setNotificationsCleared(false);
-            showToast('Showing system & attendance alerts');
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'notifications'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Notifications"
-          title="Notifications"
-        >
-          <Bell className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('services');
-            setIsAddServiceOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'services'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Services"
-          title="Services & Schedule"
-        >
-          <CalendarIcon className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('messages');
-            setIsMessageModalOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'messages'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Messages"
-          title="Broadcast Messages"
-        >
-          <Mail className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('followup');
-            setIsFollowupModalOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'followup'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Follow-up Care"
-          title="Pastoral Care Follow-up"
-        >
-          <CheckSquare className="w-5 h-5" />
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveSideNav('chat');
-            showToast('Staff chat opened: Pastoral & Usher channel');
-          }}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${
-            activeSideNav === 'chat'
-              ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30'
-              : 'text-white/80 hover:text-white hover:bg-white/15'
-          }`}
-          aria-label="Chat"
-          title="Internal Team Chat"
-        >
-          <MessageCircle className="w-5 h-5" />
-        </button>
-      </nav>
-
+    <div className="relative max-w-[1360px] mx-auto my-6 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[36px] p-6 sm:p-8 lg:p-10 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
       {/* Top Header Row */}
       <header className="flex flex-wrap items-center justify-between gap-4 mb-6">
         {/* Top tabs */}
         <div className="flex items-center gap-6 font-semibold text-sm">
           <button
-            onClick={() => setActiveTab('dashboard')}
+            onClick={() => {
+              setActiveTab('dashboard');
+              setActiveModule('dashboard');
+            }}
             className={`flex items-center gap-2 py-1 transition-colors ${
               activeTab === 'dashboard'
                 ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
@@ -309,7 +178,10 @@ export const AdminDashboard: React.FC = () => {
             Dashboard
           </button>
           <button
-            onClick={() => setActiveTab('workflows')}
+            onClick={() => {
+              setActiveTab('workflows');
+              setActiveModule('members');
+            }}
             className={`flex items-center gap-2 py-1 transition-colors ${
               activeTab === 'workflows'
                 ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
@@ -1077,6 +949,129 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Bottom Horizontal Module Navigation Bar */}
+      <nav
+        aria-label="Admin Module Navigation"
+        className="sticky bottom-2 z-20 mt-8 bg-white/95 dark:bg-[#1D1D3D]/95 backdrop-blur-md rounded-2xl p-1.5 sm:p-2 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-lg shadow-indigo-950/5 flex items-center justify-between gap-1 overflow-x-auto"
+      >
+        <div className="flex items-center gap-1 sm:gap-2 w-full justify-between min-w-max sm:min-w-0">
+          {/* 1. Dashboard */}
+          <button
+            onClick={() => {
+              setActiveModule('dashboard');
+              setActiveTab('dashboard');
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'dashboard' && activeTab === 'dashboard'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Overview & Key Metrics"
+          >
+            <Grid className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Dashboard</span>
+          </button>
+
+          {/* 2. Attendance */}
+          <button
+            onClick={() => {
+              setActiveModule('attendance');
+              setActiveTab('dashboard');
+              showToast(`Attendance Tally: ${totalCheckedInCount} / ${expectedAttendance} verified`);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'attendance'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Service Attendance & Check-in Records"
+          >
+            <PieChart className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Attendance</span>
+            <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold">
+              {totalCheckedInCount}
+            </span>
+          </button>
+
+          {/* 3. Members Roster */}
+          <button
+            onClick={() => {
+              setActiveModule('members');
+              setActiveTab('workflows');
+              showToast('Viewing congregation directory & cell groups');
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'members' && activeTab === 'workflows'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Member Profiles & Household Directory"
+          >
+            <Users className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Members</span>
+            <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300 font-semibold">
+              520
+            </span>
+          </button>
+
+          {/* 4. Schedule & Services */}
+          <button
+            onClick={() => {
+              setActiveModule('services');
+              setIsAddServiceOpen(true);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'services'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Schedule New Service or Event"
+          >
+            <CalendarIcon className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Schedule</span>
+          </button>
+
+          {/* 5. Care Follow-up */}
+          <button
+            onClick={() => {
+              setActiveModule('followup');
+              setIsFollowupModalOpen(true);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'followup'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Pastoral Care Follow-up Queue"
+          >
+            <CheckSquare className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Follow-up</span>
+            {openFollowupCount > 0 && (
+              <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 font-bold">
+                {openFollowupCount}
+              </span>
+            )}
+          </button>
+
+          {/* 6. Broadcast Comms */}
+          <button
+            onClick={() => {
+              setActiveModule('messages');
+              setIsMessageModalOpen(true);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeModule === 'messages'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Send SMS, Push, or Email Broadcast"
+          >
+            <Mail className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Broadcast</span>
+          </button>
+        </div>
+      </nav>
 
       {/* MODAL 1: Add New Service */}
       {isAddServiceOpen && (

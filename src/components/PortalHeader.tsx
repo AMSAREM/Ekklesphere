@@ -16,6 +16,8 @@ import {
   LogIn,
   KeyRound,
   Check,
+  Menu,
+  HelpCircle,
 } from 'lucide-react';
 
 export const PortalHeader: React.FC = () => {
@@ -25,6 +27,11 @@ export const PortalHeader: React.FC = () => {
     switchUserRole,
     activePortal,
     setActivePortal,
+    isSidebarCollapsed,
+    isMobileNavOpen,
+    setIsMobileNavOpen,
+    adminSubTab,
+    setIsHelpModalOpen,
     theme,
     toggleTheme,
     totalCheckedInCount,
@@ -62,11 +69,22 @@ export const PortalHeader: React.FC = () => {
   return (
     <header className="sticky top-0 z-40 w-full bg-[#1D1B3A] text-white border-b border-indigo-950/60 shadow-md">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3 sm:gap-4">
-        {/* Brand & Church Name */}
-        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+        {/* Mobile Drawer Button & Brand / Breadcrumbs */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {currentUser && (
+            <button
+              onClick={() => setIsMobileNavOpen(true)}
+              aria-label="Open navigation sidebar"
+              className="md:hidden flex items-center justify-center w-10 h-10 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 active:scale-95 transition-all"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          )}
+
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#6D5CF2] to-[#8C7DFF] flex items-center justify-center text-white shadow-sm shadow-indigo-500/30">
             <Church className="w-4 h-4" />
           </div>
+
           <div className="flex flex-col">
             <span className="font-bold text-sm tracking-tight flex items-center gap-1.5 text-white">
               Ekklesphere
@@ -75,82 +93,37 @@ export const PortalHeader: React.FC = () => {
               </span>
             </span>
           </div>
+
+          {/* Contextual Breadcrumb */}
+          {currentUser && (
+            <div className="hidden lg:flex items-center gap-2 pl-3 ml-2 border-l border-white/15 text-xs text-slate-300">
+              <span className="text-slate-400">Section:</span>
+              <span className="font-semibold text-white">
+                {activePortal === 'admin'
+                  ? adminSubTab === 'workflows'
+                    ? 'Pastoral Care Workflows'
+                    : adminSubTab === 'integrations'
+                    ? 'People & Directory'
+                    : 'Executive Dashboard'
+                  : activePortal === 'usher'
+                  ? 'Door Check-in Station'
+                  : activePortal === 'member'
+                  ? 'Member Mobile Portal'
+                  : 'Proximity Radar & Beacons'}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Unified Portal Selector (Adaptive to role) */}
+        {/* Live Service Status Pill or Guest Indicator (Center) */}
         {currentUser ? (
-          <nav className="flex items-center gap-1 bg-black/35 p-1 rounded-xl border border-white/10" aria-label="Portal Navigation">
-            {/* Admin can see all, Usher sees Usher & Proximity, Member sees Member & Proximity, but all can preview */}
-            <button
-              onClick={() => setActivePortal('admin')}
-              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activePortal === 'admin'
-                  ? 'bg-[#6D5CF2] text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-white/5'
-              }`}
-              title="Church Admin Dashboard & Pastoral Care"
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Admin Dashboard</span>
-              {currentUser.role === 'admin' && (
-                <span className="hidden lg:inline text-[9px] px-1 py-0.2 rounded bg-white/20 font-bold uppercase">
-                  Active
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActivePortal('member')}
-              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activePortal === 'member'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-white/5'
-              }`}
-              title="Congregation Member Mobile App"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Member App</span>
-              {currentUser.role === 'member' && (
-                <span className="hidden lg:inline text-[9px] px-1 py-0.2 rounded bg-white/20 font-bold uppercase">
-                  Active
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActivePortal('usher')}
-              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activePortal === 'usher'
-                  ? 'bg-amber-600 text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-white/5'
-              }`}
-              title="Usher Door PWA & Check-in Station"
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Usher PWA</span>
-              {!isUsherOnline && (
-                <span className="w-2 h-2 rounded-full bg-amber-400" title="Offline mode active" />
-              )}
-              {currentUser.role === 'usher' && (
-                <span className="hidden lg:inline text-[9px] px-1 py-0.2 rounded bg-white/20 font-bold uppercase">
-                  Active
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActivePortal('simulator')}
-              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activePortal === 'simulator'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-white/5'
-              }`}
-              title="BLE Beacon & Geofence Radar Simulator"
-            >
-              <Radio className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden md:inline">Proximity Radar</span>
-            </button>
-          </nav>
+          <div className="hidden sm:flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-slate-300">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="truncate max-w-[140px] md:max-w-none">{currentService.name.split(',')[0]}</span>
+            <span className="text-white font-bold tabular-nums">
+              {totalCheckedInCount} / {expectedAttendance}
+            </span>
+          </div>
         ) : (
           <div className="hidden sm:flex items-center gap-2 text-xs text-slate-300 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
             <KeyRound className="w-3.5 h-3.5 text-indigo-400" />

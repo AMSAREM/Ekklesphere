@@ -65,9 +65,18 @@ interface EkklesphereContextType {
   logout: () => void;
   switchUserRole: (role: UserRole) => void;
 
-  // Navigation & Theme
+  // Navigation & Layout Shell
   activePortal: 'admin' | 'member' | 'usher' | 'simulator';
   setActivePortal: (portal: 'admin' | 'member' | 'usher' | 'simulator') => void;
+  isSidebarCollapsed: boolean;
+  setIsSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
+  toggleSidebar: () => void;
+  isMobileNavOpen: boolean;
+  setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  adminSubTab: 'dashboard' | 'workflows' | 'integrations';
+  setAdminSubTab: (tab: 'dashboard' | 'workflows' | 'integrations') => void;
+  isHelpModalOpen: boolean;
+  setIsHelpModalOpen: (open: boolean) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
   toggleTheme: () => void;
@@ -349,6 +358,32 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
 
   const [activePortal, setActivePortal] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 1280;
+    }
+    return false;
+  });
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => !prev);
+  };
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 768 && window.innerWidth < 1280) {
+        setIsSidebarCollapsed(true);
+      }
+      if (window.innerWidth >= 768) {
+        setIsMobileNavOpen(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
 
@@ -949,6 +984,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         switchUserRole,
         activePortal,
         setActivePortal,
+        isSidebarCollapsed,
+        setIsSidebarCollapsed,
+        toggleSidebar,
+        isMobileNavOpen,
+        setIsMobileNavOpen,
+        adminSubTab,
+        setAdminSubTab,
+        isHelpModalOpen,
+        setIsHelpModalOpen,
         theme,
         setTheme,
         toggleTheme,
