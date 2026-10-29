@@ -13,7 +13,7 @@ const EkklesphereMain: React.FC = () => {
     <div className="min-h-screen flex flex-col transition-colors duration-200">
       <PortalHeader />
 
-      <main className="flex-1 px-3 sm:px-6 py-4 max-w-[1440px] w-full mx-auto">
+      <main className="flex-1 px-3 sm:px-6 py-4 max-w-[1440px] w-full mx-auto relative">
         {activePortal === 'admin' && <AdminDashboard />}
         {activePortal === 'member' && <MemberApp />}
         {activePortal === 'usher' && <UsherTool />}

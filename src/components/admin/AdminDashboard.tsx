@@ -58,6 +58,7 @@ export const AdminDashboard: React.FC = () => {
   // Active sub-navigation tabs inside Admin
   const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
   const [activeSideNav, setActiveSideNav] = useState<string>('dashboard');
+  const [isNavExpanded, setIsNavExpanded] = useState<boolean>(false);
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -312,81 +313,149 @@ export const AdminDashboard: React.FC = () => {
     : [];
 
   return (
-    <div className="relative max-w-[1360px] mx-auto my-4 sm:my-6 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[28px] sm:rounded-[36px] p-4 sm:p-7 lg:py-8 lg:pr-10 lg:pl-24 pb-24 lg:pb-8 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
-      {/* Optimized Dual-Mode Navigation Bar (Floating Bottom Dock on Mobile/Tablet + Sleek Curved Sidebar on Desktop) */}
+    <div
+      className={`relative max-w-[1360px] mx-auto my-4 sm:my-6 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[28px] sm:rounded-[36px] p-4 sm:p-7 lg:py-8 lg:pr-10 ${
+        isNavExpanded ? 'lg:pl-[248px]' : 'lg:pl-24'
+      } pb-24 lg:pb-8 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px] transition-[padding] duration-300 ease-in-out`}
+    >
+      {/* Vertically Centered Curved Sidebar Navigation (Expandable & Collapsible) */}
       <nav
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#6D5CF2]/95 backdrop-blur-md text-white rounded-full p-1.5 shadow-[0_12px_36px_rgba(40,30,120,0.4)] flex flex-row items-center gap-1 border border-white/20 max-w-[95vw] overflow-x-auto scrollbar-none lg:translate-x-0 lg:bottom-auto lg:fixed-none lg:side-curved-tab lg:absolute lg:left-0 lg:top-[104px] lg:w-[60px] lg:rounded-r-[32px] lg:rounded-l-none lg:flex-col lg:gap-1.5 lg:py-3.5 lg:overflow-visible lg:shadow-lg lg:shadow-indigo-600/20"
+        className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#6D5CF2]/95 backdrop-blur-md text-white rounded-full p-1.5 shadow-[0_12px_36px_rgba(40,30,120,0.4)] flex flex-row items-center gap-1 border border-white/20 max-w-[95vw] overflow-x-auto scrollbar-none lg:translate-x-0 lg:bottom-auto lg:side-curved-tab lg:absolute lg:left-0 lg:top-1/2 lg:-translate-y-1/2 ${
+          isNavExpanded ? 'lg:w-[220px] lg:px-2.5' : 'lg:w-[60px] lg:px-1.5'
+        } lg:rounded-r-[32px] lg:rounded-l-none lg:flex-col lg:gap-1.5 lg:py-3.5 lg:overflow-visible lg:shadow-xl lg:shadow-indigo-600/30 transition-all duration-300 ease-in-out`}
         aria-label="Admin Navigation"
       >
+        {/* Desktop Expand / Collapse Trigger */}
+        <div className="hidden lg:flex w-full items-center justify-end px-1 pb-1 mb-1 border-b border-white/20">
+          <button
+            onClick={() => setIsNavExpanded(!isNavExpanded)}
+            className={`h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/90 hover:text-white transition-all text-[11px] font-semibold gap-1.5 ${
+              isNavExpanded ? 'w-full px-2' : 'w-full'
+            }`}
+            title={isNavExpanded ? 'Collapse navigation' : 'Expand navigation'}
+            aria-label={isNavExpanded ? 'Collapse navigation' : 'Expand navigation'}
+          >
+            {isNavExpanded ? (
+              <>
+                <ChevronLeft className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Collapse</span>
+              </>
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+            )}
+          </button>
+        </div>
+
         {/* 1. Dashboard */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('dashboard');
               setActiveTab('dashboard');
             }}
             aria-current={activeSideNav === 'dashboard' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'dashboard'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'dashboard'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'dashboard'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Dashboard"
           >
             <Grid className="w-5 h-5 shrink-0" />
+            {isNavExpanded && <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Dashboard</span>}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Dashboard
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Dashboard
+            </span>
+          )}
         </div>
 
         {/* 2. Members */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('members');
               setActiveTab('workflows');
             }}
             aria-current={activeSideNav === 'members' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'members'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'members'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'members'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Members Directory"
           >
             <Users className="w-5 h-5 shrink-0" />
+            {isNavExpanded && <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Members Roster</span>}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Members Roster
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Members Roster
+            </span>
+          )}
         </div>
 
         {/* 3. Attendance */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('attendance');
               setIsAttendanceModalOpen(true);
             }}
             aria-current={activeSideNav === 'attendance' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'attendance'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'attendance'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'attendance'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Attendance Live"
           >
             <PieChart className="w-5 h-5 shrink-0" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2]" />
+            {isNavExpanded ? (
+              <>
+                <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Attendance</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-400 text-emerald-950 font-mono">
+                  {attendancePercentage}%
+                </span>
+              </>
+            ) : (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2]" />
+            )}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Attendance Live (79%)
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Attendance Live ({attendancePercentage}%)
+            </span>
+          )}
         </div>
 
         {/* 4. Notifications */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('notifications');
@@ -394,109 +463,209 @@ export const AdminDashboard: React.FC = () => {
               showToast('Showing notifications and service briefings');
             }}
             aria-current={activeSideNav === 'notifications' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'notifications'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'notifications'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'notifications'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Notifications"
           >
             <Bell className="w-5 h-5 shrink-0" />
-            {!notificationsCleared && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-400 border-2 border-[#6D5CF2]" />
+            {isNavExpanded ? (
+              <>
+                <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Notifications</span>
+                {!notificationsCleared && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-400 text-rose-950">2</span>
+                )}
+              </>
+            ) : (
+              !notificationsCleared && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-400 border-2 border-[#6D5CF2]" />
+              )
             )}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Notifications (2)
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Notifications (2)
+            </span>
+          )}
         </div>
 
         {/* 5. Services */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('services');
               setIsAddServiceOpen(true);
             }}
             aria-current={activeSideNav === 'services' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'services'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'services'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'services'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Services Schedule"
           >
             <CalendarIcon className="w-5 h-5 shrink-0" />
+            {isNavExpanded && <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Services</span>}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Services & Schedule
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Services & Schedule
+            </span>
+          )}
         </div>
 
         {/* 6. Messages */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('messages');
               setIsMessageModalOpen(true);
             }}
             aria-current={activeSideNav === 'messages' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'messages'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'messages'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'messages'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Broadcast Messages"
           >
             <Mail className="w-5 h-5 shrink-0" />
+            {isNavExpanded && <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Broadcasts</span>}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Broadcast Messages
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Broadcast Messages
+            </span>
+          )}
         </div>
 
         {/* 7. Follow-up */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('followup');
               setIsFollowupModalOpen(true);
             }}
             aria-current={activeSideNav === 'followup' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'followup'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'followup'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'followup'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Pastoral Care Follow-up"
           >
             <CheckSquare className="w-5 h-5 shrink-0" />
+            {isNavExpanded ? (
+              <>
+                <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Care Follow-up</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950">
+                  {followupTasks.filter((t) => t.status === 'open').length}
+                </span>
+              </>
+            ) : (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400 border-2 border-[#6D5CF2]" />
+            )}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Care Follow-up Queue
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Care Follow-up Queue ({followupTasks.filter((t) => t.status === 'open').length})
+            </span>
+          )}
         </div>
 
         {/* 8. Chat */}
-        <div className="group relative">
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
           <button
             onClick={() => {
               setActiveSideNav('chat');
               setIsChatOpen(true);
             }}
             aria-current={activeSideNav === 'chat' ? 'page' : undefined}
-            className={`relative w-10 h-10 lg:w-11 lg:h-11 rounded-2xl flex items-center justify-center transition-all ${
-              activeSideNav === 'chat'
-                ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
-                : 'text-white/80 hover:text-white hover:bg-white/15'
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? `w-full h-10 px-2.5 gap-2.5 ${
+                    activeSideNav === 'chat'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 font-bold'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
+                : `w-10 h-10 lg:w-11 lg:h-11 justify-center ${
+                    activeSideNav === 'chat'
+                      ? 'bg-white text-[#6D5CF2] shadow-md shadow-indigo-900/30 scale-105'
+                      : 'text-white/80 hover:text-white hover:bg-white/15'
+                  }`
             }`}
             aria-label="Staff Coordination Chat"
           >
             <MessageCircle className="w-5 h-5 shrink-0" />
+            {isNavExpanded ? (
+              <>
+                <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Staff Chat</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+              </>
+            ) : (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400 border-2 border-[#6D5CF2]" />
+            )}
           </button>
-          <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-            Staff Coordination Chat
-          </span>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Staff Coordination Chat
+            </span>
+          )}
+        </div>
+
+        {/* 9. Settings */}
+        <div className={`group relative ${isNavExpanded ? 'w-full' : ''}`}>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className={`relative rounded-2xl flex items-center transition-all ${
+              isNavExpanded
+                ? 'w-full h-10 px-2.5 gap-2.5 text-white/80 hover:text-white hover:bg-white/15'
+                : 'w-10 h-10 lg:w-11 lg:h-11 justify-center text-white/80 hover:text-white hover:bg-white/15'
+            }`}
+            aria-label="Admin Settings"
+          >
+            <Settings className="w-5 h-5 shrink-0" />
+            {isNavExpanded && <span className="text-xs font-semibold whitespace-nowrap truncate flex-1 text-left">Settings</span>}
+          </button>
+          {!isNavExpanded && (
+            <span className="hidden lg:block absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#1D1B3A] text-white text-[11px] font-semibold rounded-lg shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+              Settings
+            </span>
+          )}
         </div>
       </nav>
 
