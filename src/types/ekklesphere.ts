@@ -1,5 +1,20 @@
 export type CheckinMethod = 'usher' | 'posted_qr' | 'beacon' | 'geofence' | 'email_link' | 'manual';
 
+export type UserRole = 'admin' | 'usher' | 'member';
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  avatar?: string;
+  initials: string;
+  title: string;
+  campusName: string;
+  memberId?: string;
+  permissions: string[];
+}
+
 export type SignalKind =
   | 'geofence_outer'
   | 'geofence_inner'
@@ -9,43 +24,6 @@ export type SignalKind =
   | 'usher'
   | 'email_link'
   | 'manual';
-
-export type GeofenceSignalKind =
-  | 'enter_outer'
-  | 'exit_outer'
-  | 'enter_inner'
-  | 'exit_inner'
-  | 'beacon_sighting';
-
-export interface DeviceArrivalSignal {
-  id: string; // client-generated UUID for idempotency
-  tenantId: string;
-  campusId: string;
-  personId: string;
-  deviceId: string;
-  kind: GeofenceSignalKind;
-  occurredAt: number; // Unix timestamp ms
-  signature: string; // device ed25519 signature
-  mockLocation: boolean;
-  accuracyM?: number;
-}
-
-export type DwellJobStatus = 'idle' | 'waiting' | 'cancelled_exit' | 'completed_resolved';
-
-export interface ServerDwellJob {
-  jobId: string;
-  queue: string; // e.g. "attendance:dwell-check"
-  personId: string;
-  personName: string;
-  campusId: string;
-  serviceInstanceId: string;
-  status: DwellJobStatus;
-  startedAt: string;
-  delayMs: number; // 300,000 ms (5 minutes)
-  remainingSeconds: number;
-  cancellationReason?: string;
-  resolvedRecordId?: string;
-}
 
 export type MemberStatus = 'visitor' | 'member' | 'inactive' | 'transferred' | 'deceased';
 

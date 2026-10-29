@@ -5,19 +5,26 @@ import { AdminDashboard } from './components/admin/AdminDashboard';
 import { MemberApp } from './components/member/MemberApp';
 import { UsherTool } from './components/usher/UsherTool';
 import { ProximitySimulator } from './components/simulator/ProximitySimulator';
+import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
 const EkklesphereMain: React.FC = () => {
-  const { activePortal, toastMessage } = useEkklesphere();
+  const { currentUser, activePortal, toastMessage } = useEkklesphere();
 
   return (
     <div className="min-h-screen flex flex-col transition-colors duration-200">
       <PortalHeader />
 
-      <main className="flex-1 px-3 sm:px-6 py-4 max-w-[1440px] w-full mx-auto relative">
-        {activePortal === 'admin' && <AdminDashboard />}
-        {activePortal === 'member' && <MemberApp />}
-        {activePortal === 'usher' && <UsherTool />}
-        {activePortal === 'simulator' && <ProximitySimulator />}
+      <main className="flex-1 px-3 sm:px-6 py-4 max-w-[1440px] w-full mx-auto">
+        {!currentUser ? (
+          <UnifiedAuthScreen />
+        ) : (
+          <>
+            {activePortal === 'admin' && <AdminDashboard />}
+            {activePortal === 'member' && <MemberApp />}
+            {activePortal === 'usher' && <UsherTool />}
+            {activePortal === 'simulator' && <ProximitySimulator />}
+          </>
+        )}
       </main>
 
       {/* Global Toast Notification */}

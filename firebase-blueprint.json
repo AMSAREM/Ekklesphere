@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile document containing authentication metadata and role",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "usher", "member"] },
+        "title": { "type": "string" },
+        "campusName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Church service attendance check-in record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "personId": { "type": "string" },
+        "serviceInstanceId": { "type": "string" },
+        "campusId": { "type": "string" },
+        "method": { "type": "string" },
+        "confidence": { "type": "number" },
+        "checkedInAt": { "type": "string" },
+        "late": { "type": "boolean" }
+      },
+      "required": ["id", "personId", "serviceInstanceId", "method", "checkedInAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Registered and authenticated users"
+    },
+    "/attendance_records/{recordId}": {
+      "schema": "AttendanceRecord",
+      "description": "Attendance check-ins for church services"
+    }
+  }
+}

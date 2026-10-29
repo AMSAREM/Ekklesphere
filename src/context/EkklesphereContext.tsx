@@ -1,5 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  firebaseSignOut,
+  onAuthStateChanged,
+  testConnection,
+} from '../firebase';
+import {
   Person,
   ServiceInstance,
   AttendanceRecord,
@@ -7,11 +15,56 @@ import {
   Donation,
   AuditLogItem,
   CheckinMethod,
-  ServerDwellJob,
-  GeofenceSignalKind,
+  UserRole,
+  AuthUser,
 } from '../types/ekklesphere';
 
+export const DEMO_USERS: Record<UserRole, AuthUser> = {
+  admin: {
+    id: 'u-admin-1',
+    name: 'Pastor David Osei',
+    email: 'pastor.david@ekklesphere.org',
+    role: 'admin',
+    initials: 'DO',
+    title: 'Senior Pastor & System Admin',
+    campusName: 'Accra Central Campus',
+    permissions: ['all_access', 'pastoral_care', 'service_management', 'system_settings'],
+  },
+  usher: {
+    id: 'u-usher-1',
+    name: 'Samuel Tetteh',
+    email: 'samuel.usher@ekklesphere.org',
+    role: 'usher',
+    initials: 'ST',
+    title: 'Ushering Head & Door Steward',
+    campusName: 'Accra Central Campus',
+    permissions: ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar'],
+  },
+  member: {
+    id: 'u-member-1',
+    name: 'Ama Mensah',
+    email: 'ama.mensah@gmail.com',
+    role: 'member',
+    initials: 'AM',
+    title: 'Congregation Member (Osu North Cell)',
+    campusName: 'Accra Central Campus',
+    memberId: 'm1',
+    permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+  },
+};
+
 interface EkklesphereContextType {
+  // Authentication & Unified Role System
+  currentUser: AuthUser | null;
+  setCurrentUser: (user: AuthUser | null) => void;
+  login: (user: AuthUser) => void;
+  loginWithCredentials: (email: string, password?: string, preferredRole?: UserRole) => boolean;
+  signInWithGoogle: () => Promise<void>;
+  isGoogleAuthLoading: boolean;
+  registerMember: (firstName: string, lastName: string, email: string, phone: string, groupName: string) => AuthUser;
+  logout: () => void;
+  switchUserRole: (role: UserRole) => void;
+
   // Navigation & Theme
   activePortal: 'admin' | 'member' | 'usher' | 'simulator';
   setActivePortal: (portal: 'admin' | 'member' | 'usher' | 'simulator') => void;
@@ -50,7 +103,7 @@ interface EkklesphereContextType {
   pendingSyncCount: number;
   syncUsherCheckins: () => number;
 
-  // Proximity Simulator & Server BullMQ Dwell Job
+  // Proximity Simulator
   proximityStage: 0 | 1 | 2 | 3; // 0=Outside, 1=300m Outer, 2=100m Inner/Dwell, 3=Checked In
   dwellTimerSeconds: number;
   isBeaconDetected: boolean;
@@ -59,10 +112,6 @@ interface EkklesphereContextType {
   resetProximity: () => void;
   triggerBeaconScan: () => void;
   triggerDwellComplete: () => void;
-  serverDwellJob: ServerDwellJob;
-  sendSimulatedSignal: (kind: GeofenceSignalKind) => void;
-  fastForwardServerDwellJob: () => void;
-  simulateDrivePast: () => void;
 
   // Follow-up & Pastoral Care
   followupTasks: FollowupTask[];
@@ -287,7 +336,227 @@ const INITIAL_FOLLOWUPS: FollowupTask[] = [
 const EkklesphereContext = createContext<EkklesphereContextType | undefined>(undefined);
 
 export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_user');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {
+      // fallback
+    }
+    return DEMO_USERS.admin;
+  });
+
   const [activePortal, setActivePortal] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
+
+  const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
+
+  useEffect(() => {
+    testConnection();
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        const email = fbUser.email || '';
+        const name = fbUser.displayName || email.split('@')[0] || 'Church Member';
+        const initials =
+          name
+            .split(' ')
+            .map((n) => n[0])
+            .slice(0, 2)
+            .join('')
+            .toUpperCase() || 'EM';
+
+        const role: UserRole =
+          email.toLowerCase() === 'elenamends@gmail.com' ||
+          email.toLowerCase().includes('pastor') ||
+          email.toLowerCase().includes('admin')
+            ? 'admin'
+            : email.toLowerCase().includes('usher')
+            ? 'usher'
+            : 'member';
+
+        const gUser: AuthUser = {
+          id: fbUser.uid,
+          name,
+          email,
+          role,
+          avatar: fbUser.photoURL || undefined,
+          initials,
+          title:
+            role === 'admin'
+              ? 'Administrator / Executive Pastor'
+              : role === 'usher'
+              ? 'Door Steward / Usher'
+              : 'Congregation Member',
+          campusName: 'Accra Central Campus',
+          permissions:
+            role === 'admin'
+              ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+              : role === 'usher'
+              ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+              : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+        };
+
+        setCurrentUser(gUser);
+        try {
+          localStorage.setItem('ekklesphere_user', JSON.stringify(gUser));
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const login = (user: AuthUser) => {
+    setCurrentUser(user);
+    try {
+      localStorage.setItem('ekklesphere_user', JSON.stringify(user));
+    } catch {
+      // ignore
+    }
+    if (user.role === 'admin') setActivePortal('admin');
+    else if (user.role === 'usher') setActivePortal('usher');
+    else if (user.role === 'member') setActivePortal('member');
+    showToast(`Welcome back, ${user.name}`);
+  };
+
+  const signInWithGoogle = async () => {
+    setIsGoogleAuthLoading(true);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const fbUser = result.user;
+      const email = fbUser.email || '';
+      const name = fbUser.displayName || 'Google Member';
+      const initials =
+        name
+          .split(' ')
+          .map((n) => n[0])
+          .slice(0, 2)
+          .join('')
+          .toUpperCase() || 'GM';
+
+      const role: UserRole =
+        email.toLowerCase() === 'elenamends@gmail.com' ||
+        email.toLowerCase().includes('pastor') ||
+        email.toLowerCase().includes('admin')
+          ? 'admin'
+          : email.toLowerCase().includes('usher')
+          ? 'usher'
+          : 'member';
+
+      const gUser: AuthUser = {
+        id: fbUser.uid,
+        name,
+        email,
+        role,
+        avatar: fbUser.photoURL || undefined,
+        initials,
+        title:
+          role === 'admin'
+            ? 'Administrator / Executive Pastor'
+            : role === 'usher'
+            ? 'Door Steward / Usher'
+            : 'Congregation Member',
+        campusName: 'Accra Central Campus',
+        permissions:
+          role === 'admin'
+            ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+            : role === 'usher'
+            ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+            : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+      };
+
+      login(gUser);
+      showToast(`Authenticated with Google as ${name}`);
+    } catch (err: unknown) {
+      console.error('Google Sign-in error:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('popup-closed-by-user')) {
+        showToast('Google sign-in was closed before completion');
+      } else {
+        showToast('Google sign-in encountered an issue. You can also sign in via Demo Roles.');
+      }
+    } finally {
+      setIsGoogleAuthLoading(false);
+    }
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+    try {
+      firebaseSignOut(auth).catch(() => {});
+      localStorage.removeItem('ekklesphere_user');
+    } catch {
+      // ignore
+    }
+    showToast('Signed out of Ekklesphere');
+  };
+
+  const switchUserRole = (role: UserRole) => {
+    const targetUser = DEMO_USERS[role];
+    login(targetUser);
+  };
+
+  const loginWithCredentials = (email: string, _password?: string, preferredRole?: UserRole): boolean => {
+    const trimmed = email.trim().toLowerCase();
+    let selectedUser: AuthUser;
+
+    if (preferredRole && DEMO_USERS[preferredRole]) {
+      selectedUser = {
+        ...DEMO_USERS[preferredRole],
+        email: trimmed || DEMO_USERS[preferredRole].email,
+      };
+    } else if (trimmed.includes('pastor') || trimmed.includes('admin') || trimmed.includes('david')) {
+      selectedUser = DEMO_USERS.admin;
+    } else if (trimmed.includes('usher') || trimmed.includes('samuel') || trimmed.includes('door')) {
+      selectedUser = DEMO_USERS.usher;
+    } else {
+      selectedUser = DEMO_USERS.member;
+    }
+
+    login(selectedUser);
+    return true;
+  };
+
+  const registerMember = (firstName: string, lastName: string, email: string, phone: string, groupName: string): AuthUser => {
+    const initials = `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase();
+    const newMemberId = `m-${Date.now()}`;
+    const newPerson: Person = {
+      id: newMemberId,
+      tenantId: 'tenant-accra',
+      firstName,
+      lastName,
+      phoneE164: phone.startsWith('+') ? phone : `+233${phone.replace(/^0/, '')}`,
+      email,
+      status: 'member',
+      groupName: groupName || 'Osu North cell',
+      autoCheckinOptedIn: true,
+      avatarInitials: initials,
+      joinedOn: new Date().toISOString().split('T')[0],
+      consecutiveAbsences: 0,
+    };
+
+    setMembers((prev) => [newPerson, ...prev]);
+
+    const newUser: AuthUser = {
+      id: `u-${Date.now()}`,
+      name: `${firstName} ${lastName}`,
+      email,
+      role: 'member',
+      initials,
+      title: `Member (${groupName || 'Congregation'})`,
+      campusName: 'Accra Central Campus',
+      memberId: newMemberId,
+      permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+    };
+
+    login(newUser);
+    showToast(`Welcome to Accra Central Church, ${firstName}!`);
+    return newUser;
+  };
+
   const [theme, setThemeState] = useState<'light' | 'dark'>('light');
   const [activeServiceId, setActiveServiceId] = useState<string>('svc-sun-1');
   const [services] = useState<ServiceInstance[]>(INITIAL_SERVICES);
@@ -297,22 +566,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
-  // Proximity simulator states & Server BullMQ Dwell Job
+  // Proximity simulator states
   const [proximityStage, setProximityStage] = useState<0 | 1 | 2 | 3>(0);
   const [dwellTimerSeconds, setDwellTimerSeconds] = useState<number>(300); // 5 min
   const [isBeaconDetected, setIsBeaconDetected] = useState<boolean>(false);
-  const [serverDwellJob, setServerDwellJob] = useState<ServerDwellJob>({
-    jobId: 'job-dwell-m1-idle',
-    queue: 'attendance:dwell-check',
-    personId: 'm1',
-    personName: 'Ama Owusu',
-    campusId: 'campus-accra-central',
-    serviceInstanceId: 'svc-sun-1',
-    status: 'idle',
-    startedAt: '--:--',
-    delayMs: 300000,
-    remainingSeconds: 300,
-  });
 
   // Member App states
   const [memberConsents, setMemberConsents] = useState({
@@ -411,24 +668,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, 2800);
   };
 
-  const setTheme = (t: 'light' | 'dark', notify: boolean = true) => {
+  const setTheme = (t: 'light' | 'dark') => {
     setThemeState(t);
-    try {
-      localStorage.setItem('ekklesphere_theme', t);
-    } catch {
-      // Ignore in private storage sandbox
-    }
     if (t === 'dark') {
       document.documentElement.classList.add('dark');
       document.documentElement.setAttribute('data-theme', 'dark');
-      document.documentElement.style.colorScheme = 'dark';
     } else {
       document.documentElement.classList.remove('dark');
       document.documentElement.setAttribute('data-theme', 'light');
-      document.documentElement.style.colorScheme = 'light';
-    }
-    if (notify) {
-      showToast(`Switched to ${t === 'dark' ? 'Dark' : 'Light'} Mode`);
     }
   };
 
@@ -437,18 +684,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   useEffect(() => {
-    let initialTheme: 'light' | 'dark' = 'light';
-    try {
-      const saved = localStorage.getItem('ekklesphere_theme') as 'light' | 'dark' | null;
-      if (saved === 'dark' || saved === 'light') {
-        initialTheme = saved;
-      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        initialTheme = 'dark';
-      }
-    } catch {
-      // Fallback to light
+    // Initial theme detection
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setTheme('dark');
+    } else {
+      setTheme('light');
     }
-    setTheme(initialTheme, false);
   }, []);
 
   const currentService = services.find((s) => s.id === activeServiceId) || services[0];
@@ -658,215 +899,38 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`Follow-up assignment created for ${newTask.personName}`);
   };
 
-  // Server BullMQ Delayed Dwell Job Countdown Effect
-  useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-
-    if (serverDwellJob.status === 'waiting') {
-      interval = setInterval(() => {
-        setServerDwellJob((prev) => {
-          if (prev.status !== 'waiting') return prev;
-          if (prev.remainingSeconds <= 1) {
-            // Dwell timer elapsed on server!
-            // Execute automatic attendance resolution:
-            setTimeout(() => {
-              setProximityStage(3);
-              checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus (BullMQ delayed job)');
-              showToast('Server Dwell Job resolved: Ama Owusu auto checked in (85% confidence).');
-            }, 0);
-
-            return {
-              ...prev,
-              status: 'completed_resolved',
-              remainingSeconds: 0,
-              resolvedRecordId: 'rec-m1-geofence',
-            };
-          }
-
-          setDwellTimerSeconds(prev.remainingSeconds - 1);
-          return {
-            ...prev,
-            remainingSeconds: prev.remainingSeconds - 1,
-          };
-        });
-      }, 1000);
-    }
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [serverDwellJob.status]);
-
-  // Server-side Geofence Signal Processor
-  const sendSimulatedSignal = (kind: GeofenceSignalKind) => {
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    if (kind === 'enter_outer') {
-      setProximityStage(1);
-      setAuditLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          actor: 'Ama Owusu (Device Android)',
-          action: 'SIGNAL: enter_outer (300m)',
-          entityType: 'AttendanceSignal',
-          timestamp,
-          details: 'Outer boundary crossed. OS woke app; approach signal recorded without GPS poll.',
-        },
-        ...prev,
-      ]);
-      showToast('enter_outer: Device entered 300m perimeter. Approach signal recorded.');
-    } else if (kind === 'enter_inner') {
-      setProximityStage(2);
-      setDwellTimerSeconds(300);
-      const newJobId = `job-dwell-${Date.now().toString().slice(-6)}`;
-
-      setServerDwellJob({
-        jobId: newJobId,
-        queue: 'attendance:dwell-check',
-        personId: 'm1',
-        personName: 'Ama Owusu',
-        campusId: 'campus-accra-central',
-        serviceInstanceId: activeServiceId,
-        status: 'waiting',
-        startedAt: timestamp,
-        delayMs: 300000,
-        remainingSeconds: 300,
-      });
-
-      setAuditLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          actor: 'Server BullMQ Engine',
-          action: 'JOB: Dwell Delayed Task Queued',
-          entityType: 'DelayedJob',
-          timestamp,
-          details: `Enqueued 5-min delayed job ${newJobId}. Waiting for dwell threshold before check-in.`,
-        },
-        ...prev,
-      ]);
-      showToast('enter_inner: Server enqueued 5-min delayed dwell job. Timer started.');
-    } else if (kind === 'exit_inner') {
-      setProximityStage(1);
-
-      setServerDwellJob((prev) => {
-        if (prev.status === 'waiting') {
-          setAuditLogs((logs) => [
-            {
-              id: `log-${Date.now()}`,
-              actor: 'Server BullMQ Engine',
-              action: 'JOB CANCELLED: Exit before dwell',
-              entityType: 'DelayedJob',
-              timestamp,
-              details: `Delayed job ${prev.jobId} cancelled. exit_inner received before 5m threshold (drove past).`,
-            },
-            ...logs,
-          ]);
-
-          return {
-            ...prev,
-            status: 'cancelled_exit',
-            cancellationReason: 'Device left inner 100m ring before 5m dwell elapsed (anti-drive-past protection).',
-          };
-        }
-        return prev;
-      });
-
-      showToast('exit_inner: Device departed inner ring. Server cancelled pending dwell job.');
-    } else if (kind === 'exit_outer') {
-      setProximityStage(0);
-      setAuditLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          actor: 'Ama Owusu (Device)',
-          action: 'SIGNAL: exit_outer (>300m)',
-          entityType: 'AttendanceSignal',
-          timestamp,
-          details: 'Device completely departed campus vicinity. No active monitoring.',
-        },
-        ...prev,
-      ]);
-      showToast('exit_outer: Device departed campus vicinity (>300m).');
-    } else if (kind === 'beacon_sighting') {
-      triggerBeaconScan();
-    }
-  };
-
-  // Step-by-step approach helper for simulator
+  // Proximity simulator engine
   const advanceProximityStage = () => {
     if (proximityStage === 0) {
-      sendSimulatedSignal('enter_outer');
+      setProximityStage(1);
+      showToast('Woke app on outer geofence (300m). Approach signal sent.');
     } else if (proximityStage === 1) {
-      sendSimulatedSignal('enter_inner');
+      setProximityStage(2);
+      setDwellTimerSeconds(300);
+      showToast('Entered inner ring (100m). Dwell timer started (5:00).');
     } else if (proximityStage === 2) {
-      fastForwardServerDwellJob();
+      triggerDwellComplete();
     }
   };
 
-  // Instant trigger for Entrance BLE Beacon
   const triggerBeaconScan = () => {
     setIsBeaconDetected(true);
     setProximityStage(3);
-    // Mark server dwell job as superseded/resolved if active
-    setServerDwellJob((prev) => ({
-      ...prev,
-      status: 'completed_resolved',
-      remainingSeconds: 0,
-      resolvedRecordId: 'rec-m1-beacon',
-    }));
     checkInPerson('m1', 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
-    showToast('Entrance BLE beacon detected! Immediate check-in confirmed (95% confidence).');
-  };
-
-  // Fast forward the server dwell countdown
-  const fastForwardServerDwellJob = () => {
-    setProximityStage(3);
-    setDwellTimerSeconds(0);
-    setServerDwellJob((prev) => ({
-      ...prev,
-      status: 'completed_resolved',
-      remainingSeconds: 0,
-      resolvedRecordId: 'rec-m1-geofence',
-    }));
-    checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus (BullMQ delayed job)');
-    showToast('Fast-forward: 5-minute dwell verified on server. Auto check-in completed.');
+    showToast('Entrance BLE beacon detected! Immediate check-in confirmed.');
   };
 
   const triggerDwellComplete = () => {
-    fastForwardServerDwellJob();
-  };
-
-  // Anti-drive-past simulation demonstration: enters inner ring, then exits within 2.5 seconds
-  const simulateDrivePast = () => {
-    showToast('Simulating member driving past campus at 40 km/h...');
-    sendSimulatedSignal('enter_outer');
-
-    setTimeout(() => {
-      sendSimulatedSignal('enter_inner');
-      showToast('Entered 100m ring. Server 5-min delayed job enqueued...');
-
-      setTimeout(() => {
-        sendSimulatedSignal('exit_inner');
-        showToast('Member drove past! exit_inner signal sent. Server cancelled the job.');
-      }, 2500);
-    }, 1000);
+    setProximityStage(3);
+    setDwellTimerSeconds(0);
+    checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus');
+    showToast('Dwell verified (5 mins). Auto check-in completed for Ama Owusu.');
   };
 
   const resetProximity = () => {
     setProximityStage(0);
     setDwellTimerSeconds(300);
     setIsBeaconDetected(false);
-    setServerDwellJob({
-      jobId: 'job-dwell-m1-idle',
-      queue: 'attendance:dwell-check',
-      personId: 'm1',
-      personName: 'Ama Owusu',
-      campusId: 'campus-accra-central',
-      serviceInstanceId: activeServiceId,
-      status: 'idle',
-      startedAt: '--:--',
-      delayMs: 300000,
-      remainingSeconds: 300,
-    });
     removeCheckIn('m1');
     showToast('Proximity simulation reset. Person is outside campus (>300m).');
   };
@@ -874,6 +938,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   return (
     <EkklesphereContext.Provider
       value={{
+        currentUser,
+        setCurrentUser,
+        login,
+        loginWithCredentials,
+        signInWithGoogle,
+        isGoogleAuthLoading,
+        registerMember,
+        logout,
+        switchUserRole,
         activePortal,
         setActivePortal,
         theme,
@@ -908,10 +981,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         resetProximity,
         triggerBeaconScan,
         triggerDwellComplete,
-        serverDwellJob,
-        sendSimulatedSignal,
-        fastForwardServerDwellJob,
-        simulateDrivePast,
         followupTasks,
         resolveFollowupTask,
         addFollowupTask,
