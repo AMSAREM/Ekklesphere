@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ekklesphere: Member app prototype</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#EEF0F8;--card:#fff;--ink:#1B1B3A;--muted:#5B5F7A;--line:#E3E5F2;--brand:#6C5CE7;--bi:#fff;--tint:#EEEBFF;--ok:#23876A;--okbg:#DDF5EC;--warn:#9A6200;--warnbg:#FFEFD0;color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#12122B;--card:#1C1C3C;--ink:#F2F2FA;--muted:#A9ACC8;--line:#2D2D55;--brand:#8C7DFF;--bi:#12122B;--tint:#2A2A55;--ok:#5FD3AB;--okbg:#16382F;--warn:#F5B84A;--warnbg:#3D2E10;color-scheme:dark}}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 "Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select{font:inherit;color:inherit}button{cursor:pointer}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.stage{height:100%;display:grid;place-items:center}
+.phone{width:100%;max-width:410px;height:100%;max-height:820px;background:var(--bg);display:flex;flex-direction:column;position:relative;overflow:hidden}
+@media (min-width:500px){.phone{border-radius:36px;border:1px solid var(--line);box-shadow:0 20px 60px rgba(40,40,90,.18)}}
+.screen{flex:1;overflow:auto;padding:20px 18px 12px}
+h1{font-size:26px;line-height:1.2;margin:0 0 4px}h2{font-size:18px;margin:22px 0 10px}
+.sub{color:var(--muted);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:18px;margin-bottom:12px}
+.status{background:var(--brand);color:var(--bi);border:0}
+.status .sub{color:inherit;opacity:.92}
+.status h3{margin:0 0 4px;font-size:20px;line-height:1.25}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:12px 16px;font-weight:600;min-height:48px}
+.btn.dark{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.btn.brand{background:var(--brand);color:var(--bi);border-color:var(--brand)}
+.btn.block{width:100%}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.stack{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.status .btn{background:rgba(255,255,255,.2);color:inherit;border-color:transparent}
+.status .btn.solid{background:var(--bi);color:var(--brand)}
+.link{background:none;border:0;color:inherit;text-decoration:underline;padding:8px 0;font-size:14px}
+.tag{display:inline-block;border-radius:99px;padding:2px 10px;font-size:12px;font-weight:700;background:var(--tint);color:var(--brand)}
+.tag.ok{background:var(--okbg);color:var(--ok)}
+.ev{display:flex;gap:14px;align-items:center}
+.date{width:52px;height:56px;border-radius:16px;background:var(--tint);color:var(--brand);display:grid;place-items:center;text-align:center;line-height:1.1;font-weight:700;flex:none}
+.date small{display:block;font-size:12px}
+.grow{flex:1;min-width:0}.grow b{display:block}
+.steps{display:flex;gap:6px;margin-top:12px}.steps i{flex:1;height:6px;border-radius:9px;background:rgba(255,255,255,.3)}.steps i.on{background:var(--bi)}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:var(--card);padding:6px 6px calc(6px + 0px)}
+.tabs button{border:0;background:none;border-radius:14px;padding:8px 0 6px;color:var(--muted);font-size:12px;font-weight:600;display:grid;justify-items:center;gap:2px;min-height:56px}
+.tabs button[aria-selected="true"]{color:var(--brand);background:var(--tint)}
+svg.i{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:8px 16px;font-weight:600}
+.chip[aria-pressed="true"]{background:var(--brand);color:var(--bi);border-color:var(--brand)}
+label.f{display:block;font-weight:600;font-size:14px;margin:14px 0 6px}
+input,select{width:100%;border:1px solid var(--line);background:var(--card);border-radius:14px;padding:12px;min-height:48px}
+.sw{width:52px;height:30px;border-radius:99px;border:0;background:var(--line);position:relative;flex:none;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}
+.sw[aria-checked="true"]{background:var(--brand)}.sw[aria-checked="true"]::after{transform:translateX(22px)}
+.pr{padding:14px 0;border-top:1px solid var(--line)}.pr:first-child{border-top:0;padding-top:0}
+.overlay{position:absolute;inset:0;background:rgba(10,10,30,.55);display:flex;align-items:flex-end;z-index:5}
+.overlay[hidden]{display:none}
+.sheet{background:var(--card);width:100%;border-radius:28px 28px 0 0;padding:24px 20px calc(20px + env(safe-area-inset-bottom,0px))}
+.sheet h2{margin-top:0}
+.qr{display:block;margin:14px auto;width:200px;height:200px;background:#fff;padding:10px;border-radius:16px}
+.toast{position:absolute;left:16px;right:16px;bottom:84px;background:var(--ink);color:var(--card);padding:12px 16px;border-radius:14px;font-weight:600;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:9}
+.toast.show{opacity:1}
+ul.plain{margin:8px 0 0;padding-left:20px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="stage"><div class="phone" id="phone">
+  <div class="screen" id="screen"></div>
+  <nav class="tabs" role="tablist" aria-label="Main">
+    <button role="tab" data-tab="home" aria-selected="true"><svg class="i" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Home</button>
+    <button role="tab" data-tab="events" aria-selected="false"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>Events</button>
+    <button role="tab" data-tab="give" aria-selected="false"><svg class="i" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.400-7.500-10A4.300 4.300 0 0 1 12 7.600 4.300 4.300 0 0 1 19.500 10c0 5.600-7.500 10-7.500 10Z"/></svg>Give</button>
+    <button role="tab" data-tab="me" aria-selected="false"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4 3.800-6 8-6s7.300 2 8 6"/></svg>Me</button>
+  </nav>
+  <div class="toast" id="toast" role="status"></div>
+  <div class="overlay" id="ov" hidden></div>
+</div></div>
+
+<script>
+(function(){
+  var S={tab:"home",auto:true,push:true,sms:false,email:true,stage:0,amount:50,fund:"Tithe",method:"MTN MoMo",given:false,rsvp:{}};
+  var scr=document.getElementById("screen"),ov=document.getElementById("ov"),tt;
+  function toast(m){var t=document.getElementById("toast");t.textContent=m;t.classList.add("show");clearTimeout(tt);tt=setTimeout(function(){t.classList.remove("show")},2400)}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+  var EV=[["Sun","1 Nov","Sunday Service","08:00, Main hall"],["Wed","4 Nov","Midweek prayer","18:30, Main hall"],["Sat","7 Nov","Youth fellowship","16:00, Annex"],["Sun","15 Nov","Harvest thanksgiving","09:00, Main hall"]];
+
+  function home(){
+    var st=S.stage,body;
+    if(st===3){
+      body='<h3>You’re checked in, Ama</h3><div class="sub">Sunday Service, 9:12 · Auto check-in</div><div class="stack"><button class="btn" data-act="notme">Not me</button></div>';
+    }else if(st===1||st===2){
+      body='<h3>'+(st===1?'You’re near church':'At the entrance, confirming')+'</h3><div class="sub">'+(st===1?'About 300 m away. No action needed.':'Waiting a few minutes so we don’t count people driving past.')+'</div><div class="steps"><i class="on"></i><i class="'+(st>=2?'on':'')+'"></i><i></i></div>';
+    }else{
+      body='<h3>Sunday Service starts in 25 minutes</h3><div class="sub">'+(S.auto?'Auto check-in is on. We’ll welcome you when you arrive.':'Auto check-in is off. Show your code at the door.')+'</div><div class="stack"><button class="btn solid" data-act="qr">Show my code</button><button class="btn" data-act="arrive">Demo: I’ve arrived</button></div>';
+    }
+    return '<h1>Good morning, Ama</h1><div class="sub">Accra Central Church</div><div class="card status" style="margin-top:16px">'+body+'</div>'+
+    '<h2>Coming up</h2>'+EV.slice(0,2).map(evRow).join("")+
+    '<div class="card"><div class="row"><div class="grow"><b>Give to your church</b><div class="sub">MTN MoMo, Telecel Cash or card</div></div><button class="btn brand" data-tab="give">Give</button></div></div>';
+  }
+  function evRow(e,i){
+    var k=e[2],on=S.rsvp[k];
+    return '<div class="card ev"><div class="date"><span>'+e[1].split(" ")[0]+'<small>'+e[1].split(" ")[1]+'</small></span></div><div class="grow"><b>'+esc(e[2])+'</b><span class="sub">'+esc(e[3])+'</span></div><button class="btn" data-rsvp="'+esc(k)+'" aria-pressed="'+(!!on)+'">'+(on?'Going':'RSVP')+'</button></div>';
+  }
+  function events(){return '<h1>Events</h1><div class="sub" style="margin-bottom:14px">Tap RSVP to let leaders plan seating and children’s rooms.</div>'+EV.map(evRow).join("")}
+  function give(){
+    if(S.given)return '<div class="card" style="text-align:center;margin-top:30px"><h1>Thank you</h1><p class="sub">GHS '+S.amount+' to '+esc(S.fund)+' via '+esc(S.method)+'. A receipt goes to your email.</p><p class="sub">This is a demo. No payment was made.</p><button class="btn block" data-act="again">Give again</button></div>';
+    return '<h1>Give</h1><div class="sub">Your gift is recorded to your profile and receipted by email.</div>'+
+    '<label class="f">Amount (GHS)</label><div class="chips">'+[20,50,100,200].map(function(a){return '<button class="chip" data-amt="'+a+'" aria-pressed="'+(S.amount===a)+'">'+a+'</button>'}).join("")+'</div>'+
+    '<input id="amt" inputmode="numeric" aria-label="Custom amount" placeholder="Other amount" value="'+(S.amount&&[20,50,100,200].indexOf(S.amount)<0?S.amount:'')+'">'+
+    '<label class="f" for="fund">Fund</label><select id="fund">'+["Tithe","Offering","Building project","Welfare"].map(function(f){return '<option'+(f===S.fund?' selected':'')+'>'+f+'</option>'}).join("")+'</select>'+
+    '<label class="f">Pay with</label><div class="chips">'+["MTN MoMo","Telecel Cash","Card"].map(function(m){return '<button class="chip" data-meth="'+m+'" aria-pressed="'+(S.method===m)+'">'+m+'</button>'}).join("")+'</div>'+
+    '<button class="btn dark block" data-act="pay" style="margin-top:18px">Give GHS '+(S.amount||0)+'</button>';
+  }
+  function sw(k,label,desc){return '<div class="pr row"><div class="grow"><b>'+label+'</b><div class="sub">'+desc+'</div></div><button class="sw" role="switch" aria-label="'+label+'" aria-checked="'+S[k]+'" data-sw="'+k+'"></button></div>'}
+  function me(){
+    return '<h1>Privacy centre</h1><div class="sub" style="margin-bottom:14px">You decide what Ekklesphere can do. Changes apply immediately.</div><div class="card">'+
+    sw("auto","Auto check-in","Uses your location only to notice you’ve arrived at church. No location history is kept.")+
+    sw("push","Push notifications","Check-in confirmations and reminders.")+
+    sw("sms","SMS","Reminders if you don’t have data.")+
+    sw("email","Email","Receipts and your personal check-in link.")+'</div>'+
+    '<h2>What the church holds</h2><div class="card"><div class="row"><span class="sub">Name</span><b>Ama Owusu</b></div><div class="row"><span class="sub">Phone</span><b>+233 24 123 4567</b></div><div class="row"><span class="sub">Email</span><b>ama@example.com</b></div><div class="row"><span class="sub">Group</span><b>Osu North cell</b></div></div>'+
+    '<div class="stack"><button class="btn" data-toast="Your data export would be emailed to you">Download my data</button><button class="btn" data-toast="Deletion request would go to church admin">Delete my data</button></div>';
+  }
+  var V={home:home,events:events,give:give,me:me};
+  function draw(){
+    scr.innerHTML=V[S.tab]();
+    document.querySelectorAll(".tabs button").forEach(function(b){b.setAttribute("aria-selected",b.dataset.tab===S.tab)});
+  }
+
+  function qr(){
+    var n=21,s=9,out="",seed=7;
+    function r(){seed=(seed*9301+49297)%233280;return seed/233280}
+    function finder(x,y){return '<rect x="'+x*s+'" y="'+y*s+'" width="'+7*s+'" height="'+7*s+'" fill="#000"/><rect x="'+(x+1)*s+'" y="'+(y+1)*s+'" width="'+5*s+'" height="'+5*s+'" fill="#fff"/><rect x="'+(x+2)*s+'" y="'+(y+2)*s+'" width="'+3*s+'" height="'+3*s+'" fill="#000"/>'}
+    for(var y=0;y<n;y++)for(var x=0;x<n;x++){
+      if((x<8&&y<8)||(x>n-9&&y<8)||(x<8&&y>n-9))continue;
+      if(r()>0.52)out+='<rect x="'+x*s+'" y="'+y*s+'" width="'+s+'" height="'+s+'" fill="#000"/>';
+    }
+    return '<svg class="qr" viewBox="0 0 '+n*s+' '+n*s+'" role="img" aria-label="Sample check-in code">'+out+finder(0,0)+finder(n-7,0)+finder(0,n-7)+'</svg>';
+  }
+  function sheet(html){ov.innerHTML='<div class="sheet" role="dialog" aria-modal="true">'+html+'</div>';ov.hidden=false}
+  function close(){ov.hidden=true;ov.innerHTML=""}
+
+  function consent(){sheet('<h2>Skip the sign-in sheet?</h2><p>Ekklesphere can use your phone’s location to notice when you arrive at church, then check you in.</p><ul class="plain"><li>Only used near the church, never anywhere else</li><li>No location history is saved or shared</li><li>Turn it off any time in the Privacy centre</li></ul><div class="stack"><button class="btn brand block" data-act="on">Turn on auto check-in</button><button class="btn block" data-act="off">Not now</button></div>')}
+
+  var timers=[];
+  function arrive(){
+    if(!S.auto){toast("Auto check-in is off. Show your code at the door.");return}
+    timers.forEach(clearTimeout);S.stage=1;draw();
+    timers=[setTimeout(function(){S.stage=2;if(S.tab==="home")draw()},1500),setTimeout(function(){S.stage=3;if(S.tab==="home")draw();toast(S.push?"Push sent: Welcome, Ama. You’re checked in.":"SMS sent: You’re checked in.")},3200)];
+  }
+
+  document.addEventListener("click",function(e){
+    var t=e.target.closest("button");if(!t)return;
+    if(t.dataset.tab){S.tab=t.dataset.tab;draw();return}
+    if(t.dataset.rsvp){S.rsvp[t.dataset.rsvp]=!S.rsvp[t.dataset.rsvp];draw();return}
+    if(t.dataset.amt){S.amount=+t.dataset.amt;draw();return}
+    if(t.dataset.meth){S.method=t.dataset.meth;draw();return}
+    if(t.dataset.sw){var k=t.dataset.sw;S[k]=!S[k];draw();if(k==="auto")toast(S.auto?"Auto check-in on":"Auto check-in off. Location is no longer used.");return}
+    if(t.dataset.toast){toast(t.dataset.toast);return}
+    var a=t.dataset.act;if(!a)return;
+    if(a==="on"){S.auto=true;close();toast("Auto check-in is on");draw()}
+    else if(a==="off"){S.auto=false;close();draw()}
+    else if(a==="qr"){sheet('<h2>Your check-in code</h2><p class="sub">Show this to an usher or scan it at the entrance. Sample code for the prototype.</p>'+qr()+'<button class="btn block" data-act="close">Close</button>')}
+    else if(a==="close"){close()}
+    else if(a==="arrive"){arrive()}
+    else if(a==="notme"){S.stage=0;draw();toast("Check-in removed. An usher can fix this at the desk.")}
+    else if(a==="pay"){S.amount=S.amount||0;if(S.amount<=0){toast("Enter an amount first");return}S.given=true;draw()}
+    else if(a==="again"){S.given=false;draw()}
+  });
+  document.addEventListener("input",function(e){
+    if(e.target.id==="amt"){S.amount=parseInt(e.target.value,10)||0;var b=document.querySelector('[data-act="pay"]');if(b)b.textContent="Give GHS "+S.amount;document.querySelectorAll("[data-amt]").forEach(function(c){c.setAttribute("aria-pressed",+c.dataset.amt===S.amount)})}
+  });
+  document.addEventListener("change",function(e){if(e.target.id==="fund")S.fund=e.target.value});
+  draw();consent();
+})();
+</script>
+</body>
+</html>

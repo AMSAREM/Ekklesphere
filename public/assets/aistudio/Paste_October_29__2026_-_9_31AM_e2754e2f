@@ -1,0 +1,858 @@
+# Ekklesphere: Build Brief and Blueprint (for Google Gemini)
+
+Working name. Version 0.1, 29 October 2026. Name availability (domains, trademarks, app stores) still to be confirmed.
+
+---
+
+## 0. Instructions for the AI assistant (read this first)
+
+You are acting as a senior full-stack architect and engineer. Your job is to help build **Ekklesphere**, a church management system whose signature feature is automatic attendance when a member's phone approaches the church premises. The full product requirements, architecture, specification, security rules, schema, UI direction and plan are below.
+
+**How to work**
+
+1. Treat this document as the source of truth. If something is missing or contradictory, say so and propose a default instead of silently inventing behaviour.
+2. Work one phase at a time (see section 9). Before writing code for a phase, restate the plan in a few lines and list the files you will create.
+3. Produce complete, runnable code with file paths, not fragments. Include setup commands, environment variables and tests for core rules.
+4. Use the stack in section 2.2 unless I explicitly approve a change.
+5. The privacy rules in section 4.2 are mandatory. Never add continuous location tracking, uploads of location history or use of location for anything except check-in.
+6. Do not build features outside P0 and P1 unless asked.
+7. Ask at most three clarifying questions at a time, and only when blocked.
+
+**Reference files I will attach alongside this one**
+
+- `1001403593.jpg`: the UI template. The admin dashboard must look like it (layout, colours, card style, side tab).
+- `ekklesphere-dashboard-v2.html`, `ekklesphere-member-app.html`, `ekklesphere-usher-tool.html`: working HTML prototypes of the admin dashboard, member app and usher tool. Reuse their layout, tokens and copy.
+
+**Suggested first prompts**
+
+- Phase 0: "Create the monorepo structure, Docker Compose (Postgres with PostGIS, Redis), the NestJS API skeleton with health check, and CI."
+- Phase 1: "Implement tenants, phone OTP auth, members import and the attendance QR and usher flows, with migrations from section 8."
+- Phase 2: "Build the React Native geofencing module with dwell logic and the signed arrival-signal API, following section 3.2."
+
+---
+
+## 1. Product Requirements
+
+### 1.1 Vision
+
+Ekklesphere gives a church one place to know its people, care for them and run its operations. Its signature feature is attendance that takes care of itself: members who opt in are recognised when they arrive at the church premises, and members who stop showing up are surfaced to pastoral teams early, so no one drifts away unnoticed.
+
+### 1.2 Problems to solve
+
+- Paper registers and headcounts are slow, inaccurate and hard to analyse.
+- Leaders learn that someone has drifted away months after it happened.
+- Member data lives in spreadsheets, notebooks and WhatsApp groups.
+- Most church software is priced and designed for Western markets, with weak support for mobile money, patchy connectivity and low-end Android phones.
+
+### 1.3 Goals and non-goals
+
+| Goals (v1) | Non-goals (v1) |
+|---|---|
+| Accurate, low-friction attendance for services and events | Live streaming or sermon hosting |
+| One member database with households, groups and ministries | Full accounting, payroll or fund accounting |
+| Timely follow-up of absent members and first-time visitors | Worship presentation or song software |
+| Push, SMS and email communication | Any tracking of location away from church premises |
+| Giving with mobile money and cards | A public social network |
+| Works offline and on low-end Android | Support for non-church organisations |
+
+### 1.4 Users
+
+| Persona | Needs |
+|---|---|
+| Member | Check in effortlessly, give, see events, join groups, update own details |
+| First-time visitor | Register in under a minute without installing anything |
+| Parent or guardian | Check children in and out safely; control child data |
+| Usher or greeter | Scan or search to check people in; see who is new |
+| Group or cell leader | See own group roster, attendance and absentees |
+| Pastor or care team | Follow-up list, member history, notes (restricted) |
+| Church admin | Manage members, services, communications, reports |
+| Finance officer | Record and reconcile giving; no access to pastoral notes |
+| Platform owner | Manage churches (tenants), billing, support |
+
+### 1.5 Core user stories
+
+- As a member, I opt in once and am marked present when I arrive for service, with a notification confirming it.
+- As a member without a smartphone, I get checked in by an usher using my phone number or a QR card.
+- As a member who denied location access, I receive an email or SMS before service with a personal check-in link.
+- As a pastor, I see everyone absent for three consecutive weeks and can assign a follow-up call.
+- As an admin, I see attendance by service, campus, group and trend without building a spreadsheet.
+- As a parent, I check my child in, and only a verified guardian can collect them.
+- As a member, I can view, export and delete the data the church holds about me, and withdraw location consent at any time.
+
+### 1.6 Success metrics
+
+| Metric | Target |
+|---|---|
+| Auto check-in agreement with usher headcount audit (pilot) | 90% or better |
+| Active members opted in to auto check-in within 3 months | 60% or better |
+| Time to produce the weekly attendance report | Under 1 minute |
+| Absent members contacted within 7 days of triggering follow-up | 80% or better |
+| Battery use attributable to the app | Under 2% per day |
+| Crash-free sessions | 99.5% or better |
+
+### 1.7 Assumptions and constraints
+
+- Android first (dominant in Ghana), iOS second. Connectivity is intermittent and data is costly, so the app must be small and offline tolerant.
+- Phone number is the primary identity. Many members have no email address.
+- Pilot with one church and one campus, but multi-tenant and multi-campus from day one.
+- Legal: Ghana's Data Protection Act, 2012 (Act 843) applies. To my understanding it classes religious belief as special personal data, which makes church membership data sensitive. Confirm obligations, including registration with the Data Protection Commission, with a Ghanaian lawyer before launch.
+
+---
+
+## 2. System Architecture
+
+### 2.1 Overview
+
+```
+Member app (React Native) | Admin web (Next.js) | Usher PWA
+  geofence, BLE, push     | dashboards, CRUD     | QR scan, search
+            |                      |                   |
+            +------- HTTPS / JSON API (REST + webhooks) -------+
+                                   |
+                     API gateway / load balancer
+                                   |
+            Backend modular monolith (NestJS, TypeScript)
+  Auth | Members | Services | Attendance | Comms | Giving | Groups | Reports
+        |                    |                     |
+  PostgreSQL + PostGIS   Redis (cache, queues)   Object storage
+        |
+  Background workers (BullMQ): attendance resolver, notifications, reports
+        |
+  External: FCM/APNs | Email (SES/Postmark) | SMS (Hubtel/Arkesel) | Paystack
+```
+
+### 2.2 Technology choices
+
+| Layer | Choice | Why |
+|---|---|---|
+| Mobile | React Native with Expo development builds | One codebase for Android and iOS; native modules for geofencing and BLE |
+| Admin web | Next.js with TypeScript | Fast dashboards, shares types with the backend |
+| Usher tool | Installable PWA | No app install for volunteers; works offline |
+| Backend | NestJS (TypeScript) modular monolith | Simple to run and hire for; modules can be split later |
+| Database | PostgreSQL 16 with PostGIS | Relational data, row-level security, geospatial queries |
+| Cache and queues | Redis with BullMQ | Reliable background jobs, rate limiting |
+| Files | S3-compatible object storage | Profile photos, exports, backups |
+| Push | Firebase Cloud Messaging and APNs | Standard and free |
+| Email | Amazon SES or Postmark | Deliverability, templates, bounce handling |
+| SMS | Hubtel or Arkesel (local), Twilio fallback | Better rates and delivery in Ghana |
+| Payments | Paystack or Hubtel | MTN MoMo, Telecel Cash, AirtelTigo Money and cards |
+| Hosting | AWS af-south-1 (Cape Town) or equivalent, containers | Closest major region to Accra |
+| Observability | Sentry, OpenTelemetry, Grafana | Crash and performance visibility |
+
+### 2.3 Attendance pipeline
+
+1. The member opts in; the app registers geofences for the campus (inner and outer rings) with the operating system.
+2. The OS wakes the app on entering the outer ring (about 300 m). The app records an approach signal and, inside a service window, schedules a dwell check.
+3. On entering the inner ring (about 100 m), or on detecting the entrance BLE beacon, the app sends a signed signal to the API, queued locally if offline.
+4. The attendance resolver matches the signal to the open service instance, applies the rules (window, dwell, duplicates) and writes one attendance record with a method and a confidence score.
+5. The member gets a push confirmation. If push is unavailable, an SMS or email is sent.
+6. A nightly job and the live dashboard flag members absent for N consecutive services and create follow-up tasks.
+
+The device sends only an arrival event for a campus. Raw location history is never uploaded.
+
+### 2.4 Multi-tenancy
+
+- The tenant is the church organisation; each tenant has one or more campuses.
+- Every tenant-owned table carries tenant_id, enforced with PostgreSQL row-level security as well as application checks.
+- Tenant-level settings: branding, service times, geofence radii, retention periods, consent text.
+
+### 2.5 Offline and sync
+
+- The mobile app and the usher PWA store pending check-ins in a local queue with a client-generated UUID, so retries are idempotent.
+- The usher PWA caches the day's member list and syncs on reconnect.
+- The server accepts events with an original timestamp up to 24 hours old and validates them against the service window.
+
+### 2.6 Environments
+
+Local (Docker Compose), staging and production. Infrastructure as code (Terraform), CI/CD with GitHub Actions, automated database migrations, daily encrypted backups with tested restores.
+
+---
+
+## 3. Functional Specification
+
+### 3.1 Modules and priority
+
+| Module | Key capabilities | Priority |
+|---|---|---|
+| Identity | Phone OTP login, email magic link, roles, device registration | P0 |
+| Members and households | Profiles, households, status (visitor, member, inactive), custom fields, photo, CSV import | P0 |
+| Services and events | Recurring services, one-off events, campuses, capacity | P0 |
+| Attendance | Usher, QR, beacon, geofence, email link, manual; reports | P0 |
+| Communication | Push, SMS and email with templates and segments | P0 |
+| Follow-up | Absence rules, visitor pipeline, task assignment, notes | P1 |
+| Groups and ministries | Cell groups, rosters, group attendance, volunteer scheduling | P1 |
+| Giving | Mobile money and card giving, funds, receipts, statements | P1 |
+| Children's check-in | Guardian-linked check-in and secure pickup | P1 |
+| Reports and exports | Dashboards, trends, CSV and PDF | P1 |
+| Prayer requests and announcements | In-app feed, moderation | P2 |
+| Integrations | Calendar feeds, webhooks, public API | P2 |
+
+### 3.2 Attendance specification
+
+**Check-in methods, ranked by confidence**
+
+| Rank | Method | Description | Confidence |
+|---|---|---|---|
+| 1 | Usher scan | Usher scans the member's QR or searches by phone | High |
+| 2 | Posted QR | Member scans a rotating QR displayed at the entrance | High |
+| 3 | Beacon | Phone detects the entrance BLE beacon inside the service window | High |
+| 4 | Geofence auto | Phone enters the inner ring and dwells for the configured time | Medium |
+| 5 | Email or SMS link | Personal signed link; opens a page asking for browser location | Low to medium |
+| 6 | Manual by admin | Admin marks present, with a reason | Recorded as manual |
+
+**Rules**
+
+- One attendance record per person per service instance. If several signals arrive, the highest-confidence method is kept and the others are stored as supporting signals.
+- Check-in window: by default 60 minutes before the start to 30 minutes after the end, configurable per service.
+- Dwell: geofence check-ins require the device to stay inside the inner ring for 5 minutes (configurable), which filters out people driving past.
+- Departure: leaving the outer ring after check-in can record a departure time (optional, off by default).
+- Duplicate protection: an idempotency key per device and service instance.
+- Spoofing resistance: reject mock-location flags on Android, require a fresh device-signed payload and cap implausible movement speed. Geofence alone never proves presence; a beacon, QR or usher scan does.
+- Corrections: admins can edit records, and every edit is audit logged with a reason.
+
+**Geofence configuration (per campus)**
+
+- Centre point and radius or polygon; defaults are 100 m inner and 300 m outer.
+- Platform limits: iOS monitors at most 20 regions per app and Android 100, so register only the nearest campuses.
+- Auto check-in needs background location permission (Always on iOS, Allow all the time on Android). The app must explain why before asking and must still work fully without it.
+
+**Children**
+
+- Child attendance is recorded through the guardian's device or an usher. Children's devices are never geofenced.
+
+### 3.3 Communication triggers
+
+| Trigger | Channel | Content |
+|---|---|---|
+| Arrival detected | Push, with SMS or email fallback | Welcome and check-in confirmation |
+| 24 hours before service | Push or email | Reminder, with a check-in link for members without location consent |
+| Missed 2 consecutive services | Push to group leader | Follow-up task created |
+| Missed 3 consecutive services | Email and task to pastor | Care follow-up |
+| First-time visitor | SMS or email the next day | Thank you and invitation |
+| Giving received | Email or SMS | Receipt |
+| Birthday or anniversary | Push or SMS | Greeting, with opt-out |
+
+Members choose their channels and quiet hours, and all non-essential messages honour opt-out.
+
+### 3.4 API surface (v1, REST, versioned)
+
+| Endpoint | Purpose |
+|---|---|
+| POST /v1/auth/otp/request and /v1/auth/otp/verify | Phone login |
+| POST /v1/auth/magic-link | Email login |
+| GET, POST, PATCH /v1/members | Member records |
+| GET /v1/services/instances | Open and upcoming services |
+| POST /v1/attendance/signals | Device arrival signal (idempotent) |
+| POST /v1/attendance/checkins | Usher, QR or manual check-in |
+| GET /v1/attendance/reports | Aggregates by service, group and period |
+| GET, POST /v1/followups | Absence and visitor tasks |
+| POST /v1/consents | Record grant or withdrawal |
+| POST /v1/messages/send | Campaign or one-to-one message |
+| POST /v1/giving/intents and /v1/giving/webhooks/paystack | Payments |
+
+---
+
+## 4. Security and Privacy
+
+### 4.1 Principles
+
+Consent first, data minimisation, least privilege, defence in depth and full auditability. Church membership reveals religious belief, so this system is treated as holding sensitive data from day one.
+
+### 4.2 Location privacy by design (mandatory)
+
+- Opt-in is separate from account creation, in plain language, and can be set per campus.
+- Geofencing is performed by the operating system on the device. The app uploads only an arrival or departure event tied to a campus and service, never a location trail.
+- Raw signals are deleted after 90 days; attendance records follow the church's retention policy.
+- Withdrawing consent takes one tap, stops signals immediately and is enforced on the server too.
+- Location data is never used for advertising, analytics or sharing with third parties.
+- Children's devices are never geofenced.
+
+### 4.3 Authentication and sessions
+
+- Phone OTP: 6 digits, 5-minute expiry, rate limited per number, device and IP; a new device triggers re-verification (a guard against SIM-swap abuse).
+- Email magic links are single use and expire in 15 minutes.
+- Access tokens last 15 minutes; refresh tokens rotate and are bound to the device, with server-side revocation.
+- Admin, pastor and finance roles require multi-factor authentication (TOTP or passkeys).
+- Lockouts and brute-force protection on every credential endpoint.
+
+### 4.4 Authorisation (role-based)
+
+| Capability | Member | Usher | Group leader | Pastor | Finance | Admin |
+|---|---|---|---|---|---|---|
+| View and edit own profile | Yes | Yes | Yes | Yes | Yes | Yes |
+| Check others in | No | Yes | Own group | No | No | Yes |
+| View member contact details | No | Limited | Own group | Yes | Limited | Yes |
+| View attendance reports | No | Current service | Own group | Yes | No | Yes |
+| Pastoral notes | No | No | No | Yes | No | No |
+| View giving | Own | No | No | Totals only | Yes | Totals only |
+| Send communications | No | No | Own group | Yes | No | Yes |
+| Manage roles and settings | No | No | No | No | No | Yes |
+
+### 4.5 Data protection
+
+- TLS 1.2 or higher everywhere with HSTS; encryption at rest for the database, backups and object storage.
+- Field-level encryption for the most sensitive fields (pastoral notes, any national ID), with keys in a managed key service.
+- Secrets in a managed secrets store; none are embedded in the app binary.
+- Tenant isolation through row-level security, with isolation tests in CI.
+- Backups are encrypted and restores are tested every quarter.
+
+### 4.6 Application and mobile security
+
+- Build to OWASP ASVS level 2 and OWASP MASVS: input validation, parameterised queries, rate limits, strict CSP.
+- Mobile: Play Integrity and App Attest to confirm a genuine app, Keychain and Keystore for storage, certificate pinning with a rotation plan, and no sensitive data in logs.
+- Arrival payloads are signed by the device; posted QR codes rotate every 30 to 60 seconds.
+- Dependency, static-analysis and secret scanning in CI; an independent penetration test before launch and yearly after.
+- Payments: verify webhook signatures, use idempotency keys and never store card data (Paystack holds that scope).
+
+### 4.7 Compliance and member rights
+
+- Store a consent record for every grant or withdrawal: what, when, which text version, which channel.
+- Data subject rights (access, export, correction, deletion, objection) are self-service in the app and handled by admins within 30 days.
+- Before the pilot: register with the Data Protection Commission, name a data protection supervisor, complete a data protection impact assessment and write a breach response plan.
+- Keep an immutable audit log of who viewed or changed what, retained for two years.
+- Take legal advice on hosting data outside Ghana, since cross-border transfer rules apply.
+
+---
+
+## 5. Technical Requirements
+
+### 5.1 Mobile app
+
+- Platforms: Android 8.0 (API 26) and above, iOS 15 and above. Design for low-end Android (2 GB RAM) first.
+- Size and speed: installed size under 25 MB and cold start under 3 seconds on a mid-range device.
+- Background location: Android Geofencing API with ACCESS_BACKGROUND_LOCATION; iOS region monitoring with Always authorisation. Neither runs a continuous foreground service, which protects battery.
+- Manufacturer battery managers: Tecno, Infinix, itel, Xiaomi and some Samsung models aggressively kill background apps. Ship an in-app setup guide per manufacturer and detect when geofences stop firing.
+- Bluetooth: scan for the entrance beacon only inside the service window to save battery.
+- Push: FCM high-priority data messages; APNs with time-sensitive priority for arrival confirmations.
+- Local storage: encrypted SQLite for the offline queue and cached profile.
+- Accessibility: WCAG 2.2 AA, dynamic text sizing, screen reader labels.
+- Languages: English at launch; string files ready for Twi, Ga, Ewe and French.
+- Store compliance: Google Play requires a background location declaration with a demo video, and Apple requires clear purpose strings. Plan for review time.
+
+### 5.2 Backend and platform
+
+| Area | Requirement |
+|---|---|
+| Availability | 99.9% monthly. Treat Sunday 07:00 to 14:00 as peak: no deployments from Saturday 18:00 to Sunday 18:00 |
+| Peak load | Pilot: 2,000 members, about 1,500 arrival signals in 30 minutes with bursts near 20 per second. Design for 20 times that |
+| Latency | p95 under 400 ms for check-in endpoints; dashboards under 1.5 s |
+| Data growth | About 100,000 attendance rows per church per year; partition attendance tables by year |
+| Recovery | RPO 15 minutes, RTO 2 hours |
+| Scaling | Stateless API behind a load balancer; add a read replica when needed |
+| Idempotency | Required on signals, check-ins and payments |
+| Phone numbers | Normalise to E.164 (Ghana: 024 123 4567 becomes +233241234567); unique per tenant |
+| Time | Store UTC, display in the tenant time zone (Africa/Accra by default) |
+| Email | SPF, DKIM and DMARC on the sending domain; handle bounces and complaints |
+| SMS | Registered sender ID, delivery-receipt webhooks, per-tenant spending caps |
+| Browsers | Last two versions of Chrome, Edge, Firefox and Safari; admin web responsive down to tablet |
+| Imports | CSV import with duplicate detection on phone and name, with a preview before commit |
+
+### 5.3 Quality and testing
+
+- Unit tests on core rules (attendance resolver, absence detection, permissions), end-to-end tests on every check-in path.
+- Real-device lab: Tecno, Infinix, itel, Samsung A-series, one low-end iPhone and one recent iPhone.
+- Field tests at the actual church premises, walking and driving, indoors and outdoors, before choosing radii.
+- Load test at 20 times the pilot peak before launch.
+- Monitoring and alerting on check-in success rate, queue depth, push and SMS delivery rates and geofence-silence anomalies.
+
+---
+
+## 6. App Flow
+
+### 6.1 Member onboarding and consent
+
+1. Open the app and find the church by name, invite link or QR code.
+2. Enter phone number and verify with an OTP.
+3. If the church already imported the member, show a confirmation (Is this you?) and link the existing record; otherwise create a profile with name, optional email and photo.
+4. Show the Auto check-in explainer: what is used (arrival at church only), what is not (no location history, no tracking elsewhere), and how to turn it off. Choices: Turn on or Not now.
+5. On Turn on: system location prompt, then a rationale screen, then the background location prompt. Record the consent with its text version.
+6. If permission is denied: confirm that nothing is lost, and show the other ways to check in (QR, usher, email link) plus a Change in Settings shortcut.
+7. Ask for notification permission, in context, then land on Home.
+
+### 6.2 Sunday auto check-in
+
+1. The OS detects entry into the outer ring (about 300 m) and wakes the app, which records an approach signal.
+2. If a service window is open, the app waits for the inner ring (about 100 m) or the entrance beacon.
+3. On entering the inner ring, a dwell timer starts (default 5 minutes). A beacon sighting or a QR scan completes check-in immediately.
+4. The app sends a signed arrival signal. If offline, it is queued and sent when a connection returns.
+5. The server resolves the signal and creates the attendance record.
+6. The member receives a push such as: Welcome, Ama. You are checked in for Sunday Service.
+7. If push is unavailable, an SMS or email confirmation is sent instead.
+8. Home shows the checked-in status; tapping it offers Not me or Wrong service so members can correct mistakes.
+
+### 6.3 Fallback check-in paths
+
+- **Usher:** search by name or phone, or scan the member's QR card or app QR, and the usher sees a green confirmation with the person's photo.
+- **Posted QR:** the member scans the rotating QR at the entrance with the app or the phone camera (opens a lightweight web page).
+- **Email or SMS link:** a personal signed link sent before service opens a web page that asks for browser location, then confirms. Marked lower confidence.
+- **Visitor registration:** a first-timer scans a poster QR, fills a short form (name, phone, how they heard of the church, optional prayer request) in under a minute, with no app install. They are marked present and added to the visitor pipeline.
+
+### 6.4 Follow-up flow
+
+1. After each service closes, the system computes consecutive absences per member, ignoring excused absences and members marked travelling.
+2. At 2 missed services a task goes to the group leader; at 3 it goes to the pastoral team.
+3. The assignee sees context (last attended, group, recent contact), makes the call or sends a message from a template, and logs the outcome.
+4. Unresolved tasks escalate after 7 days. Resolved tasks close with an outcome (contacted, returned, moved, no response).
+
+### 6.5 Children's check-in
+
+1. A parent selects the child on their own phone and checks the child in, or an usher checks in using the guardian's QR.
+2. A paired security code is generated for pickup.
+3. At pickup, the collector shows the code; the usher confirms it matches an approved guardian.
+
+### 6.6 Screen inventory
+
+| Surface | Key screens |
+|---|---|
+| Member app | Onboarding, consent, Home (next service, check-in status), My QR, Events, Groups, Giving, Messages, Profile and household, Privacy centre |
+| Admin web | Dashboard, Members, Households, Services and events, Attendance, Follow-up, Groups, Messaging, Giving, Reports, Settings (campuses, geofences, roles, consent text) |
+| Usher PWA | Service picker, Scan and search, Visitor form, Live count, Offline indicator and sync status |
+
+### 6.7 Edge cases
+
+| Situation | Behaviour |
+|---|---|
+| Member drives past without stopping | Dwell rule prevents a check-in |
+| GPS drift places someone inside the ring from a nearby building | Geofence alone gives medium confidence; the dwell rule and a beacon or usher scan raise it |
+| Phone off or battery saver on | Email or SMS link before service, or usher check-in |
+| Arrives late | Accepted until the window closes; marked late after the start time |
+| Leaves early | Departure recorded if enabled; attendance still counts |
+| Shared household phone | The app supports multiple household profiles; each check-in requires choosing the person |
+| Member belongs to two churches | One account, separate tenant profiles and separate consents |
+| Consent withdrawn | Geofences removed immediately; past records remain per retention policy |
+| New SIM or phone | Re-verify by OTP; old device is revoked |
+| Permission revoked in OS settings | App detects it and shows a gentle prompt with the fallback options |
+
+---
+
+## 7. Design Brief
+
+### 7.1 Brand and tone
+
+Warm, welcoming and trustworthy; reverent without being stiff, modern without being corporate. The visual reference is the soft-card dashboard template (attached image): a light canvas, large rounded white cards, a slim purple side tab with icons, an indigo accent and a friendly greeting header. The base product stays denominationally neutral, and each church can add its own logo and accent colour.
+
+### 7.2 Design principles
+
+1. **Calm and glanceable.** The home screen answers one question: what is next, and am I checked in?
+2. **Privacy you can see.** Consent and data controls are visible, plain language and never hidden in settings.
+3. **Every age.** Large text, big touch targets and simple words, so a 70-year-old member and a 17-year-old volunteer both succeed.
+4. **Fast on weak networks.** Light screens, skeleton loaders and clear offline states.
+5. **Forgiving.** Every automatic action can be corrected in one tap.
+
+### 7.3 Visual direction
+
+| Element | Direction |
+|---|---|
+| Layout | Light canvas with white rounded cards (16 to 24 px radius), a slim icon sidebar, a greeting header and a card grid; cards can be shown or hidden per role |
+| Palette | Indigo #6D5CF2 primary (sidebar, active states, main buttons), deep navy #1D1B3A for headings and the dark button, soft lilac #EFEDFF for tints, mint #7AD3B6 for success, coral #EF5A6F for high priority, warm gold #D9A441 used sparingly. Dark mode tokens are in the dashboard prototype |
+| Typography | Plus Jakarta Sans (or Inter); greeting 28 to 44 px bold, card titles 17 px, body at least 14 px |
+| Cards | White, soft shadow, 20 px padding, a header row with the title and a small action such as Edit or Clear |
+| Components | Pill tags (High, Care call), progress bars and rings, avatar stacks, Light and Dark toggle, dashed Add new tiles, a floating hover card for the next event |
+| Illustrations | Original line-and-fill illustrations in the same style, used in empty states and onboarding |
+| Touch targets | 48 dp minimum on mobile |
+| Modes | Light and dark |
+| Accessibility | WCAG 2.2 AA contrast, never colour alone for status |
+
+### 7.4 Key screen concepts
+
+**Admin dashboard (desktop), following the template**
+
+| Template element | Ekklesphere use |
+|---|---|
+| Greeting header | Hi, James! What are your plans for today? |
+| Top tabs | Dashboard, Workflows (follow-up and approvals), Integrations |
+| Three feature tiles | Check people in, Follow up, Message members |
+| Notifications card | Upcoming event card, messages, system alerts |
+| Assignments card | Follow-up tasks with priority tags, for example Call Kofi Mensah, absent 3 weeks |
+| Calendar and timeline | The week's services and events with time slots |
+| Today's tasks with progress bars | Service-prep and volunteer checklists |
+| Progress rings | Attendance against target; auto check-in opt-in rate |
+| Premium card | Prompt to turn on auto check-in, or a giving campaign |
+| Board meeting card | Leaders' meeting with Reschedule and Accept buttons |
+| Sidebar icons | Dashboard, Members, Attendance, Notifications, Services, Messages, Follow-up, Chat |
+
+**Other surfaces, same visual language**
+
+- **Member home (mobile):** one card at a time: a status card (Service starts in 25 minutes, You are checked in), a QR shortcut, upcoming events and a gentle giving prompt.
+- **Check-in moment:** a small confirmation animation and the member's first name, with a Not me link.
+- **Privacy centre:** a plain list of what the church holds, a toggle for each consent, and export and delete buttons.
+- **Usher PWA:** one very large Scan button, a search field and a live count, with visible offline and sync status.
+
+### 7.5 Microcopy example (consent)
+
+Ekklesphere uses your phone's location only to notice when you arrive at church, so you do not have to sign in. We never track where else you go, and you can turn this off any time.
+
+---
+
+## 8. Database Schema
+
+PostgreSQL 16 with PostGIS. Every tenant-owned table has tenant_id and a row-level security policy. Shown below is the core schema; supporting lookup tables are omitted.
+
+### 8.1 Entity overview
+
+| Area | Tables |
+|---|---|
+| Tenancy | tenants, campuses, geofences, beacons |
+| People | households, persons, groups, group_members |
+| Access | users, user_roles, devices, consents |
+| Services | services, service_instances |
+| Attendance | attendance_signals, attendance_records, checkin_tokens |
+| Care | followup_tasks, pastoral_notes |
+| Communication | message_templates, messages, message_deliveries |
+| Giving | funds, donations |
+| Governance | audit_log |
+
+### 8.2 Core DDL
+
+```sql
+create extension if not exists pgcrypto;
+create extension if not exists postgis;
+create extension if not exists citext;
+
+create table tenants (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  slug citext unique not null,
+  timezone text not null default 'Africa/Accra',
+  settings jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table campuses (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  name text not null,
+  address text,
+  center geography(point, 4326) not null,
+  inner_radius_m int not null default 100,
+  outer_radius_m int not null default 300,
+  active boolean not null default true
+);
+
+create table beacons (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  campus_id uuid not null references campuses(id),
+  beacon_uuid uuid not null,
+  major int not null,
+  minor int not null,
+  label text,
+  unique (beacon_uuid, major, minor)
+);
+
+create table households (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  name text not null,
+  address text
+);
+
+create table persons (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  household_id uuid references households(id),
+  first_name text not null,
+  last_name text not null,
+  preferred_name text,
+  date_of_birth date,
+  gender text,
+  phone_e164 text,
+  email citext,
+  status text not null default 'visitor'
+    check (status in ('visitor','member','inactive','transferred','deceased')),
+  household_role text check (household_role in ('head','spouse','child','other')),
+  joined_on date,
+  photo_key text,
+  custom jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
+);
+create unique index persons_phone_uq
+  on persons (tenant_id, phone_e164) where deleted_at is null and phone_e164 is not null;
+
+create table users (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null unique references persons(id),
+  phone_verified_at timestamptz,
+  email_verified_at timestamptz,
+  mfa_secret_enc bytea,
+  status text not null default 'active',
+  last_login_at timestamptz
+);
+
+create table user_roles (
+  user_id uuid not null references users(id),
+  role text not null
+    check (role in ('member','usher','group_leader','pastor','finance','admin')),
+  scope_group_id uuid,
+  scope_campus_id uuid references campuses(id),
+  primary key (user_id, role, coalesce(scope_group_id, '00000000-0000-0000-0000-000000000000'::uuid))
+);
+
+create table devices (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id),
+  platform text not null check (platform in ('android','ios','web')),
+  push_token text,
+  public_key text not null,          -- verifies device-signed arrival payloads
+  app_version text,
+  attestation_ok boolean,
+  last_seen_at timestamptz,
+  revoked_at timestamptz
+);
+
+create table consents (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  type text not null
+    check (type in ('data_processing','auto_checkin','push','sms','email')),
+  granted boolean not null,
+  text_version text not null,
+  channel text not null,             -- app, web, paper, usher
+  recorded_at timestamptz not null default now()
+);
+
+create table services (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  campus_id uuid not null references campuses(id),
+  name text not null,
+  kind text not null default 'service'
+    check (kind in ('service','event','group_meeting')),
+  recurrence_rule text,              -- iCal RRULE
+  start_time time not null,
+  duration_min int not null default 120,
+  window_before_min int not null default 60,
+  window_after_min int not null default 30,
+  dwell_min int not null default 5,
+  active boolean not null default true
+);
+
+create table service_instances (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  service_id uuid not null references services(id),
+  campus_id uuid not null references campuses(id),
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  status text not null default 'scheduled'
+    check (status in ('scheduled','open','closed','cancelled')),
+  qr_secret bytea not null default gen_random_bytes(32),
+  unique (service_id, starts_at)
+);
+
+create table attendance_signals (
+  id uuid primary key,               -- client-generated UUID, gives idempotency
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  device_id uuid references devices(id),
+  campus_id uuid not null references campuses(id),
+  service_instance_id uuid references service_instances(id),
+  kind text not null check (kind in (
+    'geofence_outer','geofence_inner','geofence_dwell',
+    'beacon','qr','usher','email_link','manual')),
+  occurred_at timestamptz not null,
+  received_at timestamptz not null default now(),
+  accuracy_m real,
+  mock_location boolean not null default false,
+  signature_ok boolean not null default false
+);
+create index on attendance_signals (tenant_id, person_id, occurred_at);
+
+create table attendance_records (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  service_instance_id uuid not null references service_instances(id),
+  campus_id uuid not null references campuses(id),
+  method text not null check (method in (
+    'usher','posted_qr','beacon','geofence','email_link','manual')),
+  confidence smallint not null check (confidence between 0 and 100),
+  checked_in_at timestamptz not null,
+  departed_at timestamptz,
+  late boolean not null default false,
+  recorded_by uuid references users(id),
+  note text,
+  unique (person_id, service_instance_id)
+);
+create index on attendance_records (tenant_id, service_instance_id);
+create index on attendance_records (tenant_id, person_id, checked_in_at desc);
+
+create table checkin_tokens (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  service_instance_id uuid not null references service_instances(id),
+  token_hash bytea not null unique,   -- store a hash, never the token
+  expires_at timestamptz not null,
+  used_at timestamptz
+);
+
+create table groups (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  name text not null,
+  type text not null check (type in ('cell','ministry','class','choir','other')),
+  leader_person_id uuid references persons(id),
+  default_service_id uuid references services(id)
+);
+
+create table group_members (
+  group_id uuid not null references groups(id),
+  person_id uuid not null references persons(id),
+  role text not null default 'member',
+  joined_on date not null default current_date,
+  left_on date,
+  primary key (group_id, person_id)
+);
+
+create table followup_tasks (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  reason text not null check (reason in ('absent_2','absent_3','first_timer','manual')),
+  assigned_to uuid references users(id),
+  status text not null default 'open'
+    check (status in ('open','contacted','resolved','dismissed')),
+  due_on date,
+  outcome text,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+create table pastoral_notes (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid not null references persons(id),
+  author_id uuid not null references users(id),
+  body_enc bytea not null,            -- field-level encrypted
+  created_at timestamptz not null default now()
+);
+
+create table messages (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  channel text not null check (channel in ('push','sms','email')),
+  subject text,
+  body text not null,
+  audience jsonb not null,            -- saved segment definition
+  created_by uuid references users(id),
+  scheduled_for timestamptz,
+  sent_at timestamptz
+);
+
+create table message_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  message_id uuid not null references messages(id),
+  person_id uuid not null references persons(id),
+  status text not null default 'queued',
+  provider_ref text,
+  error text,
+  sent_at timestamptz,
+  delivered_at timestamptz
+);
+
+create table funds (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  name text not null,
+  active boolean not null default true
+);
+
+create table donations (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  person_id uuid references persons(id),
+  fund_id uuid not null references funds(id),
+  amount_minor bigint not null check (amount_minor > 0),
+  currency char(3) not null default 'GHS',
+  method text not null check (method in ('momo','card','cash','bank')),
+  provider text,
+  provider_ref text unique,
+  status text not null default 'pending',
+  paid_at timestamptz
+);
+
+create table audit_log (
+  id bigserial primary key,
+  tenant_id uuid not null,
+  actor_user_id uuid,
+  action text not null,
+  entity_type text not null,
+  entity_id uuid,
+  before jsonb,
+  after jsonb,
+  ip inet,
+  at timestamptz not null default now()
+);
+```
+
+### 8.3 Tenant isolation (row-level security)
+
+```sql
+alter table persons enable row level security;
+create policy tenant_isolation on persons
+  using (tenant_id = current_setting('app.tenant_id')::uuid);
+-- repeat for every tenant-owned table; the API sets app.tenant_id per request
+```
+
+### 8.4 Design notes
+
+- **Absence detection:** a nightly job (and after each service closes) counts, for each active member, the consecutive closed service instances of their usual service with no attendance record, then creates or updates followup_tasks. Excused absences are modelled as a record with method manual and a note, or a separate excused flag if the church prefers.
+- **Signal versus record:** raw signals are short-lived (deleted after 90 days); attendance_records are the durable truth and keep only the winning method and confidence.
+- **Partitioning:** partition attendance_records and attendance_signals by year (or month for signals) once volumes justify it; include the partition key in the unique constraints.
+- **Soft delete and erasure:** persons use deleted_at for the grace period, then a purge job anonymises records so aggregate statistics survive.
+- **Sensitive fields:** pastoral_notes.body_enc and mfa_secret_enc are encrypted in the application with keys from a managed key service.
+- **Known DDL fix:** the user_roles primary key uses an expression, which PostgreSQL does not allow in a primary key. Replace it with a surrogate id and a unique index on (user_id, role, coalesce(scope_group_id, '00000000-0000-0000-0000-000000000000'::uuid)).
+
+---
+
+## 9. Implementation Plan
+
+### 9.1 Team
+
+One tech lead or architect, two full-stack TypeScript engineers, one React Native engineer, a part-time designer, a part-time QA engineer and part-time DevOps support. A product owner from the pilot church should be available weekly.
+
+### 9.2 Phases
+
+| Phase | Weeks | Scope | Exit criteria |
+|---|---|---|---|
+| 0. Discovery and foundations | 1 to 3 | Confirm name; legal advice and Data Protection Commission plan; data protection impact assessment; choose pilot church; interview ushers, pastors and members; geofence field spike on target phones at the real premises; design tokens; infrastructure, CI/CD and environments | Signed-off scope, legal path clear, spike shows geofence behaviour on target devices |
+| 1. Core platform | 4 to 11 | Tenants, auth (phone OTP and magic link), roles, member and household import, services and events, usher PWA, QR and manual attendance, admin dashboard, basic push, SMS and email, audit log | The pilot church runs a full Sunday digitally with usher and QR attendance |
+| 2. Proximity attendance | 12 to 17 | Mobile geofencing with dwell, beacons, consent flows, email and SMS check-in links, attendance resolver, spoofing checks, manufacturer battery guides; run in shadow mode for 4 Sundays against usher counts | 90% agreement with headcount audit; battery use under 2% per day; opt-in flow tested with real members |
+| 3. Care and communication | 18 to 22 | Absence rules, follow-up tasks, visitor pipeline, templates and segments, groups and rosters, group attendance | Pastoral team works entirely from the follow-up list for 3 weeks |
+| 4. Giving and children | 23 to 28 | Mobile money and card giving, funds, receipts and statements, children's check-in and secure pickup | Reconciled test donations; child check-in dry run passes |
+| 5. Hardening and launch | 29 to 32 | Penetration test and fixes, load test at 20 times peak, Data Protection Commission registration complete, store submissions (background location declarations), staff training, onboard two or three more churches | Launch checklist complete, no open critical or high security findings |
+
+Timelines assume the team above and are estimates; the Phase 0 field spike and store review times are the most likely sources of change.
+
+### 9.3 Risks and mitigations
+
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| Manufacturer battery managers stop background geofences | High | In-app setup guides, silence detection, beacon and QR fallbacks, test on Tecno, Infinix and itel early |
+| GPS inaccuracy in dense urban areas | Medium | Dwell rule, beacons at entrances, tune radii from field tests, shadow-mode calibration |
+| Members reluctant to share location | Medium | Clear consent copy, the privacy centre, full functionality without it, visible leadership endorsement |
+| Legal or regulatory gaps | Medium | Early legal advice, DPIA, Commission registration before pilot, data minimisation by design |
+| Google Play or App Store rejects background location | Medium | Prepare declaration and demo video early, show a clear user-facing benefit, keep beacon and QR paths as a fallback |
+| SMS cost overrun | Medium | Prefer push and email, per-tenant spending caps, batch reminders |
+| Poor connectivity on Sunday | High | Offline queues in app and PWA, idempotent sync |
+| Scope creep | High | Hold P1 and P2 modules behind phase gates; pilot feedback decides order |
+| Data breach | Low to medium | Encryption, row-level security, MFA, audit log, penetration test, breach response plan |
+
+### 9.4 Decisions to make now
+
+1. Confirm the name Ekklesphere after domain, trademark and app store checks.
+2. Choose the pilot church and a named product owner there.
+3. Choose the pricing model (for example per active member per month in cedis, with a free tier for small churches).
+4. Confirm cross-platform React Native against fully native Android and iOS after the Phase 0 geofence spike.
+5. Decide whether to buy BLE beacons for the pilot entrance (inexpensive, and they greatly raise confidence).
+6. Pick the hosting region and confirm cross-border transfer advice with counsel.
+
+### 9.5 Suggested first two weeks
+
+- Week 1: book the legal consult, pick the pilot church, register domains and handles, set up the repository, CI and staging, and write the geofence spike app.
+- Week 2: walk and drive the premises with 6 to 8 different phones logging enter and exit events, interview ushers and the pastoral team, draft the consent screen and run it past a few members, and finalise Phase 1 scope.

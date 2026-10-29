@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ekklesphere: Admin dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<style>
+:root{--page:#E6E7F0;--panel:#F6F7FC;--card:#fff;--ink:#1D1B3A;--muted:#666A86;--line:#E9EBF5;--brand:#6D5CF2;--bi:#fff;--tint:#EFEDFF;--dash:#CBC6F7;--mint:#7AD3B6;--mintink:#12503D;--pink:#FFE2E6;--pinkink:#C9314F;--green:#4FBF98;--red:#EF5A6F;--sh:0 10px 30px rgba(60,50,140,.09);--sh2:0 12px 32px rgba(60,50,140,.18);color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--page:#0D0D22;--panel:#14142E;--card:#1D1D3D;--ink:#F2F2FA;--muted:#A9ACC8;--line:#2D2D55;--brand:#8C7DFF;--bi:#12122B;--tint:#2A2A55;--dash:#3B3B72;--pink:#4A2229;--pinkink:#FF9AAA;--sh:none;--sh2:0 12px 32px rgba(0,0,0,.4);color-scheme:dark}}
+:root[data-theme="dark"]{--page:#0D0D22;--panel:#14142E;--card:#1D1D3D;--ink:#F2F2FA;--muted:#A9ACC8;--line:#2D2D55;--brand:#8C7DFF;--bi:#12122B;--tint:#2A2A55;--dash:#3B3B72;--pink:#4A2229;--pinkink:#FF9AAA;--sh:none;--sh2:0 12px 32px rgba(0,0,0,.4);color-scheme:dark}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0}
+body{background:var(--page);color:var(--ink);font:14.5px/1.45 "Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input{font:inherit;color:inherit}button{cursor:pointer}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.panel{position:relative;max-width:1280px;margin:24px auto;background:var(--panel);border-radius:36px;padding:28px 40px 34px 104px;box-shadow:0 20px 60px rgba(60,50,140,.12)}
+.side{position:absolute;left:0;top:112px;width:60px;background:var(--brand);border-radius:0 32px 32px 0;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 0}
+.side::before,.side::after{content:"";position:absolute;left:0;width:26px;height:26px}
+.side::before{top:-26px;background:radial-gradient(circle at 100% 0,transparent 26px,var(--brand) 26.5px)}
+.side::after{bottom:-26px;background:radial-gradient(circle at 100% 100%,transparent 26px,var(--brand) 26.5px)}
+.side button{position:relative;width:44px;height:44px;border:0;border-radius:14px;background:none;color:#fff;display:grid;place-items:center;opacity:.9}
+.side button:hover{background:rgba(255,255,255,.18)}
+.side button[aria-current="page"]{background:#fff;color:var(--brand);box-shadow:0 6px 14px rgba(40,30,120,.25);opacity:1}
+.side .bd{position:absolute;top:5px;right:2px;width:9px;height:9px;border-radius:50%;background:#59E0AE;border:2px solid var(--brand)}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:14px 22px}
+.tabs{display:flex;gap:22px;font-weight:600}
+.tabs span{display:flex;gap:6px;align-items:center;color:var(--muted)}.tabs span:first-child{color:var(--ink)}
+.tabs svg.i{width:16px;height:16px}
+.search{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:0 14px;min-height:42px;width:240px;color:var(--muted)}
+.search input{border:0;background:none;outline:0;width:100%;min-width:0}
+.sp{flex:1}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px}
+.seg button{border:0;background:none;border-radius:9px;padding:6px 12px;font-weight:600;display:flex;gap:6px;align-items:center;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--tint);color:var(--brand)}
+.seg svg.i{width:15px;height:15px}
+.ib{border:0;background:none;color:var(--muted);width:36px;height:36px;display:grid;place-items:center;border-radius:10px}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:9px 16px;font-weight:700;display:inline-flex;gap:8px;align-items:center;min-height:42px}
+.btn.dark{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.btn.brand{background:var(--brand);color:var(--bi);border-color:var(--brand)}
+.btn.soft{background:var(--tint);color:var(--brand);border-color:transparent}
+.btn.sm{min-height:34px;padding:6px 14px;border-radius:10px}
+.badge{background:var(--tint);color:var(--brand);border-radius:6px;font-size:11px;padding:1px 6px}
+.hero{display:grid;grid-template-columns:2fr repeat(4,minmax(0,1fr));gap:16px;margin:30px 0 24px;align-items:stretch}
+.hero h1{font-size:clamp(28px,3.3vw,44px);line-height:1.12;margin:0 0 14px;font-weight:700;letter-spacing:-.5px}
+.dots{display:inline-flex;gap:-4px;vertical-align:middle;margin-left:10px}
+.dots i{width:26px;height:26px;border-radius:50%;border:2px solid var(--panel);background:var(--brand);margin-left:-6px}
+.dots i+i{background:#59C3C3}
+.hero p{margin:0;color:var(--muted);max-width:40ch}
+.add{border:2px dashed var(--dash);background:transparent;border-radius:24px;display:grid;place-items:center;min-height:132px;width:100%}
+.add b{width:34px;height:34px;border-radius:10px;background:var(--brand);color:var(--bi);display:grid;place-items:center}
+.tile{background:var(--card);border:0;border-radius:24px;padding:12px 12px 14px;text-align:left;box-shadow:var(--sh);display:flex;flex-direction:column;gap:2px;min-height:132px}
+.tile svg.il{width:68px;height:58px;margin-bottom:4px}
+.tile b{font-size:14px}.tile small{color:var(--muted);font-size:13px;line-height:1.3}
+.il *{stroke:var(--ink)}.il .f{fill:var(--card)}.il .p{fill:var(--brand);stroke:none}.il .l{fill:var(--tint)}
+.g{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:20px}
+.card{background:var(--card);border-radius:26px;padding:20px;box-shadow:var(--sh);min-width:0}
+.c2{grid-column:span 2}.c1{grid-column:span 1}.c3{grid-column:span 3}
+.hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px}
+.hd h2{font-size:17px;margin:0;font-weight:700}
+.link{border:0;background:none;color:var(--muted);font-weight:600;display:flex;gap:5px;align-items:center;font-size:13px;padding:4px}
+.link svg.i{width:14px;height:14px}
+.fl{position:relative;background:var(--card);border-radius:20px;padding:14px;box-shadow:var(--sh2);margin-left:-8px;margin-right:34px}
+.fl .t{display:flex;justify-content:space-between;align-items:center}
+.fl b{display:flex;align-items:center;gap:7px}.fl b::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green)}
+.sub{color:var(--muted);font-size:13px}
+.meta{display:flex;gap:14px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;font-weight:600}
+.meta span{display:flex;gap:6px;align-items:center}.meta svg.i{width:14px;height:14px;color:var(--brand)}
+.mini{position:absolute;right:-30px;top:12px;display:grid;gap:8px}
+.mini button{width:26px;height:26px;border:0;border-radius:8px;background:var(--tint);color:var(--muted);display:grid;place-items:center}
+.mini svg.i{width:13px;height:13px}
+.msg{margin:12px 0 0 6px;padding:14px;border-radius:20px;border:1px solid var(--line)}
+.msg b{display:flex;gap:8px;align-items:center}
+.msg .in{margin-top:10px;background:var(--panel);border-radius:10px;padding:8px 12px;color:var(--muted);font-size:13px}
+.empty{color:var(--muted);text-align:center;padding:40px 0}
+.tags{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.tag{border-radius:8px;padding:2px 10px;font-size:12.5px;font-weight:600;background:var(--panel);color:var(--muted)}
+.tag.b{color:var(--brand);background:var(--tint)}
+.pill{border-radius:99px;padding:3px 14px;font-size:12.5px;font-weight:700}
+.pill.hi{background:var(--pink);color:var(--pinkink)}.pill.pk{background:var(--mint);color:var(--mintink)}
+.as h3{font-size:18px;line-height:1.3;margin:0 0 14px;font-weight:700}
+.rw{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.who{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600}
+.av{width:26px;height:26px;border-radius:50%;background:#F2B8A6;display:grid;place-items:center;font-size:11px;font-weight:700;color:#5A2A1E}
+.dz{margin-top:14px;width:100%;border:2px dashed var(--dash);background:transparent;border-radius:20px;padding:22px;color:var(--brand);font-weight:700;display:flex;gap:8px;align-items:center;justify-content:center}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;margin-bottom:12px}
+.cal button{border:0;background:none;padding:2px 0;display:grid;justify-items:center;gap:4px;color:var(--muted);font-size:12.5px}
+.cal b{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:var(--ink);font-size:13px}
+.cal button[aria-pressed="true"] b{background:var(--brand);color:var(--bi)}
+.tm{font-weight:700;font-size:13px;margin:12px 0 8px}
+.ev{display:flex;gap:10px;align-items:center;background:var(--panel);border-radius:16px;padding:10px 12px}
+.ev i{width:34px;height:34px;border-radius:10px;background:var(--tint);color:var(--brand);display:grid;place-items:center;flex:none}
+.ev div{flex:1;min-width:0}.ev b{display:block}
+.av3{display:flex}.av3 span{width:26px;height:26px;border-radius:50%;border:2px solid var(--card);margin-left:-8px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff}
+.av3 span:first-child{margin-left:0}
+.vw{display:flex;gap:2px;align-items:center}
+.vw button{border:0;background:none;color:var(--muted);padding:4px;border-radius:8px}.vw button.on{background:var(--tint);color:var(--brand)}
+.tk{display:grid;grid-template-columns:1.5fr 1fr 1.2fr .8fr;gap:10px;align-items:center;padding:12px 10px;border-radius:18px;font-size:13px}
+.tk.hl{background:var(--card);box-shadow:var(--sh2);margin:0 -6px}
+.tk b{display:block;font-size:14px}.tk em{font-style:normal;font-size:12.5px;color:var(--muted)}
+.pr{display:flex;align-items:center;gap:8px;font-weight:700;font-size:12.5px}
+.pr i{flex:1;height:4px;border-radius:9px;background:var(--tint);overflow:hidden}.pr i u{display:block;height:100%;background:var(--brand)}
+.cn{display:flex;gap:10px;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.promo{background:var(--brand);color:var(--bi);text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:18px 14px}
+.promo svg{width:84px;height:84px}.promo h2{font-size:18px;margin:6px 0}.promo p{margin:0 0 14px;font-size:13px;opacity:.95;line-height:1.35}
+.promo .btn{background:var(--ink);color:#fff;border-color:var(--ink);width:100%;justify-content:center}
+.rs{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.rc{background:var(--card);border-radius:24px;padding:14px;box-shadow:var(--sh);display:flex;flex-direction:column;gap:6px}
+.rg{position:relative;width:58px;height:58px}.rg svg{width:58px;height:58px;transform:rotate(-90deg)}
+.rg circle{fill:none;stroke-width:6}.rg .bg{stroke:var(--tint)}.rg .fg{stroke-linecap:round;transition:stroke-dasharray .5s}
+.rg span{position:absolute;inset:0;display:grid;place-items:center;font-weight:700;font-size:13px}
+.rc small{color:var(--brand);font-weight:700;font-size:11px;letter-spacing:.3px}.rc b{font-size:14px;display:block}
+.bm{margin-top:14px}.bm p{margin:8px 0 14px;font-size:13.5px}
+.rw2{display:flex;gap:8px}.rw2 .btn{flex:1;justify-content:center;padding:8px 10px}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--card);padding:10px 18px;border-radius:14px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .25s;z-index:30}
+.toast.show{opacity:1}
+@media (max-width:1100px){.panel{padding:24px 24px 30px 90px}.c2,.c3{grid-column:span 3}.c1{grid-column:span 3}.hero{grid-template-columns:repeat(4,1fr)}.hero>div:first-child{grid-column:1/-1}}
+@media (max-width:760px){
+  .panel{margin:0;border-radius:0 0 28px 28px;padding:18px 16px 96px}
+  .side{position:fixed;top:auto;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom,0px));width:auto;flex-direction:row;justify-content:space-around;border-radius:22px;padding:6px;z-index:20}
+  .side::before,.side::after{display:none}.side button{width:38px;height:38px}.side .x{display:none}
+  .g{grid-template-columns:1fr}.c1,.c2,.c3{grid-column:auto}
+  .hero{grid-template-columns:1fr 1fr}.tabs,.search{display:none}
+  .tk{grid-template-columns:1fr 1fr}.tk .cn{display:none}
+  .fl{margin-right:0}.mini{display:none}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.500" height="6.500" rx="1.800"/><rect x="13.500" y="4" width="6.500" height="6.500" rx="1.800"/><rect x="4" y="13.500" width="6.500" height="6.500" rx="1.800"/><rect x="13.500" y="13.500" width="6.500" height="6.500" rx="1.800"/></symbol>
+<symbol id="user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.500"/><path d="M5 20c.8-3.600 3.500-5.500 7-5.500s6.200 1.900 7 5.500"/></symbol>
+<symbol id="pie" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 3.600A9 9 0 0 1 20.400 9H15z"/></symbol>
+<symbol id="bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.500 2h-15zM10 21h4"/></symbol>
+<symbol id="cal" viewBox="0 0 24 24"><rect x="3.500" y="5" width="17" height="15.500" rx="3"/><path d="M8 3v4M16 3v4M3.500 10h17"/></symbol>
+<symbol id="mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 8 8 6 8-6"/></symbol>
+<symbol id="task" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.500 12 2.500 2.500 4.500-5"/></symbol>
+<symbol id="chat" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-11.800 7L4 20l1-4A8 8 0 1 1 20 12z"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="m16 16 4 4"/></symbol>
+<symbol id="gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.600 5.600l2.100 2.100M16.300 16.300l2.100 2.100M18.400 5.600l-2.100 2.100M7.700 16.300l-2.100 2.100"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></symbol>
+<symbol id="pen" viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.500"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+<symbol id="cl" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+<symbol id="cr" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+<symbol id="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.600 5.600 7 7M17 17l1.400 1.400M18.400 5.600 17 7M7 17l-1.400 1.400"/></symbol>
+<symbol id="moon" viewBox="0 0 24 24"><path d="M20 14.500A8 8 0 0 1 9.500 4 8 8 0 1 0 20 14.500z"/></symbol>
+<symbol id="list" viewBox="0 0 24 24"><path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01"/></symbol>
+<symbol id="share" viewBox="0 0 24 24"><path d="M12 15V4M8 8l4-4 4 4M5 13v6h14v-6"/></symbol>
+</svg>
+
+<div class="panel">
+  <nav class="side" aria-label="Main">
+    <button aria-current="page" aria-label="Dashboard"><svg class="i"><use href="#grid"/></svg></button>
+    <button aria-label="Members"><svg class="i"><use href="#user"/></svg></button>
+    <button aria-label="Attendance"><svg class="i"><use href="#pie"/></svg><span class="bd"></span></button>
+    <button aria-label="Notifications" class="x"><svg class="i"><use href="#bell"/></svg></button>
+    <button aria-label="Services"><svg class="i"><use href="#cal"/></svg></button>
+    <button aria-label="Messages"><svg class="i"><use href="#mail"/></svg></button>
+    <button aria-label="Follow-up" class="x"><svg class="i"><use href="#task"/></svg></button>
+    <button aria-label="Chat" class="x"><svg class="i"><use href="#chat"/></svg></button>
+  </nav>
+
+  <header class="top">
+    <div class="tabs"><span><svg class="i"><use href="#grid"/></svg>Dashboard</span><span><svg class="i"><use href="#task"/></svg>Workflows</span><span><svg class="i"><use href="#plus"/></svg>Integrations</span></div>
+    <label class="search"><svg class="i"><use href="#search"/></svg><input placeholder="Search or type command" aria-label="Search"></label>
+    <span class="sp"></span>
+    <div class="seg" role="group" aria-label="Theme"><button id="tl" aria-pressed="true"><svg class="i"><use href="#sun"/></svg>Light</button><button id="td" aria-pressed="false"><svg class="i"><use href="#moon"/></svg>Dark</button></div>
+    <button class="ib" aria-label="Notifications"><svg class="i"><use href="#bell"/></svg></button>
+    <button class="ib" aria-label="Settings"><svg class="i"><use href="#gear"/></svg></button>
+    <button class="btn" data-t="Attendance export would download">Export data <span class="badge">CSV</span></button>
+    <button class="btn dark" data-t="New service form would open">Add new service</button>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1>Hi, James! <span class="dots" aria-hidden="true"><i></i><i></i></span><br>What are your plans for today?</h1>
+      <p>This platform is designed to take care of attendance and follow-up, so you can focus on your people.</p>
+    </div>
+    <button class="add" data-t="Add a shortcut tile" aria-label="Add shortcut"><b><svg class="i"><use href="#plus"/></svg></b></button>
+    <button class="tile" id="arr">
+      <svg class="il" viewBox="0 0 68 58" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect class="f" x="10" y="12" width="38" height="36" rx="6"/><path d="M10 23h38M21 8v8M37 8v8"/><circle class="p" cx="48" cy="42" r="11"/><path d="m43 42 4 4 7-8" stroke="#fff"/></svg>
+      <b>Check people in</b><small>Counts arrivals live</small></button>
+    <button class="tile" data-t="Follow-up list would open">
+      <svg class="il" viewBox="0 0 68 58" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle class="f" cx="26" cy="20" r="9"/><path class="l" d="M10 48c1-10 8-14 16-14s15 4 16 14z"/><path class="p" d="M50 26c-6-5-12 1-6 7l6 6 6-6c6-6 0-12-6-7z"/></svg>
+      <b>Follow up</b><small>No one drifts away</small></button>
+    <button class="tile" data-t="Message composer would open">
+      <svg class="il" viewBox="0 0 68 58" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect class="f" x="8" y="10" width="34" height="22" rx="8"/><path class="f" d="M16 32v8l8-8"/><rect class="p" x="28" y="26" width="32" height="20" rx="8"/><path d="M36 36h16" stroke="#fff"/></svg>
+      <b>Message members</b><small>Push, SMS and email</small></button>
+  </section>
+
+  <div class="g">
+    <section class="card c2" aria-labelledby="hn">
+      <div class="hd"><h2 id="hn">Notifications</h2><button class="link" id="clr"><svg class="i"><use href="#trash"/></svg>Clear</button></div>
+      <div id="nb">
+        <div class="fl"><div class="t"><b>Upcoming event</b><button class="ib" style="width:26px;height:26px" aria-label="More"><svg class="i"><use href="#dots"/></svg></button></div>
+          <div class="sub">Sunday service briefing | Time: 45 min</div>
+          <div class="meta"><span><svg class="i"><use href="#cal"/></svg>Sun, 1 Nov</span><span><svg class="i"><use href="#clock"/></svg>07:00 - 07:45 AM</span></div>
+          <div class="mini"><button aria-label="Delete"><svg class="i"><use href="#trash"/></svg></button><button aria-label="Edit"><svg class="i"><use href="#pen"/></svg></button></div></div>
+        <div class="msg"><b><svg class="i"><use href="#mail"/></svg>Message | Follow-up</b><div class="sub">Message from Pastor Ruth</div><div class="in">Kofi replied to your call note...</div></div>
+      </div>
+    </section>
+
+    <section class="card c2 as" aria-labelledby="ha">
+      <div class="hd"><h2 id="ha">Assignments</h2><button class="link"><svg class="i"><use href="#pen"/></svg>Edit</button></div>
+      <div class="tags"><span class="tag b">Pastoral care</span><span class="tag">Osu North</span></div>
+      <h3>Call Kofi Mensah, absent three weeks in a row</h3>
+      <div class="rw"><span class="pill pk">Care call</span><span class="pill hi">High</span></div>
+      <div class="rw" style="margin-top:12px"><span class="sub">Assigned to</span><span class="who"><span class="av">RL</span>Ruth Larbi</span></div>
+      <button class="dz" data-t="New assignment form would open"><svg class="i"><use href="#plus"/></svg>Add new assignment</button>
+    </section>
+
+    <section class="card c2" aria-labelledby="hc">
+      <div class="hd"><h2 id="hc">Oct 26 - Nov 1</h2><span class="vw"><button aria-label="Previous week"><svg class="i"><use href="#cl"/></svg></button><button aria-label="Next week"><svg class="i"><use href="#cr"/></svg></button></span></div>
+      <div class="cal" id="cal"></div><div id="evs"></div>
+    </section>
+
+    <section class="card c3" aria-labelledby="ht">
+      <div class="hd"><h2 id="ht">Today’s tasks</h2><span class="av3" aria-hidden="true"><span style="background:#6D5CF2">RL</span><span style="background:#59C3C3">KA</span><span style="background:#F29F6D">EQ</span><span style="background:#1D1B3A">+4</span></span><span class="sp"></span><span class="vw"><button class="on" aria-label="List"><svg class="i"><use href="#list"/></svg></button><button aria-label="Grid"><svg class="i"><use href="#grid"/></svg></button></span><button class="link"><svg class="i"><use href="#pen"/></svg>Edit</button><button class="link"><svg class="i"><use href="#share"/></svg>Share</button></div>
+      <div class="tk hl"><div><b>Brief the greeters</b><em>1 Nov 07:00 AM</em></div><div><em>Duration</em><b>00 h 45 m</b></div><div class="pr">90%<i><u style="width:90%"></u></i></div><div class="cn"><span>4 +</span><span>16</span></div></div>
+      <div class="tk"><div><b>Check entrance beacons</b><em>31 Oct 04:00 PM</em></div><div><em>Duration</em><b>01 h 00 m</b></div><div class="pr">50%<i><u style="width:50%"></u></i></div><div class="cn"><span>2 +</span><span>3</span></div></div>
+      <div class="tk"><div><b>Send service reminders</b><em>31 Oct 06:00 PM</em></div><div><em>Duration</em><b>00 h 30 m</b></div><div class="pr">10%<i><u style="width:10%"></u></i></div><div class="cn"><span>1 +</span><span>187</span></div></div>
+    </section>
+
+    <section class="card c1 promo" aria-labelledby="hp">
+      <svg viewBox="0 0 84 84" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="20" y="38" width="44" height="30" rx="5" fill="#8C7DFF"/><rect x="16" y="30" width="52" height="12" rx="4" fill="#8C7DFF"/><path d="M42 30v38M42 30c-8-12-18-6-12 0M42 30c8-12 18-6 12 0"/><path d="M10 18v8M6 22h8M72 14v6M69 17h6" /></svg>
+      <h2 id="hp">Turn on auto check-in!</h2><p>36% of members still sign in by hand. Invite them to switch it on.</p>
+      <button class="btn" data-t="Invitation would go to 187 members">Invite members</button>
+    </section>
+
+    <div class="c2">
+      <div class="rs">
+        <div class="rc"><div class="rg"><svg viewBox="0 0 60 60"><circle class="bg" cx="30" cy="30" r="25"/><circle class="fg" id="r1" cx="30" cy="30" r="25" stroke="#4FBF98" stroke-dasharray="124 157"/></svg><span id="r1v">79%</span></div><small>ATTENDANCE</small><b>Sunday service</b><span class="sub" id="r1t">412 of 520 expected</span></div>
+        <div class="rc"><div class="rg"><svg viewBox="0 0 60 60"><circle class="bg" cx="30" cy="30" r="25"/><circle class="fg" cx="30" cy="30" r="25" stroke="#EF5A6F" stroke-dasharray="102 157"/></svg><span>65%</span></div><small>AUTO CHECK-IN</small><b>Opt-in rate</b><span class="sub">187 members to go</span><button class="btn soft sm" data-t="Opens the opt-in list">Check</button></div>
+      </div>
+      <section class="card bm" aria-labelledby="hb">
+        <div class="hd"><h2 id="hb">Leaders’ meeting</h2><button class="link"><svg class="i"><use href="#pen"/></svg>Edit</button></div>
+        <span class="sub">Wed, 4 Nov at 06:30 PM</span>
+        <p>Easter planning and cell group reports, church office, room 2.</p>
+        <div class="rw2"><button class="btn soft" data-t="Reschedule options would open">Reschedule</button><button class="btn brand" data-t="Invite accepted">Accept invite</button></div>
+      </section>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)},root=document.documentElement,tt;
+  function toast(m){var t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(tt);tt=setTimeout(function(){t.classList.remove("show")},2200)}
+  function theme(t){root.setAttribute("data-theme",t);$("#tl").setAttribute("aria-pressed",t==="light");$("#td").setAttribute("aria-pressed",t==="dark")}
+  theme(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  $("#tl").onclick=function(){theme("light")};$("#td").onclick=function(){theme("dark")};
+  document.querySelectorAll("[data-t]").forEach(function(b){b.onclick=function(){toast(b.getAttribute("data-t"))}});
+
+  var nb=$("#nb"),saved=nb.innerHTML;
+  $("#clr").onclick=function(){if(nb.querySelector(".empty")){nb.innerHTML=saved;return}nb.innerHTML='<div class="empty">All caught up. Tap Clear again to bring them back.</div>'};
+
+  var D=[["Mon",26],["Tue",27],["Wed",28],["Thu",29],["Fri",30],["Sat",31],["Sun",1]];
+  var E={28:[["06:30-08:00 PM","Midweek prayer","Main hall"]],29:[["05:30-06:30 PM","Leaders’ prayer","Church office"],["07:00-08:30 PM","Choir rehearsal","Annex"]],31:[["04:00-05:30 PM","Youth fellowship","Annex"]],1:[["08:00-09:30 AM","First service","Main hall"],["10:30-12:00 PM","Second service","Main hall"]]};
+  var sel=29;
+  function cal(){
+    var c=$("#cal");c.innerHTML="";
+    D.forEach(function(d){var b=document.createElement("button");b.innerHTML=d[0]+"<b>"+d[1]+"</b>";b.setAttribute("aria-pressed",d[1]===sel);b.onclick=function(){sel=d[1];cal();evs()};c.appendChild(b)});
+  }
+  function evs(){
+    var o=$("#evs"),l=E[sel]||[];o.innerHTML="";
+    if(!l.length){o.innerHTML='<div class="empty" style="padding:24px 0">Nothing scheduled</div>';return}
+    l.forEach(function(e){o.insertAdjacentHTML("beforeend",'<div class="tm">'+e[0]+'</div><div class="ev"><i><svg class="i"><use href="#cal"/></svg></i><div><b>'+e[1]+'</b><span class="sub">'+e[2]+'</span></div><button class="ib" aria-label="More"><svg class="i"><use href="#dots"/></svg></button></div>')});
+  }
+  cal();evs();
+
+  var P=["Ama Owusu","Yaw Boateng","Akosua Darko","Nana Addo","Kojo Appiah","Adwoa Sarpong"],n=412,i=0;
+  $("#arr").onclick=function(){
+    n=Math.min(520,n+1);var pct=Math.round(n/520*100);
+    $("#r1v").textContent=pct+"%";$("#r1t").textContent=n+" of 520 expected";
+    $("#r1").setAttribute("stroke-dasharray",(157*pct/100).toFixed(0)+" 157");
+    toast(P[i++%P.length]+" checked in (auto)");
+  };
+})();
+</script>
+</body>
+</html>

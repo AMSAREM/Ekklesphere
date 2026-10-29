@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --page: #E6E7F0;
+    --panel: #F6F7FC;
+    --card: #ffffff;
+    --ink: #1D1B3A;
+    --muted: #666A86;
+    --line: #E9EBF5;
+    --brand: #6D5CF2;
+    --bi: #ffffff;
+    --tint: #EFEDFF;
+    --dash: #CBC6F7;
+    --mint: #7AD3B6;
+    --mintink: #12503D;
+    --pink: #FFE2E6;
+    --pinkink: #C9314F;
+    --green: #4FBF98;
+    --red: #EF5A6F;
+    --sh: 0 10px 30px rgba(60, 50, 140, 0.09);
+    --sh2: 0 12px 32px rgba(60, 50, 140, 0.18);
+  }
+
+  .dark {
+    --page: #0D0D22;
+    --panel: #14142E;
+    --card: #1D1D3D;
+    --ink: #F2F2FA;
+    --muted: #A9ACC8;
+    --line: #2D2D55;
+    --brand: #8C7DFF;
+    --bi: #12122B;
+    --tint: #2A2A55;
+    --dash: #3B3B72;
+    --pink: #4A2229;
+    --pinkink: #FF9AAA;
+    --sh: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --sh2: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Custom curved tabs on the side nav */
+.side-curved-tab {
+  position: relative;
+}
+.side-curved-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -26px;
+  width: 26px;
+  height: 26px;
+  background: radial-gradient(circle at 100% 0, transparent 26px, #6D5CF2 26.5px);
+  pointer-events: none;
+}
+.side-curved-tab::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -26px;
+  width: 26px;
+  height: 26px;
+  background: radial-gradient(circle at 100% 100%, transparent 26px, #6D5CF2 26.5px);
+  pointer-events: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(109, 92, 242, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(109, 92, 242, 0.4);
+}

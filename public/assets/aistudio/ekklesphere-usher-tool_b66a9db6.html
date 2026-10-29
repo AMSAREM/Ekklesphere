@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ekklesphere: Usher tool prototype</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#EEF0F8;--card:#fff;--ink:#1B1B3A;--muted:#5B5F7A;--line:#E3E5F2;--brand:#6C5CE7;--bi:#fff;--tint:#EEEBFF;--ok:#1E7A5F;--okbg:#DDF5EC;--warn:#8A5700;--warnbg:#FFEFD0;color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#12122B;--card:#1C1C3C;--ink:#F2F2FA;--muted:#A9ACC8;--line:#2D2D55;--brand:#8C7DFF;--bi:#12122B;--tint:#2A2A55;--ok:#5FD3AB;--okbg:#16382F;--warn:#F5B84A;--warnbg:#3D2E10;color-scheme:dark}}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:17px/1.45 "Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select{font:inherit;color:inherit}button{cursor:pointer}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.wrap{max-width:640px;margin:0 auto;padding:16px 16px 40px}
+.top{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px}
+select,input{width:100%;border:1px solid var(--line);background:var(--card);border-radius:16px;padding:14px;min-height:52px}
+.net{display:flex;align-items:center;gap:8px;white-space:nowrap;font-weight:600;font-size:14px}
+.sw{width:52px;height:30px;border-radius:99px;border:0;background:var(--ok);position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transform:translateX(22px);transition:transform .2s}
+.sw[aria-checked="false"]{background:#B14A3A}.sw[aria-checked="false"]::after{transform:none}
+.count{background:var(--brand);color:var(--bi);border-radius:28px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.count .n{font-size:52px;font-weight:700;line-height:1}
+.count small{display:block;opacity:.92;font-size:14px}
+.banner{background:var(--warnbg);color:var(--warn);border-radius:18px;padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:600}
+.banner[hidden]{display:none}
+.scan{width:100%;border:0;background:var(--ink);color:var(--card);border-radius:28px;min-height:132px;font-size:26px;font-weight:700;display:grid;place-items:center;gap:6px;margin-bottom:12px;padding:16px}
+.scan svg{width:44px;height:44px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:12px 16px;font-weight:700;min-height:52px}
+.btn.brand{background:var(--brand);color:var(--bi);border-color:var(--brand)}
+.btn.sm{min-height:44px;padding:8px 16px}
+.row{display:flex;gap:10px;align-items:center}
+.list{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:10px}
+.list li{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:12px 14px;display:flex;gap:12px;align-items:center}
+.av{width:46px;height:46px;border-radius:50%;background:var(--tint);color:var(--brand);display:grid;place-items:center;font-weight:700;flex:none}
+.g{flex:1;min-width:0}.g b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub{color:var(--muted);font-size:14px}
+.tag{display:inline-block;border-radius:99px;padding:3px 12px;font-size:13px;font-weight:700;background:var(--okbg);color:var(--ok)}
+.tag.q{background:var(--warnbg);color:var(--warn)}
+.empty{color:var(--muted);text-align:center;padding:24px 0}
+.res{position:fixed;inset:0;background:var(--ok);color:#fff;display:grid;place-items:center;text-align:center;z-index:10;padding:24px}
+.res[hidden]{display:none}
+.res .av{width:110px;height:110px;font-size:38px;margin:0 auto 14px;background:#fff;color:var(--ok)}
+.res h2{font-size:32px;margin:0}.res p{margin:6px 0 0;font-size:18px}
+.sheet{position:fixed;inset:0;background:rgba(10,10,30,.55);display:flex;align-items:flex-end;justify-content:center;z-index:9}
+.sheet[hidden]{display:none}
+.panel{background:var(--card);width:100%;max-width:640px;border-radius:28px 28px 0 0;padding:22px 18px calc(20px + env(safe-area-inset-bottom,0px))}
+.panel h2{margin:0 0 6px}
+label{display:block;font-weight:600;font-size:15px;margin:14px 0 6px}
+h3{margin:20px 0 0;font-size:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div style="flex:1"><label for="svc" style="margin:0 0 4px" class="sub">Service</label>
+      <select id="svc"><option>Sunday first service, 08:00</option><option>Sunday second service, 10:30</option><option>Midweek prayer, Wed 18:30</option></select></div>
+    <div class="net"><span id="netl">Online</span><button class="sw" id="net" role="switch" aria-checked="true" aria-label="Online"></button></div>
+  </div>
+
+  <div class="count" aria-live="polite"><div><small>Checked in</small><span class="n" id="n">408</span></div><div style="text-align:right"><small>Expected 520</small><small id="vis">3 first-time visitors</small></div></div>
+  <div class="banner" id="ban" hidden><span id="banT"></span><button class="btn sm" id="sync">Sync now</button></div>
+
+  <button class="scan" id="scan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16"/></svg>Scan member code</button>
+
+  <div class="row"><input id="q" type="search" inputmode="search" placeholder="Search name or phone" aria-label="Search members"><button class="btn brand" id="addv" style="white-space:nowrap">Add visitor</button></div>
+  <ul class="list" id="list"></ul>
+</div>
+
+<div class="res" id="res" hidden role="status"></div>
+<div class="sheet" id="sh" hidden><div class="panel" role="dialog" aria-modal="true" aria-labelledby="vt">
+  <h2 id="vt">Add first-time visitor</h2><div class="sub">Takes under a minute. They get a thank-you message tomorrow.</div>
+  <label for="vn">Full name</label><input id="vn" autocomplete="off">
+  <label for="vp">Phone</label><input id="vp" inputmode="tel" placeholder="024 123 4567">
+  <label for="vh">How did they hear about us?</label><select id="vh"><option>Invited by a member</option><option>Social media</option><option>Walked past</option><option>Other</option></select>
+  <div class="row" style="margin-top:18px"><button class="btn" id="vc" style="flex:1">Cancel</button><button class="btn brand" id="vs" style="flex:1">Save visitor</button></div>
+</div></div>
+
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)};
+  var M=[["Ama Owusu","0241234567","Osu North cell"],["Kwame Mensah","0201112233","Choir"],["Efua Asante","0551234567","Youth"],["Yaw Boateng","0244556677","Osu North cell"],["Akosua Darko","0273344556","Ushers"],["Kofi Mensah","0246677889","Men’s fellowship"],["Esi Quaye","0507788990","Choir"],["Nana Addo","0208899001","Youth"],["Adwoa Sarpong","0541122334","Women’s fellowship"],["Kojo Appiah","0269988776","Osu North cell"]].map(function(m,i){return {n:m[0],p:m[1],g:m[2],on:i<3,q:false}});
+  var base=408,vis=3,online=true,tt;
+  function ini(n){return n.split(" ").map(function(w){return w[0]}).join("").slice(0,2)}
+  function fmt(p){return p.replace(/(\d{3})(\d{3})(\d{4})/,"$1 $2 $3")}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+  function pend(){return M.filter(function(m){return m.q}).length}
+  function draw(){
+    var q=$("#q").value.trim().toLowerCase().replace(/\s/g,""),ul=$("#list");ul.innerHTML="";
+    var rows=M.filter(function(m){return !q||m.n.toLowerCase().replace(/\s/g,"").indexOf(q)>-1||m.p.indexOf(q)>-1});
+    if(!rows.length)ul.innerHTML='<li class="empty" style="display:block">No match. Try fewer letters, or add them as a visitor.</li>';
+    rows.forEach(function(m){
+      var li=document.createElement("li");
+      li.innerHTML='<span class="av">'+ini(m.n)+'</span><span class="g"><b>'+esc(m.n)+'</b><span class="sub">'+fmt(m.p)+' · '+esc(m.g)+'</span></span>'+
+        (m.on?'<span class="tag'+(m.q?' q':'')+'">'+(m.q?'Waiting to sync':'Checked in')+'</span>':'<button class="btn sm brand">Check in</button>');
+      var b=li.querySelector("button");if(b)b.onclick=function(){mark(m,false)};
+      ul.appendChild(li);
+    });
+    $("#n").textContent=base+M.filter(function(m){return m.on}).length-3+vis-3;
+    $("#vis").textContent=vis+" first-time visitor"+(vis===1?"":"s");
+    var p=pend();$("#ban").hidden=online&&!p;
+    $("#banT").textContent=online?(p+" check-in"+(p===1?"":"s")+" ready to sync"):"Offline. "+p+" check-in"+(p===1?"":"s")+" saved on this phone.";
+  }
+  function toast(m){var r=$("#res");r.style.background="var(--ink)";r.innerHTML='<div><h2 style="font-size:22px">'+esc(m)+'</h2></div>';r.hidden=false;clearTimeout(tt);tt=setTimeout(function(){r.hidden=true},1600)}
+  function mark(m,big){
+    m.on=true;m.q=!online;draw();
+    var r=$("#res");r.style.background="var(--ok)";
+    r.innerHTML='<div><div class="av">'+ini(m.n)+'</div><h2>'+esc(m.n)+'</h2><p>'+esc(m.g)+'</p><p>'+(online?'Checked in':'Saved. Will sync when online')+'</p></div>';
+    r.hidden=false;clearTimeout(tt);tt=setTimeout(function(){r.hidden=true},big?1800:1100);
+  }
+  $("#scan").onclick=function(){var m=M.filter(function(x){return !x.on})[0];if(!m){toast("Everyone listed is checked in");return}mark(m,true)};
+  $("#res").onclick=function(){this.hidden=true};
+  $("#q").oninput=draw;
+  $("#net").onclick=function(){online=!online;this.setAttribute("aria-checked",online);$("#netl").textContent=online?"Online":"Offline";draw()};
+  $("#sync").onclick=function(){
+    if(!online){toast("Still offline. Turn on the connection to sync");return}
+    var p=pend();M.forEach(function(m){m.q=false});draw();toast("Synced "+p+" check-in"+(p===1?"":"s"));
+  };
+  $("#addv").onclick=function(){$("#sh").hidden=false;$("#vn").focus()};
+  $("#vc").onclick=function(){$("#sh").hidden=true};
+  $("#vs").onclick=function(){
+    var n=$("#vn").value.trim(),p=$("#vp").value.replace(/\D/g,"");
+    if(!n){$("#vn").focus();return}
+    vis++;$("#sh").hidden=true;$("#vn").value="";$("#vp").value="";draw();
+    toast(n+" added. Thank-you SMS tomorrow"+(p?"":" (no phone)"));
+  };
+  draw();
+})();
+</script>
+</body>
+</html>

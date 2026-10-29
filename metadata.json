@@ -1,0 +1,6 @@
+{
+  "name": "Ekklesphere - Church Management & Proximity Attendance",
+  "description": "Church management system featuring automatic proximity attendance, usher door tools, member mobile portal, and proactive pastoral care follow-up.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
