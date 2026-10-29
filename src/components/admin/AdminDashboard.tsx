@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import {
   Grid,
@@ -25,7 +25,14 @@ import {
   Check,
   X,
   Send,
+  Radio,
+  HelpCircle,
+  ChevronDown,
+  LogOut,
+  Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
+import { ProximitySimulator } from '../simulator/ProximitySimulator';
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -45,10 +52,28 @@ export const AdminDashboard: React.FC = () => {
     services,
     setActiveServiceId,
     activeServiceId,
+    currentUser,
+    logout,
+    switchUserRole,
+    setIsHelpModalOpen,
   } = useEkklesphere();
 
+  // User menu state
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Active sub-navigation tabs inside Admin
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'integrations' | 'proximity'>('dashboard');
   const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages'>('dashboard');
 
   const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
@@ -158,7 +183,150 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <div className="relative max-w-[1360px] mx-auto my-6 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[36px] p-6 sm:p-8 lg:p-10 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
+    <div className="relative max-w-[1360px] mx-auto my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[36px] pt-6 pb-8 pr-6 sm:pr-8 pl-6 sm:pl-8 lg:pl-[96px] shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
+      {/* Signature Purple Curved Side Tab from 1001403593.jpg and Prototype */}
+      <aside
+        aria-label="Admin Navigation Tab"
+        className="hidden lg:flex absolute left-0 top-[112px] w-[60px] bg-[#6D5CF2] rounded-r-[32px] flex-col items-center gap-2 py-3.5 z-20 side-curved-tab shadow-lg shadow-indigo-950/20"
+      >
+        {/* 1. Dashboard */}
+        <button
+          onClick={() => {
+            setActiveTab('dashboard');
+            setActiveModule('dashboard');
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeTab === 'dashboard' && activeModule === 'dashboard'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Dashboard Overview"
+          aria-label="Dashboard"
+        >
+          <Grid className="w-5 h-5" />
+        </button>
+
+        {/* 2. Members */}
+        <button
+          onClick={() => {
+            setActiveTab('workflows');
+            setActiveModule('members');
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeTab === 'workflows' && activeModule === 'members'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Members & Households"
+          aria-label="Members"
+        >
+          <Users className="w-5 h-5" />
+        </button>
+
+        {/* 3. Attendance with Live Emerald Dot Badge */}
+        <button
+          onClick={() => {
+            setActiveTab('dashboard');
+            setActiveModule('attendance');
+            showToast(`Attendance Tally: ${totalCheckedInCount} / ${expectedAttendance}`);
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeModule === 'attendance'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Attendance & Check-in Signals"
+          aria-label="Attendance"
+        >
+          <PieChart className="w-5 h-5" />
+          <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2]" />
+        </button>
+
+        {/* 4. Notifications */}
+        <button
+          onClick={() => {
+            const el = document.getElementById('notifications-card');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+            showToast('Upcoming briefings & notifications');
+          }}
+          className="relative w-11 h-11 rounded-[14px] flex items-center justify-center text-white/90 hover:bg-white/20 transition-all cursor-pointer"
+          title="Notifications & Briefings"
+          aria-label="Notifications"
+        >
+          <Bell className="w-5 h-5" />
+        </button>
+
+        {/* 5. Services */}
+        <button
+          onClick={() => {
+            setIsAddServiceOpen(true);
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeModule === 'services'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Services & Calendar"
+          aria-label="Services"
+        >
+          <CalendarIcon className="w-5 h-5" />
+        </button>
+
+        {/* 6. Messages */}
+        <button
+          onClick={() => {
+            setIsMessageModalOpen(true);
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeModule === 'messages'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Broadcast Messages (Push, SMS, Email)"
+          aria-label="Messages"
+        >
+          <Mail className="w-5 h-5" />
+        </button>
+
+        {/* 7. Follow-up */}
+        <button
+          onClick={() => {
+            setIsFollowupModalOpen(true);
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeModule === 'followup'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Pastoral Care Follow-up"
+          aria-label="Follow-up"
+        >
+          <CheckSquare className="w-5 h-5" />
+          {openFollowupCount > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#EF5A6F] text-white text-[9px] font-extrabold flex items-center justify-center border-2 border-[#6D5CF2]">
+              {openFollowupCount}
+            </span>
+          )}
+        </button>
+
+        {/* 8. Proximity Radar */}
+        <button
+          onClick={() => {
+            setActiveTab('proximity');
+            showToast('Proximity & Geofencing Radar Suite active');
+          }}
+          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
+            activeTab === 'proximity'
+              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
+              : 'text-white/90 hover:bg-white/20'
+          }`}
+          title="Proximity & Geofencing Radar Suite"
+          aria-label="Proximity Radar"
+        >
+          <Radio className="w-5 h-5" />
+        </button>
+      </aside>
+
       {/* Top Header Row */}
       <header className="flex flex-wrap items-center justify-between gap-4 mb-6">
         {/* Top tabs */}
@@ -201,6 +369,17 @@ export const AdminDashboard: React.FC = () => {
           >
             <Plus className="w-4 h-4 text-[#6D5CF2]" />
             Integrations
+          </button>
+          <button
+            onClick={() => setActiveTab('proximity')}
+            className={`flex items-center gap-2 py-1 transition-colors ${
+              activeTab === 'proximity'
+                ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+            }`}
+          >
+            <Radio className="w-4 h-4 text-[#6D5CF2]" />
+            Proximity Radar
           </button>
         </div>
 
@@ -270,6 +449,141 @@ export const AdminDashboard: React.FC = () => {
             <Plus className="w-3.5 h-3.5" />
             Add new service
           </button>
+
+          {/* Help & Documentation */}
+          <button
+            onClick={() => setIsHelpModalOpen(true)}
+            className="w-9 h-9 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white transition-colors"
+            title="Help & Documentation"
+            aria-label="Help & Documentation"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+
+          {/* User Account / Role Switcher Menu */}
+          {currentUser && (
+            <div className="relative" ref={userMenuRef}>
+              <button
+                onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                className="flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] hover:bg-slate-50 dark:hover:bg-white/5 border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                aria-haspopup="true"
+                aria-expanded={isUserMenuOpen}
+                title="Account & Role Switcher"
+              >
+                <div className="w-6 h-6 rounded-lg bg-[#6D5CF2] text-white flex items-center justify-center font-bold text-[11px] shadow-sm overflow-hidden shrink-0">
+                  {currentUser.initials}
+                </div>
+                <span className="hidden sm:inline text-xs font-semibold">
+                  {currentUser.name.split(' ')[0]}
+                </span>
+                <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/70 text-[#6D5CF2] dark:text-[#8C7DFF] border border-indigo-200 dark:border-indigo-800">
+                  {currentUser.role}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
+              </button>
+
+              {isUserMenuOpen && (
+                <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-2xl shadow-2xl border border-[#E3E5F2] dark:border-[#2D2D55] p-3 z-50 animate-in fade-in slide-in-from-top-2">
+                  <div className="p-2 border-b border-[#E3E5F2] dark:border-[#2D2D55] mb-2 flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center font-bold text-xs shadow-sm overflow-hidden shrink-0">
+                      {currentUser.initials}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-sm text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                        {currentUser.name}
+                      </div>
+                      <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] font-medium truncate">
+                        {currentUser.title}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                        {currentUser.email}
+                      </div>
+                      <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                        <ShieldCheck className="w-3 h-3" />
+                        <span>Ghana Act 843 Compliant</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-2">
+                    <div className="text-[10px] uppercase font-bold text-slate-400 px-2 py-1 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-amber-500" />
+                      <span>Switch Active Profile:</span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <button
+                        onClick={() => {
+                          switchUserRole('admin');
+                          setIsUserMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
+                          currentUser.role === 'admin'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/70 text-[#6D5CF2] dark:text-[#8C7DFF]'
+                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Grid className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                          <span>Pastor David (Admin)</span>
+                        </div>
+                        {currentUser.role === 'admin' && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          switchUserRole('usher');
+                          setIsUserMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
+                          currentUser.role === 'usher'
+                            ? 'bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300'
+                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <CheckSquare className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Samuel Tetteh (Usher)</span>
+                        </div>
+                        {currentUser.role === 'usher' && <Check className="w-3.5 h-3.5 text-amber-500" />}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          switchUserRole('member');
+                          setIsUserMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
+                          currentUser.role === 'member'
+                            ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
+                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Users className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Ama Mensah (Member)</span>
+                        </div>
+                        {currentUser.role === 'member' && <Check className="w-3.5 h-3.5 text-emerald-500" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#E3E5F2] dark:border-[#2D2D55]">
+                    <button
+                      onClick={() => {
+                        logout();
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -309,11 +623,14 @@ export const AdminDashboard: React.FC = () => {
             {/* Tile 1: Check people in */}
             <button
               onClick={handleQuickArrivalCheckin}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px]"
+              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
             >
-              <div className="w-12 h-12 rounded-2xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
-                <PieChart className="w-6 h-6" />
-              </div>
+              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="10" y="12" width="38" height="36" rx="6" />
+                <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 23h38M21 8v8M37 8v8" />
+                <circle className="fill-[#6D5CF2] stroke-none" cx="48" cy="42" r="11" />
+                <path d="m43 42 4 4 7-8" stroke="#fff" strokeWidth="2.5" />
+              </svg>
               <div>
                 <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Check people in</b>
                 <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">Counts arrivals live</small>
@@ -323,11 +640,13 @@ export const AdminDashboard: React.FC = () => {
             {/* Tile 2: Follow up */}
             <button
               onClick={() => setIsFollowupModalOpen(true)}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px]"
+              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
             >
-              <div className="w-12 h-12 rounded-2xl bg-[#FFE2E6] dark:bg-[#4A2229] text-[#C9314F] dark:text-[#FF9AAA] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
-                <CheckSquare className="w-6 h-6" />
-              </div>
+              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" cx="26" cy="20" r="9" />
+                <path className="fill-[#EFEDFF] dark:fill-[#2A2A55] stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 48c1-10 8-14 16-14s15 4 16 14z" />
+                <path className="fill-[#6D5CF2] stroke-none" d="M50 26c-6-5-12 1-6 7l6 6 6-6c6-6 0-12-6-7z" />
+              </svg>
               <div>
                 <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Follow up</b>
                 <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">No one drifts away</small>
@@ -337,11 +656,14 @@ export const AdminDashboard: React.FC = () => {
             {/* Tile 3: Message members */}
             <button
               onClick={() => setIsMessageModalOpen(true)}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px]"
+              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
             >
-              <div className="w-12 h-12 rounded-2xl bg-[#DDF5EC] dark:bg-[#16382F] text-[#1E7A5F] dark:text-[#5FD3AB] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
-                <Mail className="w-6 h-6" />
-              </div>
+              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="8" y="10" width="34" height="22" rx="8" />
+                <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" d="M16 32v8l8-8" />
+                <rect className="fill-[#6D5CF2] stroke-none" x="28" y="26" width="32" height="20" rx="8" />
+                <path d="M36 36h16" stroke="#fff" strokeWidth="2" />
+              </svg>
               <div>
                 <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Message members</b>
                 <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">Push, SMS and email</small>
@@ -352,7 +674,7 @@ export const AdminDashboard: React.FC = () => {
           {/* Cards Grid: 6 Columns */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-5">
             {/* 1. Notifications Card (Span 2) */}
-            <section className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+            <section id="notifications-card" className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Notifications</h2>
@@ -649,9 +971,12 @@ export const AdminDashboard: React.FC = () => {
 
             {/* 5. Promo Card (Span 1) */}
             <section className="lg:col-span-1 bg-[#6D5CF2] text-white rounded-3xl p-5 flex flex-col items-center justify-between text-center shadow-[0_10px_30px_rgba(109,92,242,0.3)]">
-              <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center mb-2">
-                <Bell className="w-7 h-7 text-white" />
-              </div>
+              <svg className="w-20 h-20 mb-1" viewBox="0 0 84 84" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="20" y="38" width="44" height="30" rx="5" fill="#8C7DFF" />
+                <rect x="16" y="30" width="52" height="12" rx="4" fill="#8C7DFF" />
+                <path d="M42 30v38M42 30c-8-12-18-6-12 0M42 30c8-12 18-6 12 0" />
+                <path d="M10 18v8M6 22h8M72 14v6M69 17h6" />
+              </svg>
               <div>
                 <h2 className="text-base font-bold mb-1">Turn on auto check-in!</h2>
                 <p className="text-xs text-white/90 leading-snug mb-3">
@@ -950,6 +1275,13 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* Proximity & Geofencing Radar Diagnostic Suite */}
+      {activeTab === 'proximity' && (
+        <div className="mt-4 animate-in fade-in">
+          <ProximitySimulator />
+        </div>
+      )}
+
       {/* Bottom Horizontal Module Navigation Bar */}
       <nav
         aria-label="Admin Module Navigation"
@@ -1069,6 +1401,23 @@ export const AdminDashboard: React.FC = () => {
           >
             <Mail className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
             <span>Broadcast</span>
+          </button>
+
+          {/* 7. Proximity Radar Diagnostic Lab */}
+          <button
+            onClick={() => {
+              setActiveTab('proximity');
+              showToast('Proximity Geofence & BLE Radar Diagnostic Lab active');
+            }}
+            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeTab === 'proximity'
+                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
+            }`}
+            title="Proximity & Geofencing Radar Diagnostic Suite"
+          >
+            <Radio className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
+            <span>Radar Lab</span>
           </button>
         </div>
       </nav>

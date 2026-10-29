@@ -78,15 +78,15 @@ export const UnifiedAuthScreen: React.FC = () => {
             <div className="space-y-2">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs font-semibold">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Unified Access Portal</span>
+                <span>Role-Based Access Gateway</span>
                 <span className="text-white/60">·</span>
                 <span className="text-emerald-300">Accra Central Church</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                Welcome to Ekklesphere
+                Role-Based Church Management
               </h1>
               <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
-                The unified operating platform connecting church leadership, door ushers, and congregation members into one seamless workflow.
+                Every role has its own dedicated portal and access permissions: Church Leadership & Pastoral Care, Door Usher Headcount Station, and Member Mobile Pass.
               </p>
             </div>
 
@@ -96,7 +96,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                 <span>Act 843 Compliant</span>
               </div>
               <div className="text-[11px] text-white/60">
-                Secure Role-Based Authentication
+                Strict Role-Based Permissions
               </div>
             </div>
           </div>
@@ -215,10 +215,10 @@ export const UnifiedAuthScreen: React.FC = () => {
             <div className="space-y-6">
               <div>
                 <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Select an authenticated role to enter
+                  Select your assigned role to access its dedicated portal
                 </h2>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Test the unified ecosystem instantly as an Administrator, Usher Lead, or Congregation Member with full pre-populated church data.
+                  Every role has its own dedicated portal, tools, and access boundaries. Sign in below to enter your workspace:
                 </p>
               </div>
 
@@ -250,7 +250,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                     <div className="pt-2 text-xs text-[#555870] dark:text-[#A9ACC8] space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Live service attendance tally</span>
+                        <span>Executive service attendance tally</span>
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
@@ -258,7 +258,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Workflows & church metrics</span>
+                        <span>Proximity radar diagnostic lab</span>
                       </div>
                     </div>
                   </div>
@@ -268,7 +268,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                     className="mt-5 w-full py-2.5 px-4 rounded-xl bg-[#6D5CF2] hover:bg-[#5A48DE] text-white text-xs font-bold shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
                   >
                     <LayoutDashboard className="w-4 h-4" />
-                    <span>Enter as Pastor David</span>
+                    <span>Open Leadership Suite</span>
                     <ArrowRight className="w-3.5 h-3.5 ml-auto" />
                   </button>
                 </div>
@@ -318,7 +318,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                     className="mt-5 w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-md shadow-amber-600/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
                   >
                     <QrCode className="w-4 h-4" />
-                    <span>Enter as Samuel (Usher)</span>
+                    <span>Open Door Station</span>
                     <ArrowRight className="w-3.5 h-3.5 ml-auto" />
                   </button>
                 </div>
@@ -368,7 +368,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                     className="mt-5 w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
                   >
                     <Smartphone className="w-4 h-4" />
-                    <span>Enter as Ama Mensah</span>
+                    <span>Open Member Portal</span>
                     <ArrowRight className="w-3.5 h-3.5 ml-auto" />
                   </button>
                 </div>

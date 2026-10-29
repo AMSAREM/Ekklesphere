@@ -24,6 +24,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
+        request.auth.token.email == 'amoakoemmanuel2020@gmail.com' ||
         request.auth.token.email == 'elenamends@gmail.com' ||
         request.auth.token.email == 'pastor.david@ekklesphere.org' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
@@ -54,6 +55,11 @@ service cloud.firestore {
       );
       allow update: if isSignedIn() && isAdmin();
       allow delete: if isSignedIn() && isAdmin();
+    }
+
+    // 4. Test connection probe
+    match /test/{docId} {
+      allow read: if true;
     }
   }
 }

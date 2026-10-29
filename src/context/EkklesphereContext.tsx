@@ -5,7 +5,6 @@ import {
   signInWithPopup,
   firebaseSignOut,
   onAuthStateChanged,
-  testConnection,
 } from '../firebase';
 import {
   Person,
@@ -357,7 +356,38 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return DEMO_USERS.admin;
   });
 
-  const [activePortal, setActivePortal] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
+  const [activePortalState, setActivePortalState] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
+
+  // Role-enforced portal switcher: prevents unauthorized role traversal
+  const setActivePortal = (portal: 'admin' | 'member' | 'usher' | 'simulator') => {
+    if (!currentUser) {
+      setActivePortalState(portal);
+      return;
+    }
+
+    if (currentUser.role === 'member' && portal !== 'member') {
+      showToast('Access Restricted: Members only have access to the Member Portal.');
+      return;
+    }
+
+    if (currentUser.role === 'usher' && portal !== 'usher') {
+      showToast('Access Restricted: Ushers only have access to the Door Check-in Station.');
+      return;
+    }
+
+    setActivePortalState(portal);
+  };
+
+  const activePortal = activePortalState;
+
+  // Sync active portal immediately whenever current user's role changes
+  useEffect(() => {
+    if (currentUser) {
+      if (currentUser.role === 'admin') setActivePortalState('admin');
+      else if (currentUser.role === 'usher') setActivePortalState('usher');
+      else if (currentUser.role === 'member') setActivePortalState('member');
+    }
+  }, [currentUser?.role]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return window.innerWidth < 1280;
@@ -388,7 +418,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
 
   useEffect(() => {
-    testConnection();
     const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
       if (fbUser) {
         const email = fbUser.email || '';
@@ -403,6 +432,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
         const role: UserRole =
           email.toLowerCase() === 'elenamends@gmail.com' ||
+          email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
           email.toLowerCase().includes('pastor') ||
           email.toLowerCase().includes('admin')
             ? 'admin'
@@ -474,6 +504,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       const role: UserRole =
         email.toLowerCase() === 'elenamends@gmail.com' ||
+        email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
         email.toLowerCase().includes('pastor') ||
         email.toLowerCase().includes('admin')
           ? 'admin'
