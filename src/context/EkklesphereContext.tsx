@@ -16,7 +16,9 @@ import {
   CheckinMethod,
   UserRole,
   AuthUser,
+  SystemSettings,
 } from '../types/ekklesphere';
+
 
 export const DEMO_USERS: Record<UserRole, AuthUser> = {
   admin: {
@@ -52,6 +54,32 @@ export const DEMO_USERS: Record<UserRole, AuthUser> = {
   },
 };
 
+export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
+  churchName: 'Accra Central Church',
+  campusName: 'Accra Central Campus',
+  campusAddress: 'Independence Avenue, Ridge, Accra, Ghana',
+  seniorPastor: 'Pastor David Osei',
+  contactEmail: 'admin@ekklesphere.org',
+  contactPhone: '+233 24 123 4567',
+  timezone: 'Africa/Accra (GMT)',
+  currency: 'GHS (Ghana Cedi)',
+  outerGeofenceMeters: 300,
+  innerGeofenceMeters: 100,
+  dwellTimeMinutes: 5,
+  serviceWindowBeforeMinutes: 45,
+  serviceWindowAfterMinutes: 30,
+  bleBeaconRssiThreshold: -70,
+  driveByProtection: true,
+  absenteeThresholdServices: 2,
+  firstTimerFollowupHours: 24,
+  autoAssignCellLeaders: true,
+  requireExplicitConsent: true,
+  auditLogRetentionDays: 90,
+  smsGatewayProvider: 'Hubtel Ghana',
+  smsSenderId: 'EKKLESPHERE',
+  enablePushNotifications: true,
+};
+
 interface EkklesphereContextType {
   // Authentication & Unified Role System
   currentUser: AuthUser | null;
@@ -76,6 +104,8 @@ interface EkklesphereContextType {
   setAdminSubTab: (tab: 'dashboard' | 'workflows' | 'integrations') => void;
   isHelpModalOpen: boolean;
   setIsHelpModalOpen: (open: boolean) => void;
+  isSettingsModalOpen: boolean;
+  setIsSettingsModalOpen: (open: boolean) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
   toggleTheme: () => void;
@@ -90,7 +120,16 @@ interface EkklesphereContextType {
   members: Person[];
   visitorsCount: number;
   addVisitor: (name: string, phone: string, howHeard: string) => void;
+  addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Person;
+  updateMember: (memberId: string, updates: Partial<Person>) => void;
+  deleteMember: (memberId: string) => void;
   updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => void;
+
+  // System Settings
+  systemSettings: SystemSettings;
+  updateSystemSettings: (newSettings: Partial<SystemSettings>) => void;
+  resetSystemSettings: () => void;
+
 
   // Attendance Records & Metrics
   attendanceRecords: AttendanceRecord[];
@@ -397,6 +436,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
   const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
 
   const toggleSidebar = () => {
     setIsSidebarCollapsed((prev) => !prev);
@@ -639,11 +679,36 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
   const [activeServiceId, setActiveServiceId] = useState<string>('svc-sun-1');
   const [services] = useState<ServiceInstance[]>(INITIAL_SERVICES);
-  const [members, setMembers] = useState<Person[]>(INITIAL_MEMBERS);
+  const [members, setMembers] = useState<Person[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_members');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return INITIAL_MEMBERS;
+  });
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_system_settings');
+      if (saved) {
+        return { ...DEFAULT_SYSTEM_SETTINGS, ...JSON.parse(saved) };
+      }
+    } catch {
+      // fallback
+    }
+    return DEFAULT_SYSTEM_SETTINGS;
+  });
   const [visitorsCount, setVisitorsCount] = useState<number>(3);
   const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>(INITIAL_FOLLOWUPS);
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
+
 
   // Proximity simulator states
   const [proximityStage, setProximityStage] = useState<0 | 1 | 2 | 3>(0);
@@ -898,6 +963,120 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`${name} added! Welcome follow-up task created.`);
   };
 
+  const addMember = (
+    memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>
+  ): Person => {
+    const initials = `${memberData.firstName[0] || 'M'}${memberData.lastName[0] || 'M'}`.toUpperCase();
+    const newMemberId = `m-${Date.now()}`;
+    const newPerson: Person = {
+      ...memberData,
+      id: newMemberId,
+      tenantId: 'tenant-accra',
+      avatarInitials: initials,
+      joinedOn: new Date().toISOString().split('T')[0],
+    };
+
+    setMembers((prev) => {
+      const updated = [newPerson, ...prev];
+      try {
+        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'Member registered',
+        entityType: 'Person',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: `${newPerson.firstName} ${newPerson.lastName} enrolled into ${newPerson.groupName}`,
+      },
+      ...prev,
+    ]);
+
+    showToast(`Member ${newPerson.firstName} ${newPerson.lastName} added successfully!`);
+    return newPerson;
+  };
+
+  const updateMember = (memberId: string, updates: Partial<Person>) => {
+    setMembers((prev) => {
+      const updated = prev.map((m) => {
+        if (m.id === memberId) {
+          const firstName = updates.firstName ?? m.firstName;
+          const lastName = updates.lastName ?? m.lastName;
+          const initials = `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase();
+          return {
+            ...m,
+            ...updates,
+            avatarInitials: initials,
+          };
+        }
+        return m;
+      });
+      try {
+        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    showToast('Member details updated');
+  };
+
+  const deleteMember = (memberId: string) => {
+    const memberToDelete = members.find((m) => m.id === memberId);
+    setMembers((prev) => {
+      const updated = prev.filter((m) => m.id !== memberId);
+      try {
+        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    setAttendanceRecords((prev) => prev.filter((r) => r.personId !== memberId));
+    showToast(`Member ${memberToDelete ? memberToDelete.firstName + ' ' + memberToDelete.lastName : ''} removed`);
+  };
+
+  const updateSystemSettings = (newSettings: Partial<SystemSettings>) => {
+    setSystemSettings((prev) => {
+      const updated = { ...prev, ...newSettings };
+      try {
+        localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'System Settings Updated',
+        entityType: 'SystemSettings',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: 'Campus proximity parameters and automated thresholds saved',
+      },
+      ...prev,
+    ]);
+    showToast('System & Campus settings saved successfully');
+  };
+
+  const resetSystemSettings = () => {
+    setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+    try {
+      localStorage.removeItem('ekklesphere_system_settings');
+    } catch {
+      // ignore
+    }
+    showToast('System settings restored to campus defaults');
+  };
+
+
   const syncUsherCheckins = (): number => {
     if (!isUsherOnline) {
       showToast('Cannot sync while offline. Reconnect first.');
@@ -1043,6 +1222,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setAdminSubTab,
         isHelpModalOpen,
         setIsHelpModalOpen,
+        isSettingsModalOpen,
+        setIsSettingsModalOpen,
         theme,
         setTheme,
         toggleTheme,
@@ -1053,7 +1234,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         members,
         visitorsCount,
         addVisitor,
+        addMember,
+        updateMember,
+        deleteMember,
         updateMemberConsent,
+        systemSettings,
+        updateSystemSettings,
+        resetSystemSettings,
         attendanceRecords,
         totalCheckedInCount,
         expectedAttendance,

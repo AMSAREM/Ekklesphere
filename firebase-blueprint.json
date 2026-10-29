@@ -16,6 +16,29 @@
       },
       "required": ["id", "name", "email", "role"]
     },
+    "Person": {
+      "title": "Person",
+      "description": "Registered church congregation member or attendee in the directory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "preferredName": { "type": "string" },
+        "phoneE164": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["member", "visitor", "inactive", "transferred", "deceased"] },
+        "groupName": { "type": "string" },
+        "householdRole": { "type": "string", "enum": ["head", "spouse", "child", "other"] },
+        "autoCheckinOptedIn": { "type": "boolean" },
+        "avatarInitials": { "type": "string" },
+        "joinedOn": { "type": "string" },
+        "consecutiveAbsences": { "type": "number" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName", "phoneE164", "status", "groupName", "autoCheckinOptedIn"]
+    },
     "AttendanceRecord": {
       "title": "AttendanceRecord",
       "description": "Church service attendance check-in record",
@@ -32,6 +55,37 @@
         "late": { "type": "boolean" }
       },
       "required": ["id", "personId", "serviceInstanceId", "method", "checkedInAt"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Campus proximity parameters, geofencing radii, and automated care rules",
+      "type": "object",
+      "properties": {
+        "churchName": { "type": "string" },
+        "campusName": { "type": "string" },
+        "campusAddress": { "type": "string" },
+        "seniorPastor": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "timezone": { "type": "string" },
+        "currency": { "type": "string" },
+        "outerGeofenceMeters": { "type": "number" },
+        "innerGeofenceMeters": { "type": "number" },
+        "dwellTimeMinutes": { "type": "number" },
+        "serviceWindowBeforeMinutes": { "type": "number" },
+        "serviceWindowAfterMinutes": { "type": "number" },
+        "bleBeaconRssiThreshold": { "type": "number" },
+        "driveByProtection": { "type": "boolean" },
+        "absenteeThresholdServices": { "type": "number" },
+        "firstTimerFollowupHours": { "type": "number" },
+        "autoAssignCellLeaders": { "type": "boolean" },
+        "requireExplicitConsent": { "type": "boolean" },
+        "auditLogRetentionDays": { "type": "number" },
+        "smsGatewayProvider": { "type": "string" },
+        "smsSenderId": { "type": "string" },
+        "enablePushNotifications": { "type": "boolean" }
+      },
+      "required": ["churchName", "campusName", "outerGeofenceMeters", "innerGeofenceMeters", "dwellTimeMinutes"]
     }
   },
   "firestore": {
@@ -39,9 +93,17 @@
       "schema": "User",
       "description": "Registered and authenticated users"
     },
+    "/members/{memberId}": {
+      "schema": "Person",
+      "description": "Registered church congregation members and visitor roster"
+    },
     "/attendance_records/{recordId}": {
       "schema": "AttendanceRecord",
       "description": "Attendance check-ins for church services"
+    },
+    "/system_settings/{settingId}": {
+      "schema": "SystemSettings",
+      "description": "Campus proximity parameters and automated thresholds"
     }
   }
 }

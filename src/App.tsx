@@ -7,6 +7,7 @@ import { UsherTool } from './components/usher/UsherTool';
 import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
 import { AppHeader } from './components/navigation/AppHeader';
+import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
 
 const EkklesphereMain: React.FC = () => {
   const { currentUser, toastMessage } = useEkklesphere();
@@ -15,6 +16,9 @@ const EkklesphereMain: React.FC = () => {
     <div className="min-h-screen flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
       {/* Help Modal */}
       {currentUser && <HelpDocsModal />}
+
+      {/* Global System Settings Modal across all portals */}
+      {currentUser && <SystemSettingsModal />}
 
       {/* Optimized Unified App Header */}
       {currentUser && <AppHeader />}

@@ -30,6 +30,7 @@ export const AppHeader: React.FC = () => {
     attendancePercentage,
     currentService,
     showToast,
+    systemSettings,
   } = useEkklesphere();
 
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -79,7 +80,7 @@ export const AppHeader: React.FC = () => {
             </span>
             <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-200/60 dark:bg-white/10 text-[11px] font-medium text-[#666A86] dark:text-[#A9ACC8]">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Accra Central</span>
+              <span>{systemSettings?.campusName || 'Accra Central'}</span>
             </div>
           </div>
         </div>

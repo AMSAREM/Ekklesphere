@@ -174,3 +174,30 @@ export interface AuditLogItem {
   timestamp: string;
   details: string;
 }
+
+export interface SystemSettings {
+  churchName: string;
+  campusName: string;
+  campusAddress: string;
+  seniorPastor: string;
+  contactEmail: string;
+  contactPhone: string;
+  timezone: string;
+  currency: string;
+  outerGeofenceMeters: number;
+  innerGeofenceMeters: number;
+  dwellTimeMinutes: number;
+  serviceWindowBeforeMinutes: number;
+  serviceWindowAfterMinutes: number;
+  bleBeaconRssiThreshold: number;
+  driveByProtection: boolean;
+  absenteeThresholdServices: number;
+  firstTimerFollowupHours: number;
+  autoAssignCellLeaders: boolean;
+  requireExplicitConsent: boolean;
+  auditLogRetentionDays: number;
+  smsGatewayProvider: string;
+  smsSenderId: string;
+  enablePushNotifications: boolean;
+}
+

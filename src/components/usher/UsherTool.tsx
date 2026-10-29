@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Phone,
   UserCheck,
+  Settings,
 } from 'lucide-react';
 
 export const UsherTool: React.FC = () => {
@@ -35,6 +36,8 @@ export const UsherTool: React.FC = () => {
     syncUsherCheckins,
     attendanceRecords,
     showToast,
+    setIsSettingsModalOpen,
+    isSettingsModalOpen,
   } = useEkklesphere();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -118,7 +121,118 @@ export const UsherTool: React.FC = () => {
   const attendancePercentage = Math.min(Math.round((totalCheckedInCount / (expectedAttendance || 1)) * 100), 100);
 
   return (
-    <main className="w-full max-w-6xl mx-auto py-3 sm:py-6 px-2 sm:px-4 font-['Plus_Jakarta_Sans',sans-serif]">
+    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-28 sm:pb-32 lg:pb-8 px-3 sm:px-6 lg:pr-8 lg:pl-0 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] lg:flex lg:items-start transition-all duration-200">
+      {/* Signature Purple Curved Navigation Bar - 5 Buttons */}
+      <aside
+        aria-label="Usher Station Navigation"
+        className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-4 lg:translate-x-0 lg:inset-x-auto lg:static lg:sticky lg:top-[84px] lg:self-start lg:w-[62px] lg:shrink-0 bg-[#6D5CF2] rounded-2xl sm:rounded-full lg:rounded-r-[32px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1.5 sm:gap-3 p-2 lg:py-5 lg:px-0 z-30 side-curved-tab shadow-xl lg:shadow-[0_12px_32px_rgba(40,30,120,0.22)] border border-white/20 lg:border-none backdrop-blur-md lg:backdrop-blur-none max-w-[420px] sm:max-w-none mx-auto sm:mx-0"
+      >
+        {/* 1. Roster */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              setFilterMode('all');
+              setSearchQuery('');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            aria-label="Door Roster"
+            aria-current={filterMode === 'all' && !isVisitorSheetOpen ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              filterMode === 'all' && !isVisitorSheetOpen
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <Users className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Roster</span>
+          </span>
+        </div>
+
+        {/* 2. Quick Scan */}
+        <div className="relative group">
+          <button
+            onClick={handleScanClick}
+            aria-label="Scan Member QR Pass"
+            className="w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <QrCode className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Scan Arrival</span>
+          </span>
+        </div>
+
+        {/* 3. Register Visitor */}
+        <div className="relative group">
+          <button
+            onClick={() => setIsVisitorSheetOpen(true)}
+            aria-label="Register Visitor"
+            aria-current={isVisitorSheetOpen ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              isVisitorSheetOpen
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <UserPlus className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Register Visitor</span>
+          </span>
+        </div>
+
+        {/* 4. Sync Queue */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              const count = syncUsherCheckins();
+              showToast(count > 0 ? `Synced ${count} check-ins to cloud` : 'Offline queue already in sync');
+            }}
+            aria-label="Sync Offline Queue"
+            className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <RefreshCw className="w-5 h-5" />
+            {pendingSyncCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center border-2 border-[#6D5CF2] shadow-xs">
+                {pendingSyncCount}
+              </span>
+            )}
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Sync Queue</span>
+            {pendingSyncCount > 0 && (
+              <span className="px-1.5 py-0.2 bg-red-500 text-white text-[10px] rounded-full font-black">
+                {pendingSyncCount} Pending
+              </span>
+            )}
+          </span>
+        </div>
+
+        {/* 5. System Settings */}
+        <div className="relative group">
+          <button
+            onClick={() => setIsSettingsModalOpen(true)}
+            aria-label="Station Settings"
+            aria-current={isSettingsModalOpen ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              isSettingsModalOpen
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Station Settings</span>
+          </span>
+        </div>
+      </aside>
+
+      {/* Main Station Content */}
+      <div className="flex-1 min-w-0 lg:pl-6">
+
       {/* Top Station Header & Status Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 pb-4 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
         <div className="flex items-center gap-3">
@@ -541,6 +655,7 @@ export const UsherTool: React.FC = () => {
           </form>
         </div>
       )}
+      </div>
     </main>
   );
 };
