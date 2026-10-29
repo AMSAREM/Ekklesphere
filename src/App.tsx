@@ -19,8 +19,8 @@ const EkklesphereMain: React.FC = () => {
       {/* Optimized Unified App Header */}
       {currentUser && <AppHeader />}
 
-      {/* Main role view */}
-      <div className="flex-1 w-full">
+      {/* Main role view optimized across desktop, tablet, and mobile */}
+      <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8">
         {!currentUser ? (
           <UnifiedAuthScreen />
         ) : (

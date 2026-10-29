@@ -169,11 +169,11 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <main className="relative max-w-[1360px] w-full mx-auto my-2 sm:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[24px] sm:rounded-[36px] pt-5 sm:pt-6 pb-6 sm:pb-8 pr-3 sm:pr-8 pl-3 sm:pl-8 lg:pl-0 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px] lg:flex lg:items-start">
-      {/* Signature Purple Curved Navigation Bar - Desktop Side Dock & Mobile Floating Rail */}
+    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-28 sm:pb-32 lg:pb-8 px-3 sm:px-6 lg:pr-8 lg:pl-0 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] lg:flex lg:items-start transition-all duration-200">
+      {/* Signature Purple Curved Navigation Bar - Desktop Side Dock & Mobile/Tablet Centered Floating Rail */}
       <aside
         aria-label="Admin Module Navigation"
-        className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:right-6 sm:bottom-6 lg:fixed-none lg:sticky lg:top-[84px] lg:self-start lg:w-[62px] lg:shrink-0 bg-[#6D5CF2] rounded-2xl sm:rounded-full lg:rounded-r-[32px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-start lg:justify-start gap-1.5 sm:gap-2 p-2 lg:py-4 lg:px-0 z-30 side-curved-tab shadow-xl lg:shadow-[0_12px_32px_rgba(40,30,120,0.22)] border border-white/20 lg:border-none backdrop-blur-md lg:backdrop-blur-none"
+        className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-4 lg:translate-x-0 lg:inset-x-auto lg:static lg:sticky lg:top-[84px] lg:self-start lg:w-[62px] lg:shrink-0 bg-[#6D5CF2] rounded-2xl sm:rounded-full lg:rounded-r-[32px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1.5 sm:gap-2.5 p-2 lg:py-4 lg:px-0 z-30 side-curved-tab shadow-xl lg:shadow-[0_12px_32px_rgba(40,30,120,0.22)] border border-white/20 lg:border-none backdrop-blur-md lg:backdrop-blur-none max-w-[500px] sm:max-w-none mx-auto sm:mx-0"
       >
         {/* 1. Dashboard */}
         <div className="relative group">
@@ -390,35 +390,35 @@ export const AdminDashboard: React.FC = () => {
       {/* Main Content View based on Tab */}
       {activeTab === 'dashboard' && (
         <>
-          {/* Hero Greeting Section */}
-          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 my-2 sm:my-4 items-stretch">
+          {/* Hero Greeting Section: Responsive 2-col on mobile, 4-col on tablet, 6-col on desktop */}
+          <section className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 my-2 sm:my-4 items-stretch">
             {/* Left Welcome Box */}
-            <div className="lg:col-span-2 flex flex-col justify-center">
-              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-2">
+            <div className="col-span-2 sm:col-span-2 md:col-span-4 lg:col-span-2 flex flex-col justify-center">
+              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-2">
                 Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Pastor David'}!
                 <span className="inline-flex gap-1 ml-2.5 align-middle">
-                  <span className="w-5 h-5 rounded-full bg-[#6D5CF2] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block shadow-sm" />
-                  <span className="w-5 h-5 rounded-full bg-[#59C3C3] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block -ml-2 shadow-sm" />
+                  <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#6D5CF2] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block shadow-sm" />
+                  <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#59C3C3] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block -ml-2 shadow-sm" />
                 </span>
                 <br />
                 What are your plans for today?
               </h1>
-              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A9ACC8] max-w-[36ch] leading-relaxed mb-4">
+              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A9ACC8] max-w-[36ch] leading-relaxed mb-3 sm:mb-4">
                 This platform takes care of proximity attendance and pastoral follow-up, so you can focus on your congregation.
               </p>
               
-              {/* Quick Actions relocated from crowded top nav */}
+              {/* Quick Actions */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => setIsAddServiceOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-3.5 py-2 text-xs font-bold shadow-sm transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold shadow-sm transition-all cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add service
                 </button>
                 <button
                   onClick={() => setIsExportModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3.5 py-2 text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
                   Export CSV
@@ -429,70 +429,70 @@ export const AdminDashboard: React.FC = () => {
             {/* Dash Tile: Add shortcut */}
             <button
               onClick={() => showToast('Shortcut builder: Choose any report or action to pin here.')}
-              className="border-2 border-dashed border-[#CBC6F7] dark:border-[#3B3B72] rounded-3xl p-4 flex flex-col items-center justify-center gap-2 hover:bg-[#EFEDFF]/40 dark:hover:bg-[#2A2A55]/20 transition-colors group min-h-[130px]"
+              className="col-span-1 border-2 border-dashed border-[#CBC6F7] dark:border-[#3B3B72] rounded-2xl sm:rounded-3xl p-3 sm:p-4 flex flex-col items-center justify-center gap-1.5 sm:gap-2 hover:bg-[#EFEDFF]/40 dark:hover:bg-[#2A2A55]/20 transition-colors group min-h-[110px] sm:min-h-[130px] cursor-pointer"
               aria-label="Add shortcut tile"
             >
-              <span className="w-9 h-9 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Plus className="w-5 h-5" />
+              <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center group-hover:scale-105 transition-transform">
+                <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
               </span>
-              <span className="text-xs font-semibold text-[#6D5CF2] dark:text-[#8C7DFF]">Add shortcut</span>
+              <span className="text-[11px] sm:text-xs font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] text-center">Add shortcut</span>
             </button>
 
             {/* Tile 1: Check people in */}
             <button
               onClick={handleQuickArrivalCheckin}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
+              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
             >
-              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="10" y="12" width="38" height="36" rx="6" />
                 <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 23h38M21 8v8M37 8v8" />
                 <circle className="fill-[#6D5CF2] stroke-none" cx="48" cy="42" r="11" />
                 <path d="m43 42 4 4 7-8" stroke="#fff" strokeWidth="2.5" />
               </svg>
               <div>
-                <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Check people in</b>
-                <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">Counts arrivals live</small>
+                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Check people in</b>
+                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">Counts arrivals live</small>
               </div>
             </button>
 
             {/* Tile 2: Follow up */}
             <button
               onClick={() => setIsFollowupModalOpen(true)}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
+              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
             >
-              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" cx="26" cy="20" r="9" />
                 <path className="fill-[#EFEDFF] dark:fill-[#2A2A55] stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 48c1-10 8-14 16-14s15 4 16 14z" />
                 <path className="fill-[#6D5CF2] stroke-none" d="M50 26c-6-5-12 1-6 7l6 6 6-6c6-6 0-12-6-7z" />
               </svg>
               <div>
-                <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Follow up</b>
-                <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">No one drifts away</small>
+                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Follow up</b>
+                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">No one drifts away</small>
               </div>
             </button>
 
             {/* Tile 3: Message members */}
             <button
               onClick={() => setIsMessageModalOpen(true)}
-              className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[130px] cursor-pointer"
+              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
             >
-              <svg className="w-[68px] h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="8" y="10" width="34" height="22" rx="8" />
                 <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" d="M16 32v8l8-8" />
                 <rect className="fill-[#6D5CF2] stroke-none" x="28" y="26" width="32" height="20" rx="8" />
                 <path d="M36 36h16" stroke="#fff" strokeWidth="2" />
               </svg>
               <div>
-                <b className="block text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Message members</b>
-                <small className="text-xs text-[#666A86] dark:text-[#A9ACC8]">Push, SMS and email</small>
+                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Message members</b>
+                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">Push, SMS & email</small>
               </div>
             </button>
           </section>
 
-          {/* Cards Grid: 6 Columns */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-5">
-            {/* 1. Notifications Card (Span 2) */}
-            <section id="notifications-card" className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+          {/* Cards Grid: Responsive across mobile (1 col), tablet (2 cols), desktop (6 cols) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
+            {/* 1. Notifications Card (Tablet 1 col, Desktop Span 2) */}
+            <section id="notifications-card" className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Notifications</h2>
@@ -562,8 +562,8 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </section>
 
-            {/* 2. Assignments Card (Span 2) */}
-            <section className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+            {/* 2. Assignments Card (Tablet 1 col, Desktop Span 2) */}
+            <section className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Assignments</h2>
@@ -618,8 +618,8 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </section>
 
-            {/* 3. Calendar & Timeline (Span 2) */}
-            <section className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+            {/* 3. Calendar & Timeline (Tablet Span 2, Desktop Span 2) */}
+            <section className="md:col-span-2 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Oct 26 - Nov 1</h2>
@@ -692,8 +692,8 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </section>
 
-            {/* 4. Today's Tasks (Span 3) */}
-            <section className="lg:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55]">
+            {/* 4. Today's Tasks (Tablet Span 2, Desktop Span 3) */}
+            <section className="md:col-span-2 lg:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55]">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                 <div className="flex items-center gap-3">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Today’s tasks</h2>
@@ -787,16 +787,16 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </section>
 
-            {/* 5. Promo Card (Span 1) */}
-            <section className="lg:col-span-1 bg-[#6D5CF2] text-white rounded-3xl p-5 flex flex-col items-center justify-between text-center shadow-[0_10px_30px_rgba(109,92,242,0.3)]">
-              <svg className="w-20 h-20 mb-1" viewBox="0 0 84 84" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            {/* 5. Promo Card (Tablet 1 col, Desktop Span 1) */}
+            <section className="md:col-span-1 lg:col-span-1 bg-[#6D5CF2] text-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-between text-center shadow-[0_10px_30px_rgba(109,92,242,0.3)]">
+              <svg className="w-16 h-16 sm:w-20 sm:h-20 mb-1" viewBox="0 0 84 84" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="20" y="38" width="44" height="30" rx="5" fill="#8C7DFF" />
                 <rect x="16" y="30" width="52" height="12" rx="4" fill="#8C7DFF" />
                 <path d="M42 30v38M42 30c-8-12-18-6-12 0M42 30c8-12 18-6 12 0" />
                 <path d="M10 18v8M6 22h8M72 14v6M69 17h6" />
               </svg>
               <div>
-                <h2 className="text-base font-bold mb-1">Turn on auto check-in!</h2>
+                <h2 className="text-sm sm:text-base font-bold mb-1">Turn on auto check-in!</h2>
                 <p className="text-xs text-white/90 leading-snug mb-3">
                   36% of members still sign in by hand. Invite them to switch it on.
                 </p>
@@ -805,14 +805,14 @@ export const AdminDashboard: React.FC = () => {
                 onClick={() => {
                   showToast('Invitation SMS & Push queued for 187 members');
                 }}
-                className="w-full bg-[#1D1B3A] hover:bg-[#1D1B3A]/90 text-white rounded-xl py-2 text-xs font-bold transition-all shadow-sm"
+                className="w-full bg-[#1D1B3A] hover:bg-[#1D1B3A]/90 text-white rounded-xl py-2 text-xs font-bold transition-all shadow-sm cursor-pointer"
               >
                 Invite members
               </button>
             </section>
 
-            {/* 6. Metrics & Meetings (Span 2) */}
-            <div className="lg:col-span-2 flex flex-col gap-4">
+            {/* 6. Metrics & Meetings (Tablet 1 col, Desktop Span 2) */}
+            <div className="md:col-span-1 lg:col-span-2 flex flex-col gap-4">
               {/* Row with two Circular Progress Rings */}
               <div className="grid grid-cols-2 gap-3">
                 {/* Ring 1: Attendance */}
@@ -919,15 +919,15 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             {/* Contextual Search & Actions */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <div className="relative flex-1 sm:flex-initial">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
                 <input
                   type="text"
                   placeholder="Filter members..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2] w-48 sm:w-56"
+                  className="pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2] w-full sm:w-56"
                 />
                 {searchQuery && (
                   <button
@@ -941,7 +941,7 @@ export const AdminDashboard: React.FC = () => {
 
               <button
                 onClick={() => setIsExportModalOpen(true)}
-                className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs"
+                className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
                 Export
@@ -949,7 +949,7 @@ export const AdminDashboard: React.FC = () => {
 
               <button
                 onClick={() => setIsNewAssignmentOpen(true)}
-                className="bg-[#6D5CF2] text-white rounded-xl px-3.5 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm hover:bg-[#5b4be0] transition-all"
+                className="bg-[#6D5CF2] text-white rounded-xl px-3.5 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm hover:bg-[#5b4be0] transition-all cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 New Follow-up
@@ -957,8 +957,8 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm overflow-x-auto">
+            <table className="w-full text-left text-xs min-w-[640px]">
               <thead>
                 <tr className="border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
                   <th className="pb-3 font-semibold">Member</th>
@@ -1067,9 +1067,9 @@ export const AdminDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Geofence Engine */}
-            <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2 flex items-center justify-between">
                 <span>PostGIS Campus Geofencing</span>
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
@@ -1084,14 +1084,14 @@ export const AdminDashboard: React.FC = () => {
               </div>
               <button
                 onClick={() => showToast('Geofence test calibrated at Accra Central campus')}
-                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold"
+                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold cursor-pointer hover:opacity-90 transition-all"
               >
                 Test Radius Accuracy
               </button>
             </div>
 
             {/* BLE Beacons */}
-            <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2 flex items-center justify-between">
                 <span>Entrance BLE Beacons</span>
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
@@ -1106,14 +1106,14 @@ export const AdminDashboard: React.FC = () => {
               </div>
               <button
                 onClick={() => showToast('Entrance Beacon pinged: Signal strength -58 dBm (Strong)')}
-                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold"
+                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold cursor-pointer hover:opacity-90 transition-all"
               >
                 Ping Beacon
               </button>
             </div>
 
             {/* Paystack & MoMo */}
-            <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2 flex items-center justify-between">
                 <span>Paystack & Mobile Money</span>
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
@@ -1126,7 +1126,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
               <button
                 onClick={() => showToast('Payment gateway webhook verified')}
-                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold"
+                className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold cursor-pointer hover:opacity-90 transition-all"
               >
                 Test MoMo Webhook
               </button>
@@ -1145,8 +1145,8 @@ export const AdminDashboard: React.FC = () => {
 
       {/* MODAL 1: Add New Service */}
       {isAddServiceOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-md w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55]">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Schedule New Service</h3>
               <button onClick={() => setIsAddServiceOpen(false)} className="text-slate-400 hover:text-slate-600">
@@ -1215,10 +1215,10 @@ export const AdminDashboard: React.FC = () => {
 
       {/* MODAL 2: Broadcast Messages */}
       {isMessageModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
           <form
             onSubmit={handleBroadcastSend}
-            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-lg w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55]"
+            className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[90vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Message Members</h3>
@@ -1390,10 +1390,10 @@ export const AdminDashboard: React.FC = () => {
 
       {/* MODAL 4: New Assignment */}
       {isNewAssignmentOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
           <form
             onSubmit={handleCreateAssignment}
-            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-md w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55]"
+            className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[90vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">New Care Assignment</h3>
@@ -1466,8 +1466,8 @@ export const AdminDashboard: React.FC = () => {
 
       {/* MODAL 5: Export CSV confirmation */}
       {isExportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-sm w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] text-center">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl max-w-sm w-full p-5 sm:p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] text-center max-h-[90vh] overflow-y-auto">
             <div className="w-12 h-12 rounded-2xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] mx-auto flex items-center justify-center mb-3">
               <Download className="w-6 h-6" />
             </div>
