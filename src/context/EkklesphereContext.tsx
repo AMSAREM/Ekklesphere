@@ -623,7 +623,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return newUser;
   };
 
-  const [theme, setThemeState] = useState<'light' | 'dark'>('light');
+  const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_theme');
+      if (saved === 'dark' || saved === 'light') {
+        return saved;
+      }
+      if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+    } catch {
+      // fallback
+    }
+    return 'light';
+  });
   const [activeServiceId, setActiveServiceId] = useState<string>('svc-sun-1');
   const [services] = useState<ServiceInstance[]>(INITIAL_SERVICES);
   const [members, setMembers] = useState<Person[]>(INITIAL_MEMBERS);
@@ -734,29 +747,35 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, 2800);
   };
 
-  const setTheme = (t: 'light' | 'dark') => {
-    setThemeState(t);
-    if (t === 'dark') {
+  // Synchronize document classes and localStorage whenever theme changes
+  useEffect(() => {
+    if (theme === 'dark') {
       document.documentElement.classList.add('dark');
       document.documentElement.setAttribute('data-theme', 'dark');
+      document.documentElement.style.colorScheme = 'dark';
     } else {
       document.documentElement.classList.remove('dark');
       document.documentElement.setAttribute('data-theme', 'light');
+      document.documentElement.style.colorScheme = 'light';
     }
+    try {
+      localStorage.setItem('ekklesphere_theme', theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  const setTheme = (t: 'light' | 'dark') => {
+    setThemeState(t);
   };
 
   const toggleTheme = () => {
-    setTheme(theme === 'light' ? 'dark' : 'light');
+    setThemeState((prev) => {
+      const next = prev === 'light' ? 'dark' : 'light';
+      showToast(`Switched to ${next === 'dark' ? 'Dark' : 'Light'} Mode`);
+      return next;
+    });
   };
-
-  useEffect(() => {
-    // Initial theme detection
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setTheme('dark');
-    } else {
-      setTheme('light');
-    }
-  }, []);
 
   const currentService = services.find((s) => s.id === activeServiceId) || services[0];
 

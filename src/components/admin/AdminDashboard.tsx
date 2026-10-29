@@ -58,20 +58,6 @@ export const AdminDashboard: React.FC = () => {
     setIsHelpModalOpen,
   } = useEkklesphere();
 
-  // User menu state
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setIsUserMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   // Active sub-navigation tabs inside Admin
   const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'integrations' | 'proximity'>('dashboard');
   const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages'>('dashboard');
@@ -183,419 +169,233 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <div className="relative max-w-[1360px] mx-auto my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[36px] pt-6 pb-8 pr-6 sm:pr-8 pl-6 sm:pl-8 lg:pl-[96px] shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px]">
-      {/* Signature Purple Curved Side Tab from 1001403593.jpg and Prototype */}
+    <main className="relative max-w-[1360px] w-full mx-auto my-2 sm:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-[24px] sm:rounded-[36px] pt-5 sm:pt-6 pb-6 sm:pb-8 pr-3 sm:pr-8 pl-3 sm:pl-8 lg:pl-0 shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[920px] lg:flex lg:items-start">
+      {/* Signature Purple Curved Navigation Bar - Desktop Side Dock & Mobile Floating Rail */}
       <aside
-        aria-label="Admin Navigation Tab"
-        className="hidden lg:flex absolute left-0 top-[112px] w-[60px] bg-[#6D5CF2] rounded-r-[32px] flex-col items-center gap-2 py-3.5 z-20 side-curved-tab shadow-lg shadow-indigo-950/20"
+        aria-label="Admin Module Navigation"
+        className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:right-6 sm:bottom-6 lg:fixed-none lg:sticky lg:top-[84px] lg:self-start lg:w-[62px] lg:shrink-0 bg-[#6D5CF2] rounded-2xl sm:rounded-full lg:rounded-r-[32px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-start lg:justify-start gap-1.5 sm:gap-2 p-2 lg:py-4 lg:px-0 z-30 side-curved-tab shadow-xl lg:shadow-[0_12px_32px_rgba(40,30,120,0.22)] border border-white/20 lg:border-none backdrop-blur-md lg:backdrop-blur-none"
       >
         {/* 1. Dashboard */}
-        <button
-          onClick={() => {
-            setActiveTab('dashboard');
-            setActiveModule('dashboard');
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeTab === 'dashboard' && activeModule === 'dashboard'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Dashboard Overview"
-          aria-label="Dashboard"
-        >
-          <Grid className="w-5 h-5" />
-        </button>
-
-        {/* 2. Members */}
-        <button
-          onClick={() => {
-            setActiveTab('workflows');
-            setActiveModule('members');
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeTab === 'workflows' && activeModule === 'members'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Members & Households"
-          aria-label="Members"
-        >
-          <Users className="w-5 h-5" />
-        </button>
-
-        {/* 3. Attendance with Live Emerald Dot Badge */}
-        <button
-          onClick={() => {
-            setActiveTab('dashboard');
-            setActiveModule('attendance');
-            showToast(`Attendance Tally: ${totalCheckedInCount} / ${expectedAttendance}`);
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeModule === 'attendance'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Attendance & Check-in Signals"
-          aria-label="Attendance"
-        >
-          <PieChart className="w-5 h-5" />
-          <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2]" />
-        </button>
-
-        {/* 4. Notifications */}
-        <button
-          onClick={() => {
-            const el = document.getElementById('notifications-card');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
-            showToast('Upcoming briefings & notifications');
-          }}
-          className="relative w-11 h-11 rounded-[14px] flex items-center justify-center text-white/90 hover:bg-white/20 transition-all cursor-pointer"
-          title="Notifications & Briefings"
-          aria-label="Notifications"
-        >
-          <Bell className="w-5 h-5" />
-        </button>
-
-        {/* 5. Services */}
-        <button
-          onClick={() => {
-            setIsAddServiceOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeModule === 'services'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Services & Calendar"
-          aria-label="Services"
-        >
-          <CalendarIcon className="w-5 h-5" />
-        </button>
-
-        {/* 6. Messages */}
-        <button
-          onClick={() => {
-            setIsMessageModalOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeModule === 'messages'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Broadcast Messages (Push, SMS, Email)"
-          aria-label="Messages"
-        >
-          <Mail className="w-5 h-5" />
-        </button>
-
-        {/* 7. Follow-up */}
-        <button
-          onClick={() => {
-            setIsFollowupModalOpen(true);
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeModule === 'followup'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Pastoral Care Follow-up"
-          aria-label="Follow-up"
-        >
-          <CheckSquare className="w-5 h-5" />
-          {openFollowupCount > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#EF5A6F] text-white text-[9px] font-extrabold flex items-center justify-center border-2 border-[#6D5CF2]">
-              {openFollowupCount}
-            </span>
-          )}
-        </button>
-
-        {/* 8. Proximity Radar */}
-        <button
-          onClick={() => {
-            setActiveTab('proximity');
-            showToast('Proximity & Geofencing Radar Suite active');
-          }}
-          className={`relative w-11 h-11 rounded-[14px] flex items-center justify-center transition-all cursor-pointer ${
-            activeTab === 'proximity'
-              ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold opacity-100 scale-105'
-              : 'text-white/90 hover:bg-white/20'
-          }`}
-          title="Proximity & Geofencing Radar Suite"
-          aria-label="Proximity Radar"
-        >
-          <Radio className="w-5 h-5" />
-        </button>
-      </aside>
-
-      {/* Top Header Row */}
-      <header className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        {/* Top tabs */}
-        <div className="flex items-center gap-6 font-semibold text-sm">
+        <div className="relative group">
           <button
             onClick={() => {
               setActiveTab('dashboard');
               setActiveModule('dashboard');
             }}
-            className={`flex items-center gap-2 py-1 transition-colors ${
-              activeTab === 'dashboard'
-                ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+            aria-label="Dashboard Overview"
+            aria-current={activeTab === 'dashboard' && activeModule === 'dashboard' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeTab === 'dashboard' && activeModule === 'dashboard'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Grid className="w-4 h-4 text-[#6D5CF2]" />
-            Dashboard
+            <Grid className="w-5 h-5" />
           </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Dashboard</span>
+          </span>
+        </div>
+
+        {/* 2. Members */}
+        <div className="relative group">
           <button
             onClick={() => {
               setActiveTab('workflows');
               setActiveModule('members');
             }}
-            className={`flex items-center gap-2 py-1 transition-colors ${
-              activeTab === 'workflows'
-                ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+            aria-label="Members & Households"
+            aria-current={activeTab === 'workflows' && activeModule === 'members' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeTab === 'workflows' && activeModule === 'members'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <CheckSquare className="w-4 h-4 text-[#6D5CF2]" />
-            Workflows
+            <Users className="w-5 h-5" />
           </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Members & Roster</span>
+          </span>
+        </div>
+
+        {/* 3. Attendance */}
+        <div className="relative group">
           <button
-            onClick={() => setActiveTab('integrations')}
-            className={`flex items-center gap-2 py-1 transition-colors ${
+            onClick={() => {
+              setActiveTab('dashboard');
+              setActiveModule('attendance');
+              showToast(`Attendance: ${totalCheckedInCount} / ${expectedAttendance} (${attendancePercentage}%)`);
+            }}
+            aria-label="Live Attendance Signals"
+            aria-current={activeModule === 'attendance' ? 'page' : undefined}
+            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeModule === 'attendance'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <PieChart className="w-5 h-5" />
+            <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2] animate-pulse" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Live Attendance</span>
+            <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 dark:text-emerald-600 text-[10px] rounded-full font-extrabold">Active</span>
+          </span>
+        </div>
+
+        {/* Visual Divider between Core Metrics and Operations */}
+        <div className="hidden lg:block w-7 h-[1px] bg-white/25 my-1" aria-hidden="true" />
+        <div className="lg:hidden w-[1px] h-5 bg-white/25 mx-0.5" aria-hidden="true" />
+
+        {/* 4. Notifications */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              const el = document.getElementById('notifications-card');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+              showToast('Upcoming briefings & notifications');
+            }}
+            aria-label="Notifications & Briefings"
+            className="w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <Bell className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Briefings & Alerts</span>
+          </span>
+        </div>
+
+        {/* 5. Services & Calendar */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              setIsAddServiceOpen(true);
+            }}
+            aria-label="Services & Calendar"
+            aria-current={activeModule === 'services' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeModule === 'services'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <CalendarIcon className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Services & Schedule</span>
+          </span>
+        </div>
+
+        {/* 6. Messages */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              setIsMessageModalOpen(true);
+            }}
+            aria-label="Broadcast Messages (Push, SMS, Email)"
+            aria-current={activeModule === 'messages' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeModule === 'messages'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <Mail className="w-5 h-5" />
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Broadcast Composer</span>
+          </span>
+        </div>
+
+        {/* 7. Follow-up */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              setIsFollowupModalOpen(true);
+            }}
+            aria-label="Pastoral Care Follow-up"
+            aria-current={activeModule === 'followup' ? 'page' : undefined}
+            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeModule === 'followup'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
+          >
+            <CheckSquare className="w-5 h-5" />
+            {openFollowupCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-[#EF5A6F] text-white text-[9px] font-black flex items-center justify-center border-2 border-[#6D5CF2] shadow-xs">
+                {openFollowupCount}
+              </span>
+            )}
+          </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Pastoral Care Queue</span>
+            {openFollowupCount > 0 && (
+              <span className="px-1.5 py-0.2 bg-rose-500 text-white text-[10px] rounded-full font-black">
+                {openFollowupCount} Open
+              </span>
+            )}
+          </span>
+        </div>
+
+        {/* 8. Integrations */}
+        <div className="relative group">
+          <button
+            onClick={() => {
+              setActiveTab('integrations');
+              showToast('Platform Integrations: Firebase, MoMo, SMS & BLE');
+            }}
+            aria-label="Platform Integrations"
+            aria-current={activeTab === 'integrations' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'integrations'
-                ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Plus className="w-4 h-4 text-[#6D5CF2]" />
-            Integrations
+            <Sparkles className="w-5 h-5" />
           </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Integrations</span>
+          </span>
+        </div>
+
+        {/* 9. Proximity Radar */}
+        <div className="relative group">
           <button
-            onClick={() => setActiveTab('proximity')}
-            className={`flex items-center gap-2 py-1 transition-colors ${
+            onClick={() => {
+              setActiveTab('proximity');
+              showToast('Proximity & Geofencing Radar Suite active');
+            }}
+            aria-label="Proximity & Geofencing Radar Suite"
+            aria-current={activeTab === 'proximity' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'proximity'
-                ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold border-b-2 border-[#6D5CF2]'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Radio className="w-4 h-4 text-[#6D5CF2]" />
-            Proximity Radar
+            <Radio className="w-5 h-5" />
           </button>
+          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Proximity Radar</span>
+          </span>
         </div>
+      </aside>
 
-        {/* Search */}
-        <div className="flex items-center gap-2 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl px-3.5 py-1.5 w-64 text-sm text-[#666A86] dark:text-[#A9ACC8]">
-          <Search className="w-4 h-4 shrink-0" />
-          <input
-            type="text"
-            placeholder="Search member or command..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-transparent border-0 outline-none text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] text-xs"
-          />
-        </div>
-
-        {/* Right Action Cluster */}
-        <div className="flex items-center gap-2.5">
-          {/* Segmented Light/Dark switcher */}
-          <div className="flex bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl p-0.5 text-xs font-semibold">
-            <button
-              onClick={() => setTheme('light')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                theme === 'light'
-                  ? 'bg-[#EFEDFF] text-[#6D5CF2] shadow-sm'
-                  : 'text-[#666A86] hover:text-[#1D1B3A]'
-              }`}
-            >
-              <Sun className="w-3.5 h-3.5" />
-              Light
-            </button>
-            <button
-              onClick={() => setTheme('dark')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                theme === 'dark'
-                  ? 'bg-[#2A2A55] text-[#8C7DFF] shadow-sm'
-                  : 'text-[#A9ACC8] hover:text-white'
-              }`}
-            >
-              <Moon className="w-3.5 h-3.5" />
-              Dark
-            </button>
-          </div>
-
-          <button
-            onClick={() => showToast('All systems nominal. BLE Beacons and PostGIS Geofence active.')}
-            className="w-9 h-9 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white transition-colors"
-            title="Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={() => setIsExportModalOpen(true)}
-            className="flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl px-3.5 py-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
-          >
-            <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
-            Export data
-            <span className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded px-1 text-[10px] uppercase font-bold">
-              CSV
-            </span>
-          </button>
-
-          <button
-            onClick={() => setIsAddServiceOpen(true)}
-            className="flex items-center gap-1.5 bg-[#1D1B3A] dark:bg-[#6D5CF2] text-white rounded-xl px-4 py-2 text-xs font-bold hover:opacity-95 shadow-sm transition-all"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add new service
-          </button>
-
-          {/* Help & Documentation */}
-          <button
-            onClick={() => setIsHelpModalOpen(true)}
-            className="w-9 h-9 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white transition-colors"
-            title="Help & Documentation"
-            aria-label="Help & Documentation"
-          >
-            <HelpCircle className="w-4 h-4" />
-          </button>
-
-          {/* User Account / Role Switcher Menu */}
-          {currentUser && (
-            <div className="relative" ref={userMenuRef}>
-              <button
-                onClick={() => setIsUserMenuOpen((prev) => !prev)}
-                className="flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] hover:bg-slate-50 dark:hover:bg-white/5 border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                aria-haspopup="true"
-                aria-expanded={isUserMenuOpen}
-                title="Account & Role Switcher"
-              >
-                <div className="w-6 h-6 rounded-lg bg-[#6D5CF2] text-white flex items-center justify-center font-bold text-[11px] shadow-sm overflow-hidden shrink-0">
-                  {currentUser.initials}
-                </div>
-                <span className="hidden sm:inline text-xs font-semibold">
-                  {currentUser.name.split(' ')[0]}
-                </span>
-                <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/70 text-[#6D5CF2] dark:text-[#8C7DFF] border border-indigo-200 dark:border-indigo-800">
-                  {currentUser.role}
-                </span>
-                <ChevronDown className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
-              </button>
-
-              {isUserMenuOpen && (
-                <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-2xl shadow-2xl border border-[#E3E5F2] dark:border-[#2D2D55] p-3 z-50 animate-in fade-in slide-in-from-top-2">
-                  <div className="p-2 border-b border-[#E3E5F2] dark:border-[#2D2D55] mb-2 flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center font-bold text-xs shadow-sm overflow-hidden shrink-0">
-                      {currentUser.initials}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-bold text-sm text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                        {currentUser.name}
-                      </div>
-                      <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] font-medium truncate">
-                        {currentUser.title}
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5 truncate">
-                        {currentUser.email}
-                      </div>
-                      <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <ShieldCheck className="w-3 h-3" />
-                        <span>Ghana Act 843 Compliant</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mb-2">
-                    <div className="text-[10px] uppercase font-bold text-slate-400 px-2 py-1 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-amber-500" />
-                      <span>Switch Active Profile:</span>
-                    </div>
-
-                    <div className="space-y-1">
-                      <button
-                        onClick={() => {
-                          switchUserRole('admin');
-                          setIsUserMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
-                          currentUser.role === 'admin'
-                            ? 'bg-indigo-50 dark:bg-indigo-950/70 text-[#6D5CF2] dark:text-[#8C7DFF]'
-                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Grid className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                          <span>Pastor David (Admin)</span>
-                        </div>
-                        {currentUser.role === 'admin' && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          switchUserRole('usher');
-                          setIsUserMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
-                          currentUser.role === 'usher'
-                            ? 'bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300'
-                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <CheckSquare className="w-3.5 h-3.5 text-amber-500" />
-                          <span>Samuel Tetteh (Usher)</span>
-                        </div>
-                        {currentUser.role === 'usher' && <Check className="w-3.5 h-3.5 text-amber-500" />}
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          switchUserRole('member');
-                          setIsUserMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
-                          currentUser.role === 'member'
-                            ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
-                            : 'hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Users className="w-3.5 h-3.5 text-emerald-500" />
-                          <span>Ama Mensah (Member)</span>
-                        </div>
-                        {currentUser.role === 'member' && <Check className="w-3.5 h-3.5 text-emerald-500" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-[#E3E5F2] dark:border-[#2D2D55]">
-                    <button
-                      onClick={() => {
-                        logout();
-                        setIsUserMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </header>
+      {/* Main Content & Bottom Nav Container */}
+      <div className="flex-1 min-w-0 lg:pl-6">
 
       {/* Main Content View based on Tab */}
       {activeTab === 'dashboard' && (
         <>
           {/* Hero Greeting Section */}
-          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 my-6 items-stretch">
+          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 my-2 sm:my-4 items-stretch">
             {/* Left Welcome Box */}
             <div className="lg:col-span-2 flex flex-col justify-center">
               <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-2">
-                Hi, James!
+                Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Pastor David'}!
                 <span className="inline-flex gap-1 ml-2.5 align-middle">
                   <span className="w-5 h-5 rounded-full bg-[#6D5CF2] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block shadow-sm" />
                   <span className="w-5 h-5 rounded-full bg-[#59C3C3] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block -ml-2 shadow-sm" />
@@ -603,9 +403,27 @@ export const AdminDashboard: React.FC = () => {
                 <br />
                 What are your plans for today?
               </h1>
-              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A9ACC8] max-w-[36ch] leading-relaxed">
-                This platform is designed to take care of attendance and follow-up, so you can focus on your people.
+              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A9ACC8] max-w-[36ch] leading-relaxed mb-4">
+                This platform takes care of proximity attendance and pastoral follow-up, so you can focus on your congregation.
               </p>
+              
+              {/* Quick Actions relocated from crowded top nav */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setIsAddServiceOpen(true)}
+                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-3.5 py-2 text-xs font-bold shadow-sm transition-all cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add service
+                </button>
+                <button
+                  onClick={() => setIsExportModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3.5 py-2 text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  Export CSV
+                </button>
+              </div>
             </div>
 
             {/* Dash Tile: Add shortcut */}
@@ -1090,22 +908,53 @@ export const AdminDashboard: React.FC = () => {
       {/* Workflows Tab: Members Roster & Care Follow-up list */}
       {activeTab === 'workflows' && (
         <div className="mt-4 space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                 Member Directory & Care Workflows
               </h2>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Track membership status, cell groups, and consecutive absences under Act 843 privacy rules.
+                Track membership status, cell groups, and consecutive absences under Ghana Act 843 privacy rules.
               </p>
             </div>
-            <button
-              onClick={() => setIsNewAssignmentOpen(true)}
-              className="bg-[#6D5CF2] text-white rounded-xl px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              New Care Follow-up
-            </button>
+
+            {/* Contextual Search & Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
+                <input
+                  type="text"
+                  placeholder="Filter members..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2] w-48 sm:w-56"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => setIsExportModalOpen(true)}
+                className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                Export
+              </button>
+
+              <button
+                onClick={() => setIsNewAssignmentOpen(true)}
+                className="bg-[#6D5CF2] text-white rounded-xl px-3.5 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm hover:bg-[#5b4be0] transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New Follow-up
+              </button>
+            </div>
           </div>
 
           <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm overflow-x-auto">
@@ -1122,7 +971,18 @@ export const AdminDashboard: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55]">
-                {members.map((m) => (
+                {members
+                  .filter((m) => {
+                    if (!searchQuery.trim()) return true;
+                    const q = searchQuery.toLowerCase();
+                    return (
+                      m.firstName.toLowerCase().includes(q) ||
+                      m.lastName.toLowerCase().includes(q) ||
+                      m.groupName.toLowerCase().includes(q) ||
+                      m.phoneE164.includes(q)
+                    );
+                  })
+                  .map((m) => (
                   <tr key={m.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
                     <td className="py-3 font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
                       <span className="w-7 h-7 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[11px] flex items-center justify-center shrink-0">
@@ -1281,146 +1141,7 @@ export const AdminDashboard: React.FC = () => {
           <ProximitySimulator />
         </div>
       )}
-
-      {/* Bottom Horizontal Module Navigation Bar */}
-      <nav
-        aria-label="Admin Module Navigation"
-        className="sticky bottom-2 z-20 mt-8 bg-white/95 dark:bg-[#1D1D3D]/95 backdrop-blur-md rounded-2xl p-1.5 sm:p-2 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-lg shadow-indigo-950/5 flex items-center justify-between gap-1 overflow-x-auto"
-      >
-        <div className="flex items-center gap-1 sm:gap-2 w-full justify-between min-w-max sm:min-w-0">
-          {/* 1. Dashboard */}
-          <button
-            onClick={() => {
-              setActiveModule('dashboard');
-              setActiveTab('dashboard');
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'dashboard' && activeTab === 'dashboard'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Overview & Key Metrics"
-          >
-            <Grid className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Dashboard</span>
-          </button>
-
-          {/* 2. Attendance */}
-          <button
-            onClick={() => {
-              setActiveModule('attendance');
-              setActiveTab('dashboard');
-              showToast(`Attendance Tally: ${totalCheckedInCount} / ${expectedAttendance} verified`);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'attendance'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Service Attendance & Check-in Records"
-          >
-            <PieChart className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Attendance</span>
-            <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold">
-              {totalCheckedInCount}
-            </span>
-          </button>
-
-          {/* 3. Members Roster */}
-          <button
-            onClick={() => {
-              setActiveModule('members');
-              setActiveTab('workflows');
-              showToast('Viewing congregation directory & cell groups');
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'members' && activeTab === 'workflows'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Member Profiles & Household Directory"
-          >
-            <Users className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Members</span>
-            <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300 font-semibold">
-              520
-            </span>
-          </button>
-
-          {/* 4. Schedule & Services */}
-          <button
-            onClick={() => {
-              setActiveModule('services');
-              setIsAddServiceOpen(true);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'services'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Schedule New Service or Event"
-          >
-            <CalendarIcon className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Schedule</span>
-          </button>
-
-          {/* 5. Care Follow-up */}
-          <button
-            onClick={() => {
-              setActiveModule('followup');
-              setIsFollowupModalOpen(true);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'followup'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Pastoral Care Follow-up Queue"
-          >
-            <CheckSquare className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Follow-up</span>
-            {openFollowupCount > 0 && (
-              <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 font-bold">
-                {openFollowupCount}
-              </span>
-            )}
-          </button>
-
-          {/* 6. Broadcast Comms */}
-          <button
-            onClick={() => {
-              setActiveModule('messages');
-              setIsMessageModalOpen(true);
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeModule === 'messages'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Send SMS, Push, or Email Broadcast"
-          >
-            <Mail className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Broadcast</span>
-          </button>
-
-          {/* 7. Proximity Radar Diagnostic Lab */}
-          <button
-            onClick={() => {
-              setActiveTab('proximity');
-              showToast('Proximity Geofence & BLE Radar Diagnostic Lab active');
-            }}
-            className={`flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-              activeTab === 'proximity'
-                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-indigo-950/80 dark:text-[#8C7DFF] shadow-sm font-bold'
-                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
-            }`}
-            title="Proximity & Geofencing Radar Diagnostic Suite"
-          >
-            <Radio className="w-4 h-4 shrink-0 text-[#6D5CF2]" />
-            <span>Radar Lab</span>
-          </button>
-        </div>
-      </nav>
+      </div>
 
       {/* MODAL 1: Add New Service */}
       {isAddServiceOpen && (
@@ -1774,6 +1495,6 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 };

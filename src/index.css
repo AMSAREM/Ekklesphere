@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
     --page: #E6E7F0;
@@ -42,9 +44,6 @@
 
 /* Custom curved tabs on the side nav (desktop only) */
 @media (min-width: 1024px) {
-  .side-curved-tab {
-    position: relative;
-  }
   .side-curved-tab::before {
     content: "";
     position: absolute;
@@ -52,7 +51,7 @@
     top: -26px;
     width: 26px;
     height: 26px;
-    background: radial-gradient(circle at 100% 0, transparent 26px, #6D5CF2 26.5px);
+    background: radial-gradient(circle at 100% 0, transparent 26px, var(--brand, #6D5CF2) 26.5px);
     pointer-events: none;
   }
   .side-curved-tab::after {
@@ -62,7 +61,7 @@
     bottom: -26px;
     width: 26px;
     height: 26px;
-    background: radial-gradient(circle at 100% 100%, transparent 26px, #6D5CF2 26.5px);
+    background: radial-gradient(circle at 100% 100%, transparent 26px, var(--brand, #6D5CF2) 26.5px);
     pointer-events: none;
   }
 }

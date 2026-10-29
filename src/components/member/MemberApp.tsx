@@ -68,7 +68,7 @@ export const MemberApp: React.FC = () => {
   };
 
   return (
-    <div className="flex justify-center items-center py-6 px-4">
+    <main className="w-full flex justify-center items-center py-3 sm:py-6 px-2 sm:px-4">
       {/* Smartphone Outer Shell */}
       <div className="w-full max-w-[420px] bg-[#EEF0F8] dark:bg-[#12122B] rounded-[44px] shadow-[0_20px_60px_rgba(40,40,90,0.18)] border-4 border-[#1D1B3A] dark:border-[#2D2D55] overflow-hidden flex flex-col h-[780px] relative text-[#1D1B3A] dark:text-[#F2F2FA]">
         {/* Dynamic Island / Notch */}
@@ -696,6 +696,6 @@ export const MemberApp: React.FC = () => {
           </div>
         )}
       </div>
-    </div>
+    </main>
   );
 };

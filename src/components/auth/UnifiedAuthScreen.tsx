@@ -68,7 +68,7 @@ export const UnifiedAuthScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center py-6 px-3 sm:px-4">
+    <main className="w-full min-h-[calc(100vh-5rem)] flex items-center justify-center py-4 sm:py-6 px-3 sm:px-4">
       <div className="w-full max-w-4xl bg-white dark:bg-[#14142E] rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-2xl overflow-hidden transition-all duration-300">
         {/* Header Hero Banner */}
         <div className="bg-gradient-to-r from-[#1D1B3A] via-[#2A2356] to-[#6D5CF2] text-white p-6 sm:p-8 relative overflow-hidden">
@@ -647,6 +647,6 @@ export const UnifiedAuthScreen: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 };

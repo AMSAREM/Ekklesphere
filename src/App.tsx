@@ -6,6 +6,8 @@ import { MemberApp } from './components/member/MemberApp';
 import { UsherTool } from './components/usher/UsherTool';
 import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
+import { AppHeader } from './components/navigation/AppHeader';
+
 const EkklesphereMain: React.FC = () => {
   const { currentUser, toastMessage } = useEkklesphere();
 
@@ -14,8 +16,11 @@ const EkklesphereMain: React.FC = () => {
       {/* Help Modal */}
       {currentUser && <HelpDocsModal />}
 
-      {/* Main Content Canvas with single unified header inside the active role view */}
-      <main className="flex-1 px-3 sm:px-6 py-2 sm:py-4 w-full max-w-[1440px] mx-auto">
+      {/* Optimized Unified App Header */}
+      {currentUser && <AppHeader />}
+
+      {/* Main role view */}
+      <div className="flex-1 w-full">
         {!currentUser ? (
           <UnifiedAuthScreen />
         ) : (
@@ -25,7 +30,7 @@ const EkklesphereMain: React.FC = () => {
             {currentUser.role === 'member' && <MemberApp />}
           </>
         )}
-      </main>
+      </div>
 
       {/* Global Toast Notification */}
       {toastMessage && (
