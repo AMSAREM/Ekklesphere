@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "Ekklesphere",
+    "slug": "ekklesphere",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1D1B3A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.ekklesphere.member",
+      "infoPlist": {
+        "UIBackgroundModes": ["location"],
+        "NSLocationWhenInUseUsageDescription": "Ekklesphere uses your location only to notice when you arrive at church for Sunday services so you can skip the sign-in sheet.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Ekklesphere monitors the church campus boundary in the background to automatically check you in on arrival. We never track where else you go.",
+        "NSLocationAlwaysUsageDescription": "Ekklesphere requires background location to detect your arrival at church premises without battery-draining continuous tracking."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1D1B3A"
+      },
+      "package": "org.ekklesphere.member",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Ekklesphere uses your location only to notice when you arrive at church for services, so you do not have to sign in by hand. We never track where else you go.",
+          "locationAlwaysPermission": "Ekklesphere monitors the church campus perimeter so the operating system wakes your app on arrival.",
+          "locationWhenInUsePermission": "Ekklesphere detects when you arrive on church premises.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ]
+    ]
+  }
+}

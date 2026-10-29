@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
 @layer base {
   :root {
     --page: #E6E7F0;
@@ -20,9 +22,10 @@
     --red: #EF5A6F;
     --sh: 0 10px 30px rgba(60, 50, 140, 0.09);
     --sh2: 0 12px 32px rgba(60, 50, 140, 0.18);
+    color-scheme: light;
   }
 
-  .dark {
+  .dark, [data-theme="dark"] {
     --page: #0D0D22;
     --panel: #14142E;
     --card: #1D1D3D;
@@ -37,32 +40,41 @@
     --pinkink: #FF9AAA;
     --sh: 0 10px 30px rgba(0, 0, 0, 0.35);
     --sh2: 0 12px 32px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--page);
+    color: var(--ink);
+    transition: background-color 0.25s ease, color 0.25s ease;
   }
 }
 
 /* Custom curved tabs on the side nav */
-.side-curved-tab {
-  position: relative;
-}
-.side-curved-tab::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: -26px;
-  width: 26px;
-  height: 26px;
-  background: radial-gradient(circle at 100% 0, transparent 26px, #6D5CF2 26.5px);
-  pointer-events: none;
-}
-.side-curved-tab::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: -26px;
-  width: 26px;
-  height: 26px;
-  background: radial-gradient(circle at 100% 100%, transparent 26px, #6D5CF2 26.5px);
-  pointer-events: none;
+@media (min-width: 1024px) {
+  .side-curved-tab {
+    position: relative;
+  }
+  .side-curved-tab::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: -26px;
+    width: 26px;
+    height: 26px;
+    background: radial-gradient(circle at 100% 0, transparent 26px, #6D5CF2 26.5px);
+    pointer-events: none;
+  }
+  .side-curved-tab::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -26px;
+    width: 26px;
+    height: 26px;
+    background: radial-gradient(circle at 100% 100%, transparent 26px, #6D5CF2 26.5px);
+    pointer-events: none;
+  }
 }
 
 /* Custom scrollbar */

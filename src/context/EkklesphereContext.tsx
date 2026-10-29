@@ -7,6 +7,8 @@ import {
   Donation,
   AuditLogItem,
   CheckinMethod,
+  ServerDwellJob,
+  GeofenceSignalKind,
 } from '../types/ekklesphere';
 
 interface EkklesphereContextType {
@@ -48,7 +50,7 @@ interface EkklesphereContextType {
   pendingSyncCount: number;
   syncUsherCheckins: () => number;
 
-  // Proximity Simulator
+  // Proximity Simulator & Server BullMQ Dwell Job
   proximityStage: 0 | 1 | 2 | 3; // 0=Outside, 1=300m Outer, 2=100m Inner/Dwell, 3=Checked In
   dwellTimerSeconds: number;
   isBeaconDetected: boolean;
@@ -57,6 +59,10 @@ interface EkklesphereContextType {
   resetProximity: () => void;
   triggerBeaconScan: () => void;
   triggerDwellComplete: () => void;
+  serverDwellJob: ServerDwellJob;
+  sendSimulatedSignal: (kind: GeofenceSignalKind) => void;
+  fastForwardServerDwellJob: () => void;
+  simulateDrivePast: () => void;
 
   // Follow-up & Pastoral Care
   followupTasks: FollowupTask[];
@@ -291,10 +297,22 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
-  // Proximity simulator states
+  // Proximity simulator states & Server BullMQ Dwell Job
   const [proximityStage, setProximityStage] = useState<0 | 1 | 2 | 3>(0);
   const [dwellTimerSeconds, setDwellTimerSeconds] = useState<number>(300); // 5 min
   const [isBeaconDetected, setIsBeaconDetected] = useState<boolean>(false);
+  const [serverDwellJob, setServerDwellJob] = useState<ServerDwellJob>({
+    jobId: 'job-dwell-m1-idle',
+    queue: 'attendance:dwell-check',
+    personId: 'm1',
+    personName: 'Ama Owusu',
+    campusId: 'campus-accra-central',
+    serviceInstanceId: 'svc-sun-1',
+    status: 'idle',
+    startedAt: '--:--',
+    delayMs: 300000,
+    remainingSeconds: 300,
+  });
 
   // Member App states
   const [memberConsents, setMemberConsents] = useState({
@@ -393,14 +411,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, 2800);
   };
 
-  const setTheme = (t: 'light' | 'dark') => {
+  const setTheme = (t: 'light' | 'dark', notify: boolean = true) => {
     setThemeState(t);
+    try {
+      localStorage.setItem('ekklesphere_theme', t);
+    } catch {
+      // Ignore in private storage sandbox
+    }
     if (t === 'dark') {
       document.documentElement.classList.add('dark');
       document.documentElement.setAttribute('data-theme', 'dark');
+      document.documentElement.style.colorScheme = 'dark';
     } else {
       document.documentElement.classList.remove('dark');
       document.documentElement.setAttribute('data-theme', 'light');
+      document.documentElement.style.colorScheme = 'light';
+    }
+    if (notify) {
+      showToast(`Switched to ${t === 'dark' ? 'Dark' : 'Light'} Mode`);
     }
   };
 
@@ -409,12 +437,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   useEffect(() => {
-    // Initial theme detection
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setTheme('dark');
-    } else {
-      setTheme('light');
+    let initialTheme: 'light' | 'dark' = 'light';
+    try {
+      const saved = localStorage.getItem('ekklesphere_theme') as 'light' | 'dark' | null;
+      if (saved === 'dark' || saved === 'light') {
+        initialTheme = saved;
+      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        initialTheme = 'dark';
+      }
+    } catch {
+      // Fallback to light
     }
+    setTheme(initialTheme, false);
   }, []);
 
   const currentService = services.find((s) => s.id === activeServiceId) || services[0];
@@ -624,38 +658,215 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`Follow-up assignment created for ${newTask.personName}`);
   };
 
-  // Proximity simulator engine
-  const advanceProximityStage = () => {
-    if (proximityStage === 0) {
+  // Server BullMQ Delayed Dwell Job Countdown Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+
+    if (serverDwellJob.status === 'waiting') {
+      interval = setInterval(() => {
+        setServerDwellJob((prev) => {
+          if (prev.status !== 'waiting') return prev;
+          if (prev.remainingSeconds <= 1) {
+            // Dwell timer elapsed on server!
+            // Execute automatic attendance resolution:
+            setTimeout(() => {
+              setProximityStage(3);
+              checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus (BullMQ delayed job)');
+              showToast('Server Dwell Job resolved: Ama Owusu auto checked in (85% confidence).');
+            }, 0);
+
+            return {
+              ...prev,
+              status: 'completed_resolved',
+              remainingSeconds: 0,
+              resolvedRecordId: 'rec-m1-geofence',
+            };
+          }
+
+          setDwellTimerSeconds(prev.remainingSeconds - 1);
+          return {
+            ...prev,
+            remainingSeconds: prev.remainingSeconds - 1,
+          };
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [serverDwellJob.status]);
+
+  // Server-side Geofence Signal Processor
+  const sendSimulatedSignal = (kind: GeofenceSignalKind) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (kind === 'enter_outer') {
       setProximityStage(1);
-      showToast('Woke app on outer geofence (300m). Approach signal sent.');
-    } else if (proximityStage === 1) {
+      setAuditLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          actor: 'Ama Owusu (Device Android)',
+          action: 'SIGNAL: enter_outer (300m)',
+          entityType: 'AttendanceSignal',
+          timestamp,
+          details: 'Outer boundary crossed. OS woke app; approach signal recorded without GPS poll.',
+        },
+        ...prev,
+      ]);
+      showToast('enter_outer: Device entered 300m perimeter. Approach signal recorded.');
+    } else if (kind === 'enter_inner') {
       setProximityStage(2);
       setDwellTimerSeconds(300);
-      showToast('Entered inner ring (100m). Dwell timer started (5:00).');
-    } else if (proximityStage === 2) {
-      triggerDwellComplete();
+      const newJobId = `job-dwell-${Date.now().toString().slice(-6)}`;
+
+      setServerDwellJob({
+        jobId: newJobId,
+        queue: 'attendance:dwell-check',
+        personId: 'm1',
+        personName: 'Ama Owusu',
+        campusId: 'campus-accra-central',
+        serviceInstanceId: activeServiceId,
+        status: 'waiting',
+        startedAt: timestamp,
+        delayMs: 300000,
+        remainingSeconds: 300,
+      });
+
+      setAuditLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          actor: 'Server BullMQ Engine',
+          action: 'JOB: Dwell Delayed Task Queued',
+          entityType: 'DelayedJob',
+          timestamp,
+          details: `Enqueued 5-min delayed job ${newJobId}. Waiting for dwell threshold before check-in.`,
+        },
+        ...prev,
+      ]);
+      showToast('enter_inner: Server enqueued 5-min delayed dwell job. Timer started.');
+    } else if (kind === 'exit_inner') {
+      setProximityStage(1);
+
+      setServerDwellJob((prev) => {
+        if (prev.status === 'waiting') {
+          setAuditLogs((logs) => [
+            {
+              id: `log-${Date.now()}`,
+              actor: 'Server BullMQ Engine',
+              action: 'JOB CANCELLED: Exit before dwell',
+              entityType: 'DelayedJob',
+              timestamp,
+              details: `Delayed job ${prev.jobId} cancelled. exit_inner received before 5m threshold (drove past).`,
+            },
+            ...logs,
+          ]);
+
+          return {
+            ...prev,
+            status: 'cancelled_exit',
+            cancellationReason: 'Device left inner 100m ring before 5m dwell elapsed (anti-drive-past protection).',
+          };
+        }
+        return prev;
+      });
+
+      showToast('exit_inner: Device departed inner ring. Server cancelled pending dwell job.');
+    } else if (kind === 'exit_outer') {
+      setProximityStage(0);
+      setAuditLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          actor: 'Ama Owusu (Device)',
+          action: 'SIGNAL: exit_outer (>300m)',
+          entityType: 'AttendanceSignal',
+          timestamp,
+          details: 'Device completely departed campus vicinity. No active monitoring.',
+        },
+        ...prev,
+      ]);
+      showToast('exit_outer: Device departed campus vicinity (>300m).');
+    } else if (kind === 'beacon_sighting') {
+      triggerBeaconScan();
     }
   };
 
+  // Step-by-step approach helper for simulator
+  const advanceProximityStage = () => {
+    if (proximityStage === 0) {
+      sendSimulatedSignal('enter_outer');
+    } else if (proximityStage === 1) {
+      sendSimulatedSignal('enter_inner');
+    } else if (proximityStage === 2) {
+      fastForwardServerDwellJob();
+    }
+  };
+
+  // Instant trigger for Entrance BLE Beacon
   const triggerBeaconScan = () => {
     setIsBeaconDetected(true);
     setProximityStage(3);
+    // Mark server dwell job as superseded/resolved if active
+    setServerDwellJob((prev) => ({
+      ...prev,
+      status: 'completed_resolved',
+      remainingSeconds: 0,
+      resolvedRecordId: 'rec-m1-beacon',
+    }));
     checkInPerson('m1', 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
-    showToast('Entrance BLE beacon detected! Immediate check-in confirmed.');
+    showToast('Entrance BLE beacon detected! Immediate check-in confirmed (95% confidence).');
+  };
+
+  // Fast forward the server dwell countdown
+  const fastForwardServerDwellJob = () => {
+    setProximityStage(3);
+    setDwellTimerSeconds(0);
+    setServerDwellJob((prev) => ({
+      ...prev,
+      status: 'completed_resolved',
+      remainingSeconds: 0,
+      resolvedRecordId: 'rec-m1-geofence',
+    }));
+    checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus (BullMQ delayed job)');
+    showToast('Fast-forward: 5-minute dwell verified on server. Auto check-in completed.');
   };
 
   const triggerDwellComplete = () => {
-    setProximityStage(3);
-    setDwellTimerSeconds(0);
-    checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus');
-    showToast('Dwell verified (5 mins). Auto check-in completed for Ama Owusu.');
+    fastForwardServerDwellJob();
+  };
+
+  // Anti-drive-past simulation demonstration: enters inner ring, then exits within 2.5 seconds
+  const simulateDrivePast = () => {
+    showToast('Simulating member driving past campus at 40 km/h...');
+    sendSimulatedSignal('enter_outer');
+
+    setTimeout(() => {
+      sendSimulatedSignal('enter_inner');
+      showToast('Entered 100m ring. Server 5-min delayed job enqueued...');
+
+      setTimeout(() => {
+        sendSimulatedSignal('exit_inner');
+        showToast('Member drove past! exit_inner signal sent. Server cancelled the job.');
+      }, 2500);
+    }, 1000);
   };
 
   const resetProximity = () => {
     setProximityStage(0);
     setDwellTimerSeconds(300);
     setIsBeaconDetected(false);
+    setServerDwellJob({
+      jobId: 'job-dwell-m1-idle',
+      queue: 'attendance:dwell-check',
+      personId: 'm1',
+      personName: 'Ama Owusu',
+      campusId: 'campus-accra-central',
+      serviceInstanceId: activeServiceId,
+      status: 'idle',
+      startedAt: '--:--',
+      delayMs: 300000,
+      remainingSeconds: 300,
+    });
     removeCheckIn('m1');
     showToast('Proximity simulation reset. Person is outside campus (>300m).');
   };
@@ -697,6 +908,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         resetProximity,
         triggerBeaconScan,
         triggerDwellComplete,
+        serverDwellJob,
+        sendSimulatedSignal,
+        fastForwardServerDwellJob,
+        simulateDrivePast,
         followupTasks,
         resolveFollowupTask,
         addFollowupTask,
