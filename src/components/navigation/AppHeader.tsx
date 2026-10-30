@@ -85,29 +85,6 @@ export const AppHeader: React.FC = () => {
           </div>
         </div>
 
-        {/* Center: Quick Portal Switcher Pills */}
-        {currentUser && (
-          <nav aria-label="Portal Navigation" className="hidden md:flex items-center gap-1 bg-slate-200/50 dark:bg-white/5 p-1 rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55]">
-            {roles.map((item) => (
-              <button
-                key={item.role}
-                onClick={() => {
-                  switchUserRole(item.role);
-                  showToast(`Switched to ${item.label} portal`);
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  currentUser.role === item.role
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
-                }`}
-              >
-                {item.icon}
-                <span>{item.label} Portal</span>
-              </button>
-            ))}
-          </nav>
-        )}
-
         {/* Right: Uncluttered Utility Controls */}
         <div className="flex items-center gap-1 sm:gap-2">
           {/* Subtle Live Attendance Tally (Large screens) */}

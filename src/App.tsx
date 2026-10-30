@@ -6,7 +6,6 @@ import { MemberApp } from './components/member/MemberApp';
 import { UsherTool } from './components/usher/UsherTool';
 import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
-import { AppHeader } from './components/navigation/AppHeader';
 import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
 
 const EkklesphereMain: React.FC = () => {
@@ -20,10 +19,7 @@ const EkklesphereMain: React.FC = () => {
       {/* Global System Settings Modal across all portals */}
       {currentUser && <SystemSettingsModal />}
 
-      {/* Top Application Portal Header */}
-      {currentUser && <AppHeader />}
-
-      {/* Role view */}
+      {/* Role view: When admin is active, the unified proper header is inside AdminDashboard */}
       {!currentUser ? (
         <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8">
           <UnifiedAuthScreen />

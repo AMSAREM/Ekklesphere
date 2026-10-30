@@ -11,12 +11,12 @@ export { validateOrganizationId, expressOrganizationMiddleware, type Organizatio
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.SUPABASE_URL ||
-  "https://sdijgiznzxvlklorvcvi.supabase.co";
+  "https://your-project.supabase.co";
 
 const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
-  "sb_publishable_IOTky2JHZSEzrvWHrOP5mw_ZD2nMpfC";
+  "your-anon-key";
 
 /**
  * Polyfilled NextResponse implementation matching Next.js specifications.
