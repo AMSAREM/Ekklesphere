@@ -134,6 +134,7 @@ export const AdminDashboard: React.FC = () => {
   // Schedule new service form state
   const [newServiceName, setNewServiceName] = useState('Sunday Main Service');
   const [newServiceTime, setNewServiceTime] = useState('08:00');
+  const [newServiceEndTime, setNewServiceEndTime] = useState('10:30');
   const [newServiceExpected, setNewServiceExpected] = useState('');
   const [newServiceDwell, setNewServiceDwell] = useState(String(systemSettings.dwellTimeMinutes || 5));
   const [isCreatingService, setIsCreatingService] = useState(false);
@@ -211,6 +212,7 @@ export const AdminDashboard: React.FC = () => {
       await addService({
         name: newServiceName.trim(),
         startsAt: newServiceTime || '08:00',
+        endsAt: newServiceEndTime || '10:30',
         expectedAttendance: Number(newServiceExpected) || 0,
         dwellMinutes: Number(newServiceDwell) || systemSettings.dwellTimeMinutes || 5,
       });
@@ -856,7 +858,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="min-w-0">
                   <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live Service Check-ins</b>
                   <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
-                    {currentService.name} ({currentService.startsAt})
+                    {currentService.name} ({currentService.startsAt}{currentService.endsAt ? ` – ${currentService.endsAt}` : ''})
                   </em>
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
@@ -1167,6 +1169,17 @@ export const AdminDashboard: React.FC = () => {
                   />
                 </div>
                 <div>
+                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">End Time</label>
+                  <input
+                    type="time"
+                    value={newServiceEndTime}
+                    onChange={(e) => setNewServiceEndTime(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
                   <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Expected Attendance</label>
                   <input
                     type="number"
@@ -1177,18 +1190,20 @@ export const AdminDashboard: React.FC = () => {
                     className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                   />
                 </div>
+                <div>
+                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Dwell Rule (Minutes)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newServiceDwell}
+                    onChange={(e) => setNewServiceDwell(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                  />
+                </div>
               </div>
               <div>
-                <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Dwell Rule (Minutes)</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={newServiceDwell}
-                  onChange={(e) => setNewServiceDwell(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
-                />
-                <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                  Geofence auto check-in requires {newServiceDwell || systemSettings.dwellTimeMinutes} min presence inside {systemSettings.innerGeofenceMeters} m ring.
+                <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
+                  Geofence auto check-in operates from {newServiceTime || '08:00'} to {newServiceEndTime || '10:30'} ({newServiceDwell || systemSettings.dwellTimeMinutes} min dwell inside {systemSettings.innerGeofenceMeters}m perimeter).
                 </span>
               </div>
             </div>

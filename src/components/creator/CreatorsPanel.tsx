@@ -540,7 +540,7 @@ export const CreatorsPanel: React.FC = () => {
                     {/* Bottom Actions */}
                     <div className="mt-5 pt-3 border-t border-[#E3E5EE] dark:border-[#222245] flex items-center justify-between gap-2">
                       <button
-                        onClick={() => impersonateTenant(tenant.id)}
+                        onClick={() => impersonateTenant(tenant)}
                         className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#6D5CF2] text-white hover:bg-[#5b4be0] text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
                         title="Log into church portal as Pastor Admin"
                       >

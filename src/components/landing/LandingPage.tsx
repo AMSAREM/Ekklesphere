@@ -169,7 +169,7 @@ export const LandingPage: React.FC = () => {
                 className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#6D5CF2] hover:bg-[#5C4BD9] text-white text-sm font-bold shadow-xl shadow-[#6D5CF2]/25 flex items-center justify-center gap-2 transition-all cursor-pointer transform hover:-translate-y-0.5 active:scale-95"
               >
                 <Play className="w-4 h-4 fill-current" />
-                <span>Launch Interactive Demo</span>
+                <span>Launch Live System</span>
               </button>
 
               <button
@@ -380,7 +380,7 @@ export const LandingPage: React.FC = () => {
               Experience Every Portal in 1 Click
             </h2>
             <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#8D92B5]">
-              Switch roles immediately with fully pre-populated demo data and simulated hardware signals.
+              Switch roles seamlessly to verify live sanctuary operations, automated geofence radar, and member mobile passes.
             </p>
           </div>
 

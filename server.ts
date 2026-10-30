@@ -1623,12 +1623,35 @@ app.post(['/api/v1/members/import', '/api/members/import'], async (req: Request,
 app.get(['/api/v1/events', '/api/events'], async (req: Request, res: Response) => {
   const orgId = (req as any).organizationId || PRIMARY_ORGANIZATION_ID;
   if (supabase) {
-    const { data, error } = await supabase
+    // Resilient query: try start_time first, fallback to un-ordered or starts_at
+    let { data, error } = await supabase
       .from('events')
       .select('*')
       .eq('organization_id', orgId)
-      .order('starts_at', { ascending: true });
-    if (!error && data) return res.json(data);
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      const fallbackResult = await supabase
+        .from('events')
+        .select('*')
+        .eq('organization_id', orgId);
+      if (!fallbackResult.error && fallbackResult.data) {
+        data = fallbackResult.data;
+        error = null;
+      }
+    }
+
+    if (!error && Array.isArray(data)) {
+      const mapped = data.map((ev: any) => ({
+        ...ev,
+        starts_at: ev.starts_at || ev.start_time,
+        ends_at: ev.ends_at || ev.end_time,
+        start_time: ev.start_time || ev.starts_at,
+        end_time: ev.end_time || ev.ends_at,
+        status: ev.status === 'active' || ev.status === 'open' ? 'open' : ev.status,
+      }));
+      return res.json(mapped);
+    }
   }
   res.json([]);
 });
@@ -1637,6 +1660,7 @@ app.post(['/api/v1/events', '/api/events'], async (req: Request, res: Response) 
   const orgId = (req as any).organizationId || PRIMARY_ORGANIZATION_ID;
   const name = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : 'Worship Service';
   const rawStartsAt = typeof req.body?.startsAt === 'string' ? req.body.startsAt.trim() : '';
+  const rawEndsAt = typeof req.body?.endsAt === 'string' ? req.body.endsAt.trim() : '';
   const dwellMin = Number.isFinite(Number(req.body?.dwellMinutes)) ? Math.max(1, Number(req.body.dwellMinutes)) : (premiseSettings?.dwellTimeMinutes || 5);
 
   let startsDate = new Date();
@@ -1649,27 +1673,74 @@ app.post(['/api/v1/events', '/api/events'], async (req: Request, res: Response) 
       startsDate = parsed;
     }
   }
-  const endsDate = new Date(startsDate.getTime() + 90 * 60 * 1000);
+
+  let endsDate = new Date(startsDate.getTime() + 90 * 60 * 1000);
+  if (/^\d{2}:\d{2}$/.test(rawEndsAt)) {
+    const [hh, mm] = rawEndsAt.split(':').map(Number);
+    endsDate = new Date(startsDate);
+    endsDate.setHours(hh, mm, 0, 0);
+    if (endsDate.getTime() <= startsDate.getTime()) {
+      endsDate = new Date(startsDate.getTime() + 90 * 60 * 1000);
+    }
+  } else if (rawEndsAt) {
+    const parsedEnd = new Date(rawEndsAt);
+    if (!Number.isNaN(parsedEnd.getTime())) {
+      endsDate = parsedEnd;
+    }
+  }
 
   if (supabase) {
-    const { data, error } = await supabase
+    // Attempt 1: Standard public.events schema with start_time & end_time (status 'active' or 'scheduled')
+    const primaryPayload: Record<string, any> = {
+      organization_id: orgId,
+      name,
+      start_time: startsDate.toISOString(),
+      end_time: endsDate.toISOString(),
+      dwell_min: dwellMin,
+      status: 'active',
+    };
+
+    let { data, error } = await supabase
       .from('events')
-      .insert({
+      .insert(primaryPayload)
+      .select('*')
+      .single();
+
+    // Attempt 2: If schema cache or database table expects starts_at/ends_at
+    if (error && (error.message?.includes('start_time') || error.message?.includes('schema cache'))) {
+      const altPayload: Record<string, any> = {
         organization_id: orgId,
-        site_id: PRIMARY_CAMPUS_SITE_ID,
         name,
         starts_at: startsDate.toISOString(),
         ends_at: endsDate.toISOString(),
         dwell_min: dwellMin,
         status: 'open',
-      })
-      .select('*')
-      .single();
+      };
+      const altResult = await supabase
+        .from('events')
+        .insert(altPayload)
+        .select('*')
+        .single();
+      if (!altResult.error) {
+        data = altResult.data;
+        error = null;
+      }
+    }
 
     if (error) {
+      console.error('[Ekklesphere] Event insert failed in Supabase:', error);
       return res.status(500).json({ error: error.message });
     }
-    return res.status(201).json(data);
+
+    const normalized = {
+      ...data,
+      starts_at: data.starts_at || data.start_time,
+      ends_at: data.ends_at || data.end_time,
+      start_time: data.start_time || data.starts_at,
+      end_time: data.end_time || data.ends_at,
+      status: data.status === 'active' || data.status === 'open' ? 'open' : data.status,
+    };
+    return res.status(201).json(normalized);
   }
 
   return res.status(201).json({
@@ -1679,6 +1750,8 @@ app.post(['/api/v1/events', '/api/events'], async (req: Request, res: Response) 
     name,
     starts_at: startsDate.toISOString(),
     ends_at: endsDate.toISOString(),
+    start_time: startsDate.toISOString(),
+    end_time: endsDate.toISOString(),
     dwell_min: dwellMin,
     status: 'open',
   });

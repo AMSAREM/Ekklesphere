@@ -19,6 +19,13 @@ import {
   SystemSettings,
   ChurchGroup,
   ChurchGroupCategory,
+  AppViewMode,
+  TenantChurch,
+  SystemLicense,
+  LicenseTier,
+  TenantStatus,
+  BillingCycle,
+  LandingPageConfig,
 } from '../types/ekklesphere';
 
 
@@ -99,6 +106,7 @@ interface EkklesphereContextType {
   addService: (params: {
     name: string;
     startsAt: string;
+    endsAt?: string;
     expectedAttendance?: number;
     dwellMinutes?: number;
   }) => Promise<void>;
@@ -192,7 +200,100 @@ interface EkklesphereContextType {
   auditLogs: AuditLogItem[];
   toastMessage: string | null;
   showToast: (msg: string) => void;
+
+  // Platform View Navigation
+  viewMode: AppViewMode;
+  setViewMode: (mode: AppViewMode) => void;
+
+  // Multi-Tenant Platform Management
+  tenants: TenantChurch[];
+  addTenant: (data: Omit<TenantChurch, 'id' | 'createdAt'>) => void;
+  updateTenant: (id: string, updates: Partial<TenantChurch>) => void;
+  toggleTenantStatus: (id: string) => void;
+  deleteTenant: (id: string) => void;
+  impersonateTenant: (target: TenantChurch | string) => void;
+
+  // License Orchestration
+  licenses: SystemLicense[];
+  renewLicense: (licenseId: string, durationMonths: number) => void;
+  updateLicense: (id: string, updates: Partial<SystemLicense>) => void;
+  issueLicense: (tenantId: string, tier: LicenseTier, billingCycle: BillingCycle) => SystemLicense;
+
+  // Landing Page CMS Config
+  landingConfig: LandingPageConfig;
+  updateLandingConfig: (updates: Partial<LandingPageConfig>) => void;
+  resetLandingConfig: () => void;
 }
+
+export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
+  heroTitle: 'Next-Gen Presence Radar & Sovereign Church Management',
+  heroSubtitle:
+    'Real-time automated geofence attendance, multi-role pastoral dashboards, usher door check-in station, and personal congregation mobile passes.',
+  announcementBadge: 'PIWC KWADASO Live System Deployed & Geofence Active',
+  isAnnouncementActive: true,
+  contactSalesEmail: 'admin@piwckwadaso.org',
+  demoEnabled: false,
+  showcaseHeadline: 'Transforming Sanctuary Operations with Sovereign Geofence Radar',
+  featuredStats: {
+    congregationsServed: 'Live',
+    checkinsRecorded: 'Real-Time',
+    proximityAccuracy: '100m Dwell',
+    networkUptime: '99.98%',
+  },
+};
+
+const DEFAULT_PRIMARY_TENANT: TenantChurch = {
+  id: 'e0000000-0000-0000-0000-000000000001',
+  name: 'PIWC KWADASO',
+  slug: 'piwc-kwadaso',
+  campusCode: 'PIWC-01',
+  city: 'Kumasi',
+  country: 'Ghana',
+  seniorPastor: 'Pastor in Charge',
+  contactEmail: 'admin@piwckwadaso.org',
+  contactPhone: '+233 24 000 0000',
+  status: 'active',
+  memberCount: 0,
+  maxCapacity: 1500,
+  licenseKey: 'EKKLE-PIWC-KWADASO-PRO-2026',
+  licenseTier: 'cathedral_enterprise',
+  renewalDate: '2027-12-31',
+  billingCycle: 'annual',
+  geofenceRadiusMeters: 300,
+  features: {
+    bleRadar: true,
+    smsGateway: true,
+    biometrics: true,
+    gdprPrivacyVault: true,
+    multiCampus: true,
+    mobileGivingMoMo: true,
+    customDomain: true,
+    exportAuditLogs: true,
+  },
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+
+const DEFAULT_PRIMARY_LICENSE: SystemLicense = {
+  id: 'lic-live-01',
+  key: 'EKKLE-PIWC-KWADASO-PRO-2026',
+  tier: 'cathedral_enterprise',
+  tenantId: 'e0000000-0000-0000-0000-000000000001',
+  tenantName: 'PIWC KWADASO',
+  seatsLimit: 1500,
+  status: 'active',
+  issuedDate: '2026-01-01',
+  expiresDate: '2027-12-31',
+  billingCycle: 'annual',
+  annualCostUSD: 1200,
+  enabledFeatures: [
+    'Geofence Radar v2',
+    'Door Usher Headcount',
+    'GhanaPost GPS & 28-Field Registry',
+    'Mobile Giving MoMo',
+    'Custom Domain & Multi-Campus',
+    'Audit Trail & Consent Vault',
+  ],
+};
 
 const LIVE_DEFAULT_SERVICE: ServiceInstance = {
   id: 'svc-live-main',
@@ -280,6 +381,254 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+
+  // Platform view navigation (live test default: app)
+  const [viewMode, setViewModeState] = useState<AppViewMode>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_view_mode');
+      if (saved === 'app' || saved === 'landing' || saved === 'creator') {
+        return saved as AppViewMode;
+      }
+    } catch {
+      // fallback
+    }
+    return 'app';
+  });
+
+  const setViewMode = (mode: AppViewMode) => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem('ekklesphere_view_mode', mode);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Multi-Tenant Platform Management (clean live test defaults)
+  const [tenants, setTenants] = useState<TenantChurch[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_tenants');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const clean = parsed.filter(
+            (t: TenantChurch) =>
+              t &&
+              !t.id.includes('demo') &&
+              !t.slug.includes('demo') &&
+              !t.name.toLowerCase().includes('demo')
+          );
+          if (clean.length > 0) return clean;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return [DEFAULT_PRIMARY_TENANT];
+  });
+
+  const [licenses, setLicenses] = useState<SystemLicense[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_licenses');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const clean = parsed.filter(
+            (l: SystemLicense) =>
+              l &&
+              !l.id.includes('demo') &&
+              !l.key.includes('DEMO') &&
+              !l.tenantName.toLowerCase().includes('demo')
+          );
+          if (clean.length > 0) return clean;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return [DEFAULT_PRIMARY_LICENSE];
+  });
+
+  const [landingConfig, setLandingConfig] = useState<LandingPageConfig>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_landing_config');
+      if (saved) {
+        return { ...DEFAULT_LANDING_CONFIG, ...JSON.parse(saved) };
+      }
+    } catch {
+      // fallback
+    }
+    return DEFAULT_LANDING_CONFIG;
+  });
+
+  const addTenant = (data: Omit<TenantChurch, 'id' | 'createdAt'>) => {
+    const newId = `t-${Date.now()}`;
+    const newTenant: TenantChurch = {
+      ...data,
+      id: newId,
+      createdAt: new Date().toISOString(),
+    };
+    setTenants((prev) => {
+      const updated = [newTenant, ...prev];
+      try {
+        localStorage.setItem('ekklesphere_tenants', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    issueLicense(newId, data.licenseTier, data.billingCycle);
+    showToast(`Tenant "${data.name}" provisioned successfully`);
+  };
+
+  const updateTenant = (id: string, updates: Partial<TenantChurch>) => {
+    setTenants((prev) => {
+      const updated = prev.map((t) => (t.id === id ? { ...t, ...updates } : t));
+      try {
+        localStorage.setItem('ekklesphere_tenants', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast('Tenant configuration saved');
+  };
+
+  const toggleTenantStatus = (id: string) => {
+    setTenants((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id !== id) return t;
+        const nextStatus: TenantStatus = t.status === 'active' ? 'suspended' : 'active';
+        return { ...t, status: nextStatus };
+      });
+      try {
+        localStorage.setItem('ekklesphere_tenants', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const deleteTenant = (id: string) => {
+    setTenants((prev) => {
+      const updated = prev.filter((t) => t.id !== id);
+      try {
+        localStorage.setItem('ekklesphere_tenants', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    setLicenses((prev) => {
+      const updated = prev.filter((l) => l.tenantId !== id);
+      try {
+        localStorage.setItem('ekklesphere_licenses', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast('Tenant removed');
+  };
+
+  const impersonateTenant = (target: TenantChurch | string) => {
+    const tenant = typeof target === 'string' ? tenants.find((t) => t.id === target) : target;
+    if (!tenant) return;
+    updateSystemSettings({
+      churchName: tenant.name,
+      campusName: `${tenant.name} (${tenant.campusCode})`,
+      seniorPastor: tenant.seniorPastor,
+      contactEmail: tenant.contactEmail,
+      contactPhone: tenant.contactPhone,
+      outerGeofenceMeters: tenant.geofenceRadiusMeters,
+    });
+    setViewMode('app');
+    showToast(`Switched workspace to ${tenant.name}`);
+  };
+
+  const issueLicense = (tenantId: string, tier: LicenseTier, billingCycle: BillingCycle): SystemLicense => {
+    const matchedTenant = tenants.find((t) => t.id === tenantId);
+    const tenantName = matchedTenant ? matchedTenant.name : 'Sanctuary Tenant';
+    const prefix = tenantName.replace(/[^A-Za-z0-9]/g, '').substring(0, 6).toUpperCase() || 'EKKLE';
+    const key = `LIC-${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date();
+    const expires = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+
+    const newLicense: SystemLicense = {
+      id: `lic-${Date.now()}`,
+      key,
+      tier,
+      tenantId,
+      tenantName,
+      seatsLimit: tier === 'cathedral_enterprise' ? 2000 : tier === 'ministry_pro' ? 800 : 250,
+      status: 'active',
+      issuedDate: now.toISOString().split('T')[0],
+      expiresDate: expires.toISOString().split('T')[0],
+      billingCycle,
+      annualCostUSD: tier === 'cathedral_enterprise' ? 1200 : tier === 'ministry_pro' ? 480 : 180,
+      enabledFeatures: [
+        'Geofence Radar v2',
+        'Door Usher Headcount',
+        'GhanaPost GPS & 28-Field Registry',
+        ...(tier !== 'grace_starter' ? ['Mobile Giving MoMo', 'SMS & Push Notifications'] : []),
+        ...(tier === 'cathedral_enterprise' ? ['Custom Domain', 'Multi-Campus Sync', 'Audit Trail'] : []),
+      ],
+    };
+
+    setLicenses((prev) => {
+      const updated = [newLicense, ...prev];
+      try {
+        localStorage.setItem('ekklesphere_licenses', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    return newLicense;
+  };
+
+  const renewLicense = (licenseId: string, durationMonths: number = 12) => {
+    setLicenses((prev) => {
+      const updated = prev.map((lic) => {
+        if (lic.id !== licenseId) return lic;
+        const currentExpiry = new Date(lic.expiresDate);
+        const newExpiry = new Date(
+          (isNaN(currentExpiry.getTime()) ? new Date() : currentExpiry).getTime() +
+            durationMonths * 30 * 24 * 60 * 60 * 1000
+        );
+        return {
+          ...lic,
+          status: 'active' as const,
+          expiresDate: newExpiry.toISOString().split('T')[0],
+        };
+      });
+      try {
+        localStorage.setItem('ekklesphere_licenses', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast('License successfully renewed');
+  };
+
+  const updateLicense = (id: string, updates: Partial<SystemLicense>) => {
+    setLicenses((prev) => {
+      const updated = prev.map((l) => (l.id === id ? { ...l, ...updates } : l));
+      try {
+        localStorage.setItem('ekklesphere_licenses', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast('License terms updated');
+  };
+
+  const updateLandingConfig = (updates: Partial<LandingPageConfig>) => {
+    setLandingConfig((prev) => {
+      const updated = { ...prev, ...updates };
+      try {
+        localStorage.setItem('ekklesphere_landing_config', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast('Landing page CMS saved');
+  };
+
+  const resetLandingConfig = () => {
+    setLandingConfig(DEFAULT_LANDING_CONFIG);
+    try {
+      localStorage.removeItem('ekklesphere_landing_config');
+    } catch {}
+    showToast('Landing page settings reset to defaults');
+  };
 
   const toggleSidebar = () => {
     setIsSidebarCollapsed((prev) => !prev);
@@ -1111,16 +1460,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const mapDbEventToService = (ev: any): ServiceInstance => {
-    const startStr = ev.starts_at
-      ? new Date(ev.starts_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    const rawStart = ev.starts_at || ev.start_time;
+    const rawEnd = ev.ends_at || ev.end_time;
+    const startStr = rawStart
+      ? new Date(rawStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       : '08:00';
-    const endStr = ev.ends_at
-      ? new Date(ev.ends_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    const endStr = rawEnd
+      ? new Date(rawEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       : '10:30';
     return {
       id: ev.id,
       serviceId: ev.id,
-      campusId: ev.site_id || '00000000-0000-0000-0000-000000000001',
+      campusId: ev.site_id || ev.campus_id || '00000000-0000-0000-0000-000000000001',
       name: ev.name || 'Worship Service',
       startsAt: startStr,
       endsAt: endStr,
@@ -1149,6 +1500,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const addService = async (params: {
     name: string;
     startsAt: string;
+    endsAt?: string;
     expectedAttendance?: number;
     dwellMinutes?: number;
   }): Promise<void> => {
@@ -1170,7 +1522,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return [...withoutPlaceholder, created];
     });
     setActiveServiceId(created.id);
-    showToast(`Scheduled "${created.name}" (${created.startsAt})`);
+    showToast(`Scheduled "${created.name}" (${created.startsAt}${created.endsAt ? ` – ${created.endsAt}` : ''})`);
   };
 
   useEffect(() => {
@@ -1700,6 +2052,21 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         auditLogs,
         toastMessage,
         showToast,
+        viewMode,
+        setViewMode,
+        tenants,
+        addTenant,
+        updateTenant,
+        toggleTenantStatus,
+        deleteTenant,
+        impersonateTenant,
+        licenses,
+        renewLicense,
+        updateLicense,
+        issueLicense,
+        landingConfig,
+        updateLandingConfig,
+        resetLandingConfig,
       }}
     >
       {children}
