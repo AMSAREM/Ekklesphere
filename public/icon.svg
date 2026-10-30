@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1D1B3A" />
+      <stop offset="50%" stop-color="#2A2356" />
+      <stop offset="100%" stop-color="#6D5CF2" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7AD3B6" />
+      <stop offset="100%" stop-color="#6D5CF2" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background with smooth rounded corners -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Geofence Radar Rings -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#7AD3B6" stroke-width="6" stroke-dasharray="12 12" opacity="0.35" />
+  <circle cx="256" cy="256" r="130" fill="none" stroke="#6D5CF2" stroke-width="8" opacity="0.45" />
+  <circle cx="256" cy="256" r="85" fill="#7AD3B6" fill-opacity="0.12" stroke="#7AD3B6" stroke-width="8" />
+
+  <!-- Church Cross & Proximity Presence Symbol -->
+  <g fill="white">
+    <!-- Vertical Cross Post -->
+    <rect x="238" y="140" width="36" height="232" rx="18" fill="white" filter="drop-shadow(0 4px 12px rgba(0,0,0,0.3))" />
+    <!-- Horizontal Cross Bar -->
+    <rect x="176" y="196" width="160" height="36" rx="18" fill="white" filter="drop-shadow(0 4px 12px rgba(0,0,0,0.3))" />
+  </g>
+
+  <!-- Pulse Center Beacon Point -->
+  <circle cx="256" cy="214" r="14" fill="#7AD3B6" />
+</svg>

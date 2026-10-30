@@ -62,6 +62,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     toggleChurchGroupStatus,
     getGroupMembers,
     members,
+    pushPermissionStatus,
+    pushSubscribersCount,
+    requestPushPermission,
+    sendTestPushNotification,
   } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways'>('general');
@@ -1793,6 +1797,67 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 <span className="text-[10px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] bg-[#6D5CF2]/10 px-2 py-0.5 rounded-full">
                   Connected
                 </span>
+              </div>
+            </div>
+
+            {/* Web Push Notification Gateway Engine (Brief Section 2.1 & 3.3) */}
+            <div className="pt-4 border-t border-[#E9EBF5] dark:border-[#2D2D55] space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                    <Bell className="w-4 h-4 text-[#6D5CF2]" />
+                    <span>Web Push & Mobile Arrival Engine (FCM / APNs)</span>
+                  </h4>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Sends high-priority time-sensitive arrival confirmations, absence alerts, and service reminders.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-[#5B5F7A] dark:text-[#A9ACC8]">
+                    {pushSubscribersCount} device{pushSubscribersCount === 1 ? '' : 's'} registered
+                  </span>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.enablePushNotifications}
+                      onChange={(e) => handleChange('enablePushNotifications', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#6D5CF2]" />
+                  </label>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="text-xs">
+                  <div className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Browser Service Worker Status
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                    Permission: <strong className="uppercase">{pushPermissionStatus}</strong> · Service Worker: <strong className="text-emerald-600 dark:text-emerald-400">/sw.js Active</strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {pushPermissionStatus !== 'granted' && (
+                    <button
+                      type="button"
+                      onClick={() => requestPushPermission()}
+                      className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>Enable on this terminal</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => sendTestPushNotification()}
+                    className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Send Broadcast Test Push</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

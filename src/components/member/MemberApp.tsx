@@ -26,6 +26,9 @@ import {
   Play,
   Square,
   Crosshair,
+  Bell,
+  Sparkles,
+  Send,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 
@@ -62,6 +65,10 @@ export const MemberApp: React.FC = () => {
     currentUser,
     logout,
     switchUserRole,
+    pushPermissionStatus,
+    isPushSubscribed,
+    requestPushPermission,
+    sendTestPushNotification,
   } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
@@ -609,6 +616,63 @@ export const MemberApp: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Web Push Notification Card (Brief Section 3.3 & 6.2) */}
+        <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-5 shadow-sm space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900/40">
+                <Bell className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Smart Push Notifications & Radar Alert
+                  </h3>
+                  {pushPermissionStatus === 'granted' ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Active
+                    </span>
+                  ) : pushPermissionStatus === 'denied' ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300">
+                      Blocked in Browser
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      Setup Needed
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5">
+                  Instant arrival confirmations ("Welcome {memberFirstName}, you are checked in"), service reminders, and care notes.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1 sm:pt-0 shrink-0">
+              {pushPermissionStatus !== 'granted' ? (
+                <button
+                  type="button"
+                  onClick={() => requestPushPermission()}
+                  className="px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5A48DE] text-white text-xs font-bold shadow-md shadow-indigo-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>Enable Push Notifications</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => sendTestPushNotification()}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Simulate Arrival Push</span>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Two-column grid on desktop/tablets */}

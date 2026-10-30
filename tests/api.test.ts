@@ -112,4 +112,56 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
   });
+
+  it('POST /api/notifications/subscribe registers a member push notification device', async () => {
+    const res = await request(app)
+      .post('/api/notifications/subscribe')
+      .send({
+        id: 'sub-test-elena-1',
+        endpoint: 'https://fcm.googleapis.com/fcm/send/test-token-123',
+        personId: 'm-elena',
+        personName: 'Elena Mends',
+        userAgent: 'Mozilla/5.0 (Test Environment)',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.subscription.personName).toBe('Elena Mends');
+    expect(res.body.totalSubscribers).toBeGreaterThanOrEqual(1);
+  });
+
+  it('GET /api/notifications/subscriptions lists active subscriber devices', async () => {
+    const res = await request(app).get('/api/notifications/subscriptions');
+    expect(res.status).toBe(200);
+    expect(res.body.subscribersCount).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(res.body.subscriptions)).toBe(true);
+  });
+
+  it('POST /api/notifications/test-push validates push payload generation', async () => {
+    const res = await request(app)
+      .post('/api/notifications/test-push')
+      .send({
+        personName: 'Elena Mends',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.payload.title).toContain('Elena');
+    expect(res.body.payload.icon).toBe('/icon.svg');
+  });
+
+  it('POST /api/notifications/send dispatches church notification broadcast', async () => {
+    const res = await request(app)
+      .post('/api/notifications/send')
+      .send({
+        title: 'Sunday Service Reminder',
+        body: 'First service starts in 45 minutes.',
+        topic: 'attendance',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.title).toBe('Sunday Service Reminder');
+    expect(res.body.dispatchedTo).toBeGreaterThanOrEqual(1);
+  });
 });

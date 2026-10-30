@@ -193,19 +193,65 @@ export const UnifiedAuthScreen: React.FC = () => {
         </div>
 
         {googleAuthError && (
-          <div className="mx-6 sm:mx-8 mt-3 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <span>{googleAuthError}</span>
+          <div className="mx-6 sm:mx-8 mt-3 p-4 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/30 border border-amber-300 dark:border-amber-800/70 shadow-sm space-y-3 text-xs text-amber-950 dark:text-amber-100">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-bold text-amber-900 dark:text-amber-200">
+                    Firebase Authentication Domain Authorization Notice
+                  </h4>
+                  <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300/90 leading-relaxed">
+                    {googleAuthError}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearGoogleAuthError}
+                aria-label="Dismiss notice"
+                className="text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 p-0.5 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={clearGoogleAuthError}
-              aria-label="Dismiss notice"
-              className="text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 p-0.5 cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+            {/* Quick Domain Copy & Firebase Guide */}
+            <div className="bg-white/80 dark:bg-[#1A1A3A]/80 rounded-xl p-3 border border-amber-200/80 dark:border-amber-800/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+              <div className="space-y-0.5">
+                <span className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Current Host Domain
+                </span>
+                <div className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200 break-all select-all">
+                  {typeof window !== 'undefined' ? window.location.hostname : 'current domain'}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      navigator.clipboard.writeText(window.location.hostname);
+                      showToast(`Copied "${window.location.hostname}" to clipboard!`);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shadow-sm transition-colors cursor-pointer"
+                >
+                  Copy Domain
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail('elenamends@gmail.com');
+                    loginWithCredentials('elenamends@gmail.com', '', 'admin');
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-sm transition-colors cursor-pointer"
+                >
+                  Sign in as Elena Mends
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -219,8 +265,65 @@ export const UnifiedAuthScreen: React.FC = () => {
                   Sign In to Ekklesphere
                 </h2>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Enter your church credentials and select your access destination.
+                  Enter your church credentials or use one-click quick login below.
                 </p>
+              </div>
+
+              {/* 1-Click Fast Sign-In Options */}
+              <div className="bg-[#F8F9FE] dark:bg-[#1A1A3A] p-3.5 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  <span>Instant 1-Click Access</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Ready</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginEmail('elenamends@gmail.com');
+                      loginWithCredentials('elenamends@gmail.com', '', 'admin');
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-indigo-50 dark:hover:bg-indigo-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
+                  >
+                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends</div>
+                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF]">Administrator</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginEmail('elenamends@gmail.com');
+                      loginWithCredentials('elenamends@gmail.com', '', 'member');
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
+                  >
+                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends</div>
+                    <div className="text-[10px] text-emerald-600 dark:text-emerald-400">Member Mobile</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginEmail('usher@church.org');
+                      loginWithCredentials('usher@church.org', '', 'usher');
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
+                  >
+                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Door Usher</div>
+                    <div className="text-[10px] text-amber-600 dark:text-amber-400">Usher Station</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginEmail('admin@church.org');
+                      loginWithCredentials('admin@church.org', '', 'admin');
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-purple-50 dark:hover:bg-purple-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
+                  >
+                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Lead Pastor</div>
+                    <div className="text-[10px] text-purple-600 dark:text-purple-400">Church Operations</div>
+                  </button>
+                </div>
               </div>
 
               {/* Google 1-Click Action */}

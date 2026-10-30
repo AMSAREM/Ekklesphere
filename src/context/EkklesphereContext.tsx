@@ -29,6 +29,7 @@ import {
   BillingCycle,
   LandingPageConfig,
 } from '../types/ekklesphere';
+import { pushNotificationService } from '../services/pushNotificationService';
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -62,6 +63,13 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
 };
 
 interface EkklesphereContextType {
+  // Push Notifications (Web Push & Sanctuary Radar Confirmations)
+  pushPermissionStatus: NotificationPermission | 'unsupported';
+  isPushSubscribed: boolean;
+  pushSubscribersCount: number;
+  requestPushPermission: () => Promise<boolean>;
+  sendTestPushNotification: (title?: string, body?: string) => Promise<boolean>;
+
   // Authentication & Unified Role System
   currentUser: AuthUser | null;
   setCurrentUser: (user: AuthUser | null) => void;
@@ -1069,6 +1077,91 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // Real live attendance records synchronized across devices via /api/campus-premise & /api/live-checkins
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
+  // Web Push Notification States & Service Worker Integration
+  const [pushPermissionStatus, setPushPermissionStatus] = useState<NotificationPermission | 'unsupported'>(
+    () => pushNotificationService.getPermissionStatus()
+  );
+  const [isPushSubscribed, setIsPushSubscribed] = useState<boolean>(
+    () => pushNotificationService.getPermissionStatus() === 'granted'
+  );
+  const [pushSubscribersCount, setPushSubscribersCount] = useState<number>(0);
+
+  // Initialize Service Worker & load push subscribers on mount
+  useEffect(() => {
+    if (pushNotificationService.isSupported()) {
+      pushNotificationService.registerServiceWorker().catch(() => {});
+      setPushPermissionStatus(pushNotificationService.getPermissionStatus());
+    }
+
+    // Refresh push subscribers count from server
+    fetch('/api/notifications/subscriptions')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && typeof data.subscribersCount === 'number') {
+          setPushSubscribersCount(data.subscribersCount);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const requestPushPermission = async (): Promise<boolean> => {
+    if (!pushNotificationService.isSupported()) {
+      showToast('Push notifications are not supported by your current browser.');
+      return false;
+    }
+
+    const result = await pushNotificationService.requestPermission();
+    setPushPermissionStatus(result);
+
+    if (result === 'granted') {
+      setIsPushSubscribed(true);
+      const subSuccess = await pushNotificationService.subscribeToPush(
+        currentUser?.memberId || currentUser?.id,
+        currentUser?.name
+      );
+      if (subSuccess) {
+        setPushSubscribersCount((c) => Math.max(c + 1, 1));
+      }
+      showToast('Push notifications enabled for arrival & service alerts!');
+      return true;
+    } else if (result === 'denied') {
+      setIsPushSubscribed(false);
+      showToast('Notification permission was blocked. You can re-enable it in browser settings.');
+      return false;
+    }
+    return false;
+  };
+
+  const sendTestPushNotification = async (customTitle?: string, customBody?: string): Promise<boolean> => {
+    const memberName = currentUser?.name || 'Member';
+    const title = customTitle || `Welcome, ${memberName.split(' ')[0]}!`;
+    const body =
+      customBody ||
+      `You are checked in for ${currentService.name} at ${systemSettings.campusName}. Sanctuary presence confirmed.`;
+
+    const ok = await pushNotificationService.showLocalNotification({
+      title,
+      body,
+      icon: '/icon.svg',
+      tag: 'test-push',
+      data: { url: '/', type: 'arrival_checkin' },
+    });
+
+    // Also trigger server dispatch for logging
+    fetch('/api/notifications/test-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personName: memberName }),
+    }).catch(() => {});
+
+    if (ok) {
+      showToast('Test push notification displayed on your device!');
+    } else {
+      showToast('Please allow notifications when prompted by your browser.');
+    }
+    return ok;
+  };
+
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1170,6 +1263,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }),
       }).catch((err) => console.warn('Could not sync check-in to server:', err));
       showToast(`${person?.firstName || personFullName} checked in (${method})`);
+
+      // Trigger automatic Arrival Web Push Notification (Brief Section 3.3 & 6.2)
+      if (systemSettings.enablePushNotifications && memberConsents.push) {
+        pushNotificationService
+          .notifyArrivalCheckin(personFullName, currentService.name, method)
+          .catch((err) => console.warn('[Push] Arrival push notification skipped:', err));
+      }
     }
 
     setAuditLogs((prev) => [
@@ -2104,6 +2204,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         registerMember,
         logout,
         switchUserRole,
+        pushPermissionStatus,
+        isPushSubscribed,
+        pushSubscribersCount,
+        requestPushPermission,
+        sendTestPushNotification,
         activePortal,
         setActivePortal,
         isSidebarCollapsed,

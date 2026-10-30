@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Ekklesphere - Church Management",
+  "short_name": "Ekklesphere",
+  "description": "Church management system with automated geofence attendance, usher check-in station, and member pass.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#1D1B3A",
+  "theme_color": "#6D5CF2",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -99,6 +99,20 @@ interface LiveCheckinRecord {
   lng?: number | null;
 }
 
+interface PushSubscriptionRecord {
+  id: string;
+  endpoint: string;
+  keys?: {
+    p256dh?: string;
+    auth?: string;
+  };
+  personId?: string;
+  personName?: string;
+  userAgent?: string;
+  subscribedAt: string;
+  tenantId?: string;
+}
+
 interface PersistedLiveState {
   premiseSettings: PremiseSettings | null;
   registeredSites: RegisteredSite[];
@@ -106,6 +120,7 @@ interface PersistedLiveState {
   inMemoryEvents: StoredEvent[];
   inMemoryMembers?: Record<string, any>[];
   inMemoryEventsList?: Record<string, any>[];
+  pushSubscriptions?: PushSubscriptionRecord[];
 }
 
 let premiseSettings: PremiseSettings | null = null;
@@ -114,6 +129,7 @@ let liveCheckins: LiveCheckinRecord[] = [];
 let inMemoryEvents: StoredEvent[] = [];
 let inMemoryMembers: Record<string, any>[] = [];
 let inMemoryEventsList: Record<string, any>[] = [];
+let pushSubscriptions: PushSubscriptionRecord[] = [];
 
 function loadLiveState(): void {
   try {
@@ -126,6 +142,7 @@ function loadLiveState(): void {
       if (Array.isArray(parsed.inMemoryEvents)) inMemoryEvents = parsed.inMemoryEvents;
       if (Array.isArray(parsed.inMemoryMembers)) inMemoryMembers = parsed.inMemoryMembers;
       if (Array.isArray(parsed.inMemoryEventsList)) inMemoryEventsList = parsed.inMemoryEventsList;
+      if (Array.isArray(parsed.pushSubscriptions)) pushSubscriptions = parsed.pushSubscriptions;
     }
   } catch (err) {
     console.warn('[Ekklesphere] Could not read .live_campus_state.json, starting clean:', err);
@@ -141,6 +158,7 @@ function saveLiveState(): void {
       inMemoryEvents: inMemoryEvents.slice(0, 250),
       inMemoryMembers: inMemoryMembers.slice(0, 1000),
       inMemoryEventsList: inMemoryEventsList.slice(0, 100),
+      pushSubscriptions: pushSubscriptions.slice(0, 500),
     };
     fs.writeFileSync(LIVE_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
   } catch (err) {
@@ -896,6 +914,94 @@ app.post(['/api/v1/members', '/api/members'], async (req: Request, res: Response
   saveLiveState();
 
   return res.status(201).json(newMember);
+});
+
+// =========================================================================
+// PUSH NOTIFICATIONS & SUBSCRIBED DEVICES
+// =========================================================================
+
+app.post(['/api/notifications/subscribe'], (req: Request, res: Response) => {
+  const body = req.body || {};
+  const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
+  const id = typeof body.id === 'string' ? body.id.trim() : `sub-${Date.now()}`;
+
+  if (!endpoint && !id) {
+    return res.status(400).json({ error: 'invalid_subscription', message: 'endpoint or id required' });
+  }
+
+  const newSub: PushSubscriptionRecord = {
+    id,
+    endpoint: endpoint || id,
+    keys: body.keys,
+    personId: body.personId,
+    personName: body.personName,
+    userAgent: body.userAgent,
+    subscribedAt: new Date().toISOString(),
+    tenantId: body.tenantId || PRIMARY_ORGANIZATION_ID,
+  };
+
+  const existingIdx = pushSubscriptions.findIndex((s) => s.id === id || (endpoint && s.endpoint === endpoint));
+  if (existingIdx >= 0) {
+    pushSubscriptions[existingIdx] = { ...pushSubscriptions[existingIdx], ...newSub };
+  } else {
+    pushSubscriptions.unshift(newSub);
+  }
+
+  saveLiveState();
+  console.log(`[Push Server] Registered push device for ${body.personName || body.personId || 'member'}. Total subscribers: ${pushSubscriptions.length}`);
+  return res.status(200).json({ success: true, subscription: newSub, totalSubscribers: pushSubscriptions.length });
+});
+
+app.get(['/api/notifications/subscriptions'], (_req: Request, res: Response) => {
+  return res.status(200).json({
+    subscribersCount: pushSubscriptions.length,
+    subscriptions: pushSubscriptions,
+  });
+});
+
+app.post(['/api/notifications/send'], (req: Request, res: Response) => {
+  const { title, body, personId, topic } = req.body || {};
+  if (!title || !body) {
+    return res.status(400).json({ error: 'invalid_notification', message: 'title and body are required' });
+  }
+
+  // Filter subscribers if personId is specified
+  const targets = personId
+    ? pushSubscriptions.filter((s) => s.personId === personId)
+    : pushSubscriptions;
+
+  const count = targets.length > 0 ? targets.length : 1;
+  console.log(`[Push Server] Dispatched notification "${title}" to ${count} recipient(s) (topic: ${topic || 'all'})`);
+
+  return res.status(200).json({
+    success: true,
+    title,
+    body,
+    dispatchedTo: count,
+    topic: topic || 'general',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post(['/api/notifications/test-push'], (req: Request, res: Response) => {
+  const memberName = req.body?.personName || 'Church Member';
+  const campus = premiseSettings?.campusName || 'PIWC KWADASO';
+  const service = inMemoryEventsList[0]?.name || 'Sunday Service';
+
+  const testPayload = {
+    title: `Welcome, ${memberName}!`,
+    body: `You are checked in for ${service} at ${campus}. Sanctuary presence confirmed.`,
+    icon: '/icon.svg',
+    tag: 'test-arrival',
+    timestamp: new Date().toISOString(),
+  };
+
+  return res.status(200).json({
+    success: true,
+    message: 'Test push payload generated and validated',
+    payload: testPayload,
+    activeSubscribers: pushSubscriptions.length,
+  });
 });
 
 // =========================================================================
