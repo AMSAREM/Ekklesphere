@@ -294,4 +294,80 @@ export interface ChurchGroup {
   updatedAt?: string;
 }
 
+// ==========================================
+// CREATOR PLATFORM: TENANTS & LICENSES TYPES
+// ==========================================
+
+export type AppViewMode = 'landing' | 'app' | 'creator';
+
+export type LicenseTier = 'grace_starter' | 'ministry_pro' | 'cathedral_enterprise';
+export type TenantStatus = 'active' | 'trial' | 'suspended' | 'maintenance';
+export type BillingCycle = 'monthly' | 'annual' | 'lifetime';
+
+export interface TenantFeatures {
+  bleRadar: boolean;
+  smsGateway: boolean;
+  biometrics: boolean;
+  gdprPrivacyVault: boolean;
+  multiCampus: boolean;
+  mobileGivingMoMo: boolean;
+  customDomain: boolean;
+  exportAuditLogs: boolean;
+}
+
+export interface TenantChurch {
+  id: string;
+  name: string;
+  slug: string;
+  campusCode: string;
+  city: string;
+  country: string;
+  seniorPastor: string;
+  contactEmail: string;
+  contactPhone: string;
+  status: TenantStatus;
+  memberCount: number;
+  maxCapacity: number;
+  licenseKey: string;
+  licenseTier: LicenseTier;
+  renewalDate: string;
+  billingCycle: BillingCycle;
+  customDomain?: string;
+  geofenceRadiusMeters: number;
+  features: TenantFeatures;
+  createdAt: string;
+}
+
+export interface SystemLicense {
+  id: string;
+  key: string;
+  tier: LicenseTier;
+  tenantId: string;
+  tenantName: string;
+  seatsLimit: number;
+  status: 'active' | 'expired' | 'revoked' | 'grace_period';
+  issuedDate: string;
+  expiresDate: string;
+  billingCycle: BillingCycle;
+  annualCostUSD: number;
+  enabledFeatures: string[];
+}
+
+export interface LandingPageConfig {
+  heroTitle: string;
+  heroSubtitle: string;
+  announcementBadge: string;
+  isAnnouncementActive: boolean;
+  contactSalesEmail: string;
+  demoEnabled: boolean;
+  showcaseHeadline: string;
+  featuredStats: {
+    congregationsServed: string;
+    checkinsRecorded: string;
+    proximityAccuracy: string;
+    networkUptime: string;
+  };
+}
+
+
 

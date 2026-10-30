@@ -8,10 +8,51 @@ import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
 import { AppHeader } from './components/navigation/AppHeader';
 import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
+import { LandingPage } from './components/landing/LandingPage';
+import { CreatorsPanel } from './components/creator/CreatorsPanel';
 
 const EkklesphereMain: React.FC = () => {
-  const { currentUser, toastMessage } = useEkklesphere();
+  const { currentUser, toastMessage, viewMode } = useEkklesphere();
 
+  // If Creator Console view is active
+  if (viewMode === 'creator') {
+    return (
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F5F6FA] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+        <CreatorsPanel />
+        {toastMessage && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1D1B3A] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-2xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-white/10 flex items-center gap-2"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // If Public Landing Page view is active
+  if (viewMode === 'landing') {
+    return (
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F5F6FA] dark:bg-[#0A0A18] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+        <LandingPage />
+        {toastMessage && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1D1B3A] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-2xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-white/10 flex items-center gap-2"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Standard Church Application Portals View (viewMode === 'app')
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
       {/* Help Modal */}
