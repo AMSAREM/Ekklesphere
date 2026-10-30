@@ -11,21 +11,14 @@ create table if not exists sites (
   id        uuid primary key default gen_random_uuid(),
   name      text not null,
   location  geography(Point, 4326) not null,
-  radius_m  int not null default 150,
+  radius_m  int not null default 100,
+  active    boolean not null default true,
   created_at timestamptz not null default now()
 );
 
-create index if not exists sites_location_idx on sites using gist (location);
+alter table sites add column if not exists active boolean not null default true;
 
--- Seed default site: Accra Central Campus
-insert into sites (id, name, location, radius_m)
-values (
-  'a0000000-0000-0000-0000-000000000001',
-  'Accra Central Church Sanctuary',
-  ST_SetSRID(ST_MakePoint(-0.1969, 5.5560), 4326)::geography,
-  150
-)
-on conflict (id) do nothing;
+create index if not exists sites_location_idx on sites using gist (location);
 
 -- 3. Custom Types
 do $$
@@ -43,7 +36,7 @@ create table if not exists attendance_events (
   id              uuid primary key default gen_random_uuid(),
   client_event_id uuid not null,
   user_id         uuid not null,
-  site_id         uuid not null references sites(id),
+  site_id         uuid not null references sites(id) on delete cascade,
   type            event_type not null,
   source          text not null check (source in ('geofence','manual','web','admin_edit')),
   platform        text,
@@ -64,16 +57,24 @@ create index if not exists attendance_events_site_time_idx on attendance_events 
 -- 5. Row Level Security
 alter table attendance_events enable row level security;
 
--- Users can only read their own events; only the server (service role) can write
+-- Users can only read their own events; service_role manages writes
 drop policy if exists "read own events" on attendance_events;
 create policy "read own events" on attendance_events
-  for select using (auth.uid() = user_id);
+  for select using ((select auth.uid()) = user_id);
+
+drop policy if exists "service_role manage attendance_events" on attendance_events;
+create policy "service_role manage attendance_events" on attendance_events
+  for all using ((select auth.role()) = 'service_role');
 
 alter table sites enable row level security;
 
 drop policy if exists "read sites" on sites;
 create policy "read sites" on sites
-  for select using (auth.role() = 'authenticated');
+  for select using (active = true or (select auth.role()) in ('authenticated', 'service_role'));
+
+drop policy if exists "service_role manage sites" on sites;
+create policy "service_role manage sites" on sites
+  for all using ((select auth.role()) = 'service_role');
 
 -- 6. RPC Function: site_distance
 -- Calculates precise geodesic distance (in meters) from site center
@@ -83,7 +84,10 @@ create or replace function site_distance(
   p_lat double precision
 )
 returns table (distance_m double precision, radius_m int)
-language sql stable as $$
+language sql
+stable
+set search_path = public, extensions
+as $$
   select ST_Distance(location, ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography),
          radius_m
   from sites where id = p_site;
@@ -98,7 +102,10 @@ create or replace function travel_speed_kmh(
   p_at timestamptz
 )
 returns double precision
-language sql stable as $$
+language sql
+stable
+set search_path = public, extensions
+as $$
   select case
     when p_at - server_time > interval '1 minute' then
       (ST_Distance(location,
@@ -155,7 +162,7 @@ create or replace function auto_close_open_shifts(max_hours int default 12)
 returns int
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   n int;

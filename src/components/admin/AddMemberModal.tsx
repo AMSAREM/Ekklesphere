@@ -1,21 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { Person, MemberStatus } from '../../types/ekklesphere';
 import {
   X,
   UserPlus,
   Check,
-  Phone,
-  Mail,
   Users,
   MapPin,
   Calendar,
   Heart,
   Shield,
-  Briefcase,
-  FileText,
-  Clock,
-  Sparkles
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 
 interface AddMemberModalProps {
@@ -26,14 +22,13 @@ interface AddMemberModalProps {
 }
 
 const COMMON_CELL_GROUPS = [
-  'Osu North cell',
-  'Ridge Fellowship',
-  'Cantonments Cell',
+  'General Congregation',
+  'Main Sanctuary Cell',
   'Choir & Music Ministry',
   'Youth & Young Adults',
   'Ushers & Greeters',
   'Men’s Fellowship',
-  'Women of Faith',
+  'Women’s Fellowship',
   'Media & Tech Team',
   'Children’s Ministry Workers',
 ];
@@ -72,9 +67,28 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   onMemberAdded,
   initialData,
 }) => {
-  const { addMember, updateMember, showToast } = useEkklesphere();
+  const { addMember, updateMember, showToast, churchGroups, systemSettings } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'basic' | 'location' | 'church' | 'family' | 'spiritual'>('basic');
+
+  const cellGroupOptions = useMemo(() => {
+    const dynamicCells = churchGroups
+      .filter((g) => g.category === 'cell_group' || g.category === 'fellowship')
+      .map((g) => g.name);
+    const set = new Set<string>([...dynamicCells, ...COMMON_CELL_GROUPS]);
+    if (initialData?.homeCellGroup) set.add(initialData.homeCellGroup);
+    if (initialData?.groupName) set.add(initialData.groupName);
+    return Array.from(set);
+  }, [churchGroups, initialData]);
+
+  const departmentOptions = useMemo(() => {
+    const dynamicMinistries = churchGroups
+      .filter((g) => g.category === 'ministry')
+      .map((g) => g.name);
+    const set = new Set<string>(['General Congregation', ...dynamicMinistries, ...COMMON_DEPARTMENTS]);
+    if (initialData?.department) set.add(initialData.department);
+    return Array.from(set);
+  }, [churchGroups, initialData]);
 
   // 1. Identity & Contact
   const [firstName, setFirstName] = useState(initialData?.firstName || '');
@@ -97,7 +111,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
 
   // 3. Church & Squads
   const [homeCellGroup, setHomeCellGroup] = useState(
-    initialData?.homeCellGroup || initialData?.groupName || 'Osu North cell'
+    initialData?.homeCellGroup || initialData?.groupName || cellGroupOptions[0] || 'General Congregation'
   );
   const [squads, setSquads] = useState(initialData?.squads || '');
   const [department, setDepartment] = useState(initialData?.department || 'General Congregation');
@@ -142,6 +156,66 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [savingMode, setSavingMode] = useState<'close' | 'another' | null>(null);
+
+  const resetFormFields = (source?: Person | null) => {
+    setActiveTab('basic');
+    setErrors({});
+    setSubmitError(null);
+    setSavingMode(null);
+
+    setFirstName(source?.firstName || '');
+    setMiddleName(source?.middleName || '');
+    setLastName(source?.lastName || '');
+    setMemberId(source?.memberId || '');
+    setGender(source?.gender || 'male');
+    setDateOfBirth(source?.dateOfBirth || '');
+    setMonthOfBirth(source?.monthOfBirth || '');
+    setPhone(source?.phoneE164 || '');
+    setEmail(source?.email || '');
+
+    setPlaceOfResidence(source?.placeOfResidence || '');
+    setSpecificLocation(source?.specificLocation || '');
+    setResidentialDigitalAddress(source?.residentialDigitalAddress || '');
+    setHometown(source?.hometown || '');
+
+    setHomeCellGroup(source?.homeCellGroup || source?.groupName || cellGroupOptions[0] || 'General Congregation');
+    setSquads(source?.squads || '');
+    setDepartment(source?.department || 'General Congregation');
+
+    const srcOfficer = source?.officerName || 'Member';
+    const matched = COMMON_DESIGNATIONS.find(
+      (d) => d.toLowerCase() === srcOfficer.trim().toLowerCase()
+    );
+    setOfficerName(matched || (source?.officerName ? 'Other' : 'Member'));
+    setCustomOfficerName(matched ? '' : (source?.officerName || ''));
+
+    setOccupation(source?.occupation || '');
+    setRemarks(source?.remarks || source?.notes || '');
+    setStatus(source?.status || 'member');
+    setAutoCheckinOptedIn(source ? source.autoCheckinOptedIn : true);
+
+    setMaritalStatus(source?.maritalStatus || 'Single');
+    setSpouseName(source?.spouseName || '');
+    setNumberOfChildren(source?.numberOfChildren ?? 0);
+    setEmergencyContactPerson(source?.emergencyContactPerson || '');
+    setEmergencyContactPhone(source?.emergencyContactPhone || '');
+    setImageUrl(source?.imageUrl || '');
+
+    setDateOfSalvation(source?.dateOfSalvation || '');
+    setDateOfBaptism(source?.dateOfBaptism || '');
+    setDateOfMarriage(source?.dateOfMarriage || '');
+    setDateOfMembership(
+      source?.dateOfMembership || source?.joinedOn || new Date().toISOString().split('T')[0]
+    );
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      resetFormFields(initialData);
+    }
+  }, [isOpen, initialData]);
 
   if (!isOpen) return null;
 
@@ -152,12 +226,12 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     if (!phone.trim()) {
       newErrors.phone = 'Phone number is required';
     } else {
-      const cleanPhone = phone.replace(/[\s-()]/g, '');
+      const cleanPhone = phone.replace(/[\s\-()]/g, '');
       if (cleanPhone.length < 9) {
         newErrors.phone = 'Please enter a valid phone number';
       }
     }
-    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       newErrors.email = 'Please enter a valid email address';
     }
 
@@ -168,11 +242,24 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     }
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+
+    if (Object.keys(newErrors).length > 0) {
+      if (newErrors.firstName || newErrors.lastName || newErrors.phone || newErrors.email) {
+        setActiveTab('basic');
+      } else if (newErrors.officerName) {
+        setActiveTab('church');
+      }
+      const firstErrorMsg = Object.values(newErrors)[0];
+      setSubmitError(firstErrorMsg);
+      return false;
+    }
+
+    setSubmitError(null);
+    return true;
   };
 
   const formatE164 = (raw: string) => {
-    let clean = raw.trim().replace(/[\s-()]/g, '');
+    let clean = raw.trim().replace(/[\s\-()]/g, '');
     if (clean.startsWith('0')) {
       clean = '+233' + clean.slice(1);
     } else if (!clean.startsWith('+')) {
@@ -181,12 +268,25 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     return clean;
   };
 
-  const handleSubmit = (e?: React.FormEvent, addAnother: boolean = false) => {
+  const generateDefaultMemberCode = () => {
+    const rawChurch = (systemSettings?.churchName || 'CHURCH').trim();
+    const prefix =
+      rawChurch
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 4) || 'MEM';
+    return `${prefix}-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+  };
+
+  const handleSubmit = async (e?: React.FormEvent, addAnother: boolean = false) => {
     if (e) e.preventDefault();
+    if (savingMode !== null) return;
     if (!validate()) return;
 
     const finalPhone = formatE164(phone);
-    const generatedId = memberId.trim() || `ACC-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+    const generatedId = memberId.trim() || generateDefaultMemberCode();
     const finalOfficer = officerName === 'Other' ? customOfficerName.trim() : officerName.trim();
 
     const memberPayload: Partial<Person> = {
@@ -209,7 +309,11 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       occupation: occupation.trim() || undefined,
       homeCellGroup: homeCellGroup.trim(),
       groupName: homeCellGroup.trim(),
-      monthOfBirth: monthOfBirth || (dateOfBirth ? new Date(dateOfBirth).toLocaleString('default', { month: 'long' }) : undefined),
+      monthOfBirth:
+        monthOfBirth ||
+        (dateOfBirth
+          ? new Date(`${dateOfBirth}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
+          : undefined),
       maritalStatus,
       spouseName: maritalStatus === 'Married' ? spouseName.trim() || undefined : undefined,
       numberOfChildren: Number(numberOfChildren) || 0,
@@ -226,25 +330,38 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       notes: remarks.trim() || undefined,
     };
 
-    if (initialData) {
-      updateMember(initialData.id, memberPayload);
-      onClose();
-    } else {
-      const created = addMember(memberPayload as Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>);
-      if (onMemberAdded) onMemberAdded(created);
+    setSavingMode(addAnother ? 'another' : 'close');
+    setSubmitError(null);
 
-      if (addAnother) {
-        setFirstName('');
-        setMiddleName('');
-        setLastName('');
-        setPhone('');
-        setEmail('');
-        setSpecificLocation('');
-        setResidentialDigitalAddress('');
-        showToast('Member added! Form reset for next entry.');
-      } else {
+    try {
+      if (initialData) {
+        await updateMember(initialData.id, memberPayload);
+        setSavingMode(null);
         onClose();
+      } else {
+        const created = await addMember(
+          memberPayload as Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>
+        );
+        if (onMemberAdded) onMemberAdded(created);
+        setSavingMode(null);
+
+        if (addAnother) {
+          // Reset member-specific fields while keeping cell group & department handy for batch entry
+          const preservedCell = homeCellGroup;
+          const preservedDept = department;
+          resetFormFields(null);
+          setHomeCellGroup(preservedCell);
+          setDepartment(preservedDept);
+          showToast(`${created.firstName} ${created.lastName} saved to database! Ready for next member.`);
+        } else {
+          onClose();
+        }
       }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not save member to database.';
+      setSubmitError(msg);
+      showToast(msg);
+      setSavingMode(null);
     }
   };
 
@@ -304,8 +421,15 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
           })}
         </div>
 
+        {submitError && (
+          <div className="mx-5 mt-3 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 flex items-center gap-2 text-xs font-semibold text-rose-600 dark:text-rose-400 shrink-0">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{submitError}</span>
+          </div>
+        )}
+
         {/* Modal Form Body */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
+        <form noValidate onSubmit={(e) => handleSubmit(e, false)} className="flex-1 overflow-y-auto p-5 space-y-4">
           {/* TAB 1: IDENTITY & CONTACT */}
           {activeTab === 'basic' && (
             <div className="space-y-4">
@@ -316,11 +440,17 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    required
                     value={firstName}
-                    onChange={(e) => setFirstName(e.target.value)}
+                    onChange={(e) => {
+                      setFirstName(e.target.value);
+                      if (errors.firstName) setErrors((prev) => ({ ...prev, firstName: '' }));
+                    }}
                     placeholder="e.g. Kwame"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    className={`w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border ${
+                      errors.firstName
+                        ? 'border-rose-500 focus:ring-rose-500'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55] focus:ring-[#6D5CF2]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2`}
                   />
                   {errors.firstName && <span className="text-[10px] text-rose-500">{errors.firstName}</span>}
                 </div>
@@ -344,11 +474,17 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    required
                     value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                    placeholder="e.g. Mensah"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    onChange={(e) => {
+                      setLastName(e.target.value);
+                      if (errors.lastName) setErrors((prev) => ({ ...prev, lastName: '' }));
+                    }}
+                    placeholder="Surname / Family name"
+                    className={`w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border ${
+                      errors.lastName
+                        ? 'border-rose-500 focus:ring-rose-500'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55] focus:ring-[#6D5CF2]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2`}
                   />
                   {errors.lastName && <span className="text-[10px] text-rose-500">{errors.lastName}</span>}
                 </div>
@@ -361,11 +497,17 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   </label>
                   <input
                     type="tel"
-                    required
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    onChange={(e) => {
+                      setPhone(e.target.value);
+                      if (errors.phone) setErrors((prev) => ({ ...prev, phone: '' }));
+                    }}
                     placeholder="024 123 4567"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    className={`w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border ${
+                      errors.phone
+                        ? 'border-rose-500 focus:ring-rose-500'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55] focus:ring-[#6D5CF2]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2`}
                   />
                   {errors.phone && <span className="text-[10px] text-rose-500">{errors.phone}</span>}
                 </div>
@@ -378,7 +520,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={memberId}
                     onChange={(e) => setMemberId(e.target.value)}
-                    placeholder="ACC-2024-001"
+                    placeholder="MEM-2026-001"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none font-mono focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -432,10 +574,18 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="kwame@example.com"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (errors.email) setErrors((prev) => ({ ...prev, email: '' }));
+                    }}
+                    placeholder="member@domain.org"
+                    className={`w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border ${
+                      errors.email
+                        ? 'border-rose-500 focus:ring-rose-500'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55] focus:ring-[#6D5CF2]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2`}
                   />
+                  {errors.email && <span className="text-[10px] text-rose-500">{errors.email}</span>}
                 </div>
               </div>
             </div>
@@ -453,7 +603,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={placeOfResidence}
                     onChange={(e) => setPlaceOfResidence(e.target.value)}
-                    placeholder="e.g. Osu RE, Accra"
+                    placeholder="e.g. Kwadaso, Kumasi"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -466,7 +616,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={residentialDigitalAddress}
                     onChange={(e) => setResidentialDigitalAddress(e.target.value)}
-                    placeholder="GA-032-8812"
+                    placeholder="AK-000-0000"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-mono outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -481,7 +631,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={specificLocation}
                     onChange={(e) => setSpecificLocation(e.target.value)}
-                    placeholder="Near Danquah Circle, opposite Shell station"
+                    placeholder="Nearest landmark or junction"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -515,7 +665,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     onChange={(e) => setHomeCellGroup(e.target.value)}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   >
-                    {COMMON_CELL_GROUPS.map((g) => (
+                    {cellGroupOptions.map((g) => (
                       <option key={g} value={g}>
                         {g}
                       </option>
@@ -532,7 +682,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     onChange={(e) => setDepartment(e.target.value)}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   >
-                    {COMMON_DEPARTMENTS.map((d) => (
+                    {departmentOptions.map((d) => (
                       <option key={d} value={d}>
                         {d}
                       </option>
@@ -674,7 +824,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     disabled={maritalStatus !== 'Married'}
                     value={spouseName}
                     onChange={(e) => setSpouseName(e.target.value)}
-                    placeholder="e.g. Akosua Mensah"
+                    placeholder="Spouse full name"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] disabled:opacity-40"
                   />
                 </div>
@@ -702,7 +852,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={emergencyContactPerson}
                     onChange={(e) => setEmergencyContactPerson(e.target.value)}
-                    placeholder="e.g. Mrs. Grace Mensah"
+                    placeholder="Emergency contact full name"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -857,8 +1007,9 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={savingMode !== null}
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-50 cursor-pointer"
               >
                 Cancel
               </button>
@@ -866,18 +1017,37 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
               {!initialData && (
                 <button
                   type="button"
+                  disabled={savingMode !== null}
                   onClick={(e) => handleSubmit(e, true)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] transition-all"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
                 >
-                  Save & Add Another
+                  {savingMode === 'another' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save & Add Another</span>
+                  )}
                 </button>
               )}
 
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] text-white hover:bg-[#5b4be0] shadow-sm transition-all"
+                disabled={savingMode !== null}
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] text-white hover:bg-[#5b4be0] active:scale-[0.98] disabled:opacity-60 shadow-sm transition-all cursor-pointer"
               >
-                {initialData ? 'Update Member' : 'Register Member'}
+                {savingMode === 'close' ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{initialData ? 'Update Member' : 'Register Member'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

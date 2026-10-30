@@ -7,7 +7,7 @@ import {
   onAuthStateChanged,
   User as FirebaseUser,
 } from 'firebase/auth';
-import { initializeFirestore, getFirestore, doc, getDoc, Firestore, setLogLevel } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, doc, getDocFromServer, Firestore, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Silence background network timeout warnings in container / preview environments
@@ -113,8 +113,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Safe connection check helper (operates seamlessly with offline queue and cache)
 export async function testConnection() {
-  return Promise.resolve();
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firebase client is currently offline; please verify your Firebase configuration.');
+    }
+  }
 }
+
+if (typeof window !== 'undefined') {
+  void testConnection();
+}
+
 

@@ -573,7 +573,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* 13. PLACE OF RESIDENCE */}
                       {visibleColumns['PLACE OF RESIDENCE'] && (
                         <td className="py-3 px-3.5 text-[#666A86] dark:text-[#A9ACC8]">
-                          {member.placeOfResidence || 'Accra'}
+                          {member.placeOfResidence || '—'}
                         </td>
                       )}
 

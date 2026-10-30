@@ -13,7 +13,6 @@ import {
   Filter,
   Check,
   RefreshCw,
-  Sparkles,
   Info
 } from 'lucide-react';
 import { Person, MEMBERSHIP_TABLE_HEADERS } from '../../types/ekklesphere';
@@ -35,12 +34,6 @@ interface ParsedRow {
   isDuplicate: boolean;
 }
 
-const SAMPLE_CSV_CONTENT = `FIRST NAME,MIDDLE NAME,LASTNAME,SPECIFIC LOCATION,REMARKS,ID,SQUADS,DEPARTMENT,MEMBERS/OFFICERS NAME,GENDER,DATE OF BIRTH,PHONE NUMBER,PLACE OF RESIDENCE,RESIDENTIAL/DIGITAL ADDRESS,HOMETOWN,OCCUPATION,HOME CELL GROUP,MONTH OF BIRTH,MARITAL STATUS,NAME OF SPOUSE,NUMBER OF CHILDREN,NAME OF PERSON TO CONTACT IN CASE OF EMERGENCY,EMERGENCY,IMAGE,date of baptism,date of marriage,date of salvation,date of membership
-Kofi,Kyeremeh,Boakye,Near Danquah Circle,Active cell leader,ACC-2024-042,Squad Alpha,Ushering,Head Usher,male,1988-06-14,+233241239988,Osu RE,GA-032-8812,Sunyani,Civil Engineer,Osu North cell,June,Married,Akosua Boakye,2,Akosua Boakye,+233244112233,,2015-08-20,2019-11-23,2012-04-10,2021-01-15
-Abena,Serwaa,Mensah,Opposite Shell Station,Choir soprano lead,ACC-2024-043,Squad Beta,Choir,Choir Secretary,female,1994-09-22,+233201994455,East Legon,GA-112-4091,Kumasi,Accountant,Ridge Fellowship,September,Single,,0,Mr. Kwame Mensah,+233502233445,,2017-03-12,,,2014-09-05,2022-03-10
-Emmanuel,Kwesi,Tetteh,Near Presby Church,Media crew operator,ACC-2024-044,Media Unit,Media & IT,Media Lead,male,1996-12-05,+233554477889,Cantonments,GA-492-1029,Ada,Software Developer,Cantonments Cell,December,Single,,0,Gladys Tetteh,+233271122334,,2019-11-10,,,2018-05-18,2023-02-01
-Grace,Ama,Darko,Around Police Depot,Women fellowship leader,ACC-2024-045,Squad Gamma,Protocol,Deaconess,female,1982-03-30,+233277889900,Ridge,GA-084-3321,Akropong,Pharmacist,Ridge Fellowship,March,Married,Dr. Samuel Darko,3,Dr. Samuel Darko,+233245667788,,2008-07-15,2011-12-18,2005-01-20,2015-06-12`;
-
 export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
   isOpen,
   onClose,
@@ -50,6 +43,7 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
   const [activeTab, setActiveTab] = useState<'upload' | 'paste' | 'preview'>('upload');
   const [pastedText, setPastedText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'valid' | 'errors'>('all');
   const [fileName, setFileName] = useState<string>('');
@@ -232,7 +226,7 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
       }
 
       // Set defaults for missing fields
-      data.groupName = data.homeCellGroup || 'Osu North cell';
+      data.groupName = data.homeCellGroup || 'General Congregation';
       data.homeCellGroup = data.homeCellGroup || data.groupName;
       data.status = 'member';
       data.autoCheckinOptedIn = true;
@@ -270,6 +264,7 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
     if (!file) return;
 
     setFileName(file.name);
+    setParseError(null);
     setIsParsing(true);
 
     Papa.parse<Record<string, string>>(file, {
@@ -280,12 +275,12 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
         if (results.data && results.data.length > 0) {
           processRawData(results.data);
         } else {
-          alert('The uploaded file was empty or had no readable headers.');
+          setParseError('The uploaded file was empty or had no readable headers.');
         }
       },
       error: (error) => {
         setIsParsing(false);
-        alert(`Error parsing CSV file: ${error.message}`);
+        setParseError(`Error parsing CSV file: ${error.message}`);
       },
     });
   };
@@ -293,6 +288,7 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
   const handlePasteParse = () => {
     if (!pastedText.trim()) return;
 
+    setParseError(null);
     setIsParsing(true);
     Papa.parse<Record<string, string>>(pastedText, {
       header: true,
@@ -302,32 +298,19 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
         if (results.data && results.data.length > 0) {
           processRawData(results.data);
         } else {
-          alert('Could not find valid tabular data in the pasted text.');
+          setParseError('Could not find valid tabular data in the pasted text.');
         }
       },
       error: (error: Error) => {
         setIsParsing(false);
-        alert(`Error parsing pasted data: ${error.message}`);
-      },
-    });
-  };
-
-  const handleLoadSample = () => {
-    setPastedText(SAMPLE_CSV_CONTENT);
-    setFileName('sample_accra_church_members.csv');
-    Papa.parse<Record<string, string>>(SAMPLE_CSV_CONTENT, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        processRawData(results.data);
+        setParseError(`Error parsing pasted data: ${error.message}`);
       },
     });
   };
 
   const handleDownloadTemplate = () => {
     const headers = MEMBERSHIP_TABLE_HEADERS.map((h) => h.header).join(',');
-    const sampleRow = `Kwame,Kofi,Mensah,Near Danquah Circle,Active usher,ACC-2024-001,Squad Alpha,Ushering,Head Usher,male,1990-05-12,+233241234567,Osu RE,GA-032-8812,Kumasi,Banker,Osu North cell,May,Married,Ama Mensah,2,Ama Mensah,+233244112233,,2015-08-20,2019-11-23,2010-04-10,2021-01-15`;
-    const csvData = `data:text/csv;charset=utf-8,${encodeURIComponent(`${headers}\n${sampleRow}\n`)}`;
+    const csvData = `data:text/csv;charset=utf-8,${encodeURIComponent(`${headers}\n`)}`;
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', csvData);
     downloadAnchor.setAttribute('download', 'church_membership_template.csv');
@@ -358,13 +341,13 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
 
       return {
         id: generatedId,
-        tenantId: 'tenant-accra',
+        tenantId: 'tenant-live',
         firstName: d.firstName || 'Unknown',
         middleName: d.middleName || undefined,
         lastName: d.lastName || 'Member',
         specificLocation: d.specificLocation || undefined,
         remarks: d.remarks || undefined,
-        memberId: d.memberId || `ACC-${new Date().getFullYear()}-${String(i + 1).padStart(3, '0')}`,
+        memberId: d.memberId || `MEM-${new Date().getFullYear()}-${String(i + 1).padStart(3, '0')}`,
         squads: d.squads || undefined,
         department: d.department || 'General Congregation',
         officerName: d.officerName || undefined,
@@ -376,8 +359,8 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
         residentialDigitalAddress: d.residentialDigitalAddress || undefined,
         hometown: d.hometown || undefined,
         occupation: d.occupation || undefined,
-        homeCellGroup: d.homeCellGroup || d.groupName || 'Osu North cell',
-        groupName: d.homeCellGroup || d.groupName || 'Osu North cell',
+        homeCellGroup: d.homeCellGroup || d.groupName || 'General Congregation',
+        groupName: d.homeCellGroup || d.groupName || 'General Congregation',
         monthOfBirth: d.monthOfBirth || undefined,
         maritalStatus: d.maritalStatus || 'Single',
         spouseName: d.spouseName || undefined,
@@ -487,19 +470,16 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
             </button>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={handleLoadSample}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition-all cursor-pointer"
-            >
-              <Sparkles className="w-3 h-3" />
-              Load Sample Data
-            </button>
-          </div>
         </div>
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-5">
+          {parseError && (
+            <div className="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{parseError}</span>
+            </div>
+          )}
           {activeTab === 'upload' && (
             <div className="flex flex-col items-center justify-center py-8">
               <div
@@ -562,18 +542,12 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
                   rows={10}
                   value={pastedText}
                   onChange={(e) => setPastedText(e.target.value)}
-                  placeholder="FIRST NAME,MIDDLE NAME,LASTNAME,PHONE NUMBER,SPECIFIC LOCATION,HOME CELL GROUP...&#10;Kwame,Kofi,Mensah,+233241234567,Osu,Osu North cell"
+                  placeholder="FIRST NAME,MIDDLE NAME,LASTNAME,PHONE NUMBER,SPECIFIC LOCATION,HOME CELL GROUP..."
                   className="w-full p-3 font-mono text-xs rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] placeholder-slate-400"
                 />
               </div>
 
               <div className="flex justify-end gap-2">
-                <button
-                  onClick={handleLoadSample}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:opacity-90 transition-all cursor-pointer"
-                >
-                  Load Sample Accra Congregation
-                </button>
                 <button
                   onClick={handlePasteParse}
                   disabled={!pastedText.trim() || isParsing}

@@ -10,8 +10,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function incoming() {
@@ -23,67 +27,84 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'akokosolutions24@gmail.com' ||
-        request.auth.token.email == 'amoakoemmanuel2020@gmail.com' ||
-        request.auth.token.email == 'elenamends@gmail.com' ||
-        request.auth.token.email == 'pastor.david@ekklesphere.org' ||
+      return isVerified() && (
+        request.auth.token.email == 'amoakoemmanuel2026@gmail.com' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'role']) &&
+        data.keys().hasOnly(['id', 'name', 'email', 'photoURL', 'role', 'title', 'campusName', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() > 0 && data.email.size() <= 254 &&
+        data.role in ['admin', 'usher', 'member'] &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024)) &&
+        (!('title' in data) || (data.title is string && data.title.size() <= 120)) &&
+        (!('campusName' in data) || (data.campusName is string && data.campusName.size() <= 120)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64));
+    }
+
     // 2. Users Collection
     match /users/{userId} {
-      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow list: if isSignedIn() && isAdmin();
-      allow create: if isSignedIn() && request.auth.uid == userId &&
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUser(incoming()) &&
         incoming().id == userId &&
-        incoming().email is string &&
-        incoming().name is string;
-      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+        incoming().email == request.auth.token.email &&
+        (incoming().role == 'member' || isAdmin());
+      allow update: if isVerified() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
         incoming().id == existing().id &&
-        incoming().email == existing().email;
-      allow delete: if isAdmin();
+        incoming().email == existing().email && (
+          isAdmin() ||
+          (request.auth.uid == userId &&
+           incoming().role == existing().role &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL', 'title', 'campusName']))
+        );
+      allow delete: if isValidId(userId) && isAdmin();
     }
 
     // 3. Members Collection (Congregation Roster)
     match /members/{memberId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && (
-        isAdmin() ||
-        (incoming().firstName is string && incoming().lastName is string && incoming().phoneE164 is string)
-      );
-      allow update: if isSignedIn() && isAdmin();
-      allow delete: if isSignedIn() && isAdmin();
+      allow get: if isSignedIn() && isValidId(memberId) && (isAdmin() || resource.data.id == request.auth.uid);
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(memberId) && isAdmin();
     }
 
     // 4. Attendance Records
     match /attendance_records/{recordId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && (
+      allow get: if isSignedIn() && isValidId(recordId) && (isAdmin() || resource.data.personId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.personId == request.auth.uid);
+      allow create: if isVerified() && isValidId(recordId) && (
         isAdmin() ||
-        incoming().personId is string
+        (incoming().personId is string && incoming().personId.size() <= 128 && incoming().personId == request.auth.uid)
       );
-      allow update: if isSignedIn() && isAdmin();
-      allow delete: if isSignedIn() && isAdmin();
+      allow update, delete: if isValidId(recordId) && isAdmin();
     }
 
     // 5. System Settings
     match /system_settings/{settingId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && isAdmin();
+      allow get: if isSignedIn() && isValidId(settingId);
+      allow write: if isValidId(settingId) && isAdmin();
     }
 
     // 6. Church Groups (Ministries, Fellowships, Cell Groups)
     match /church_groups/{groupId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && isAdmin();
+      allow get: if isSignedIn() && isValidId(groupId);
+      allow list: if isSignedIn() && resource.data.active == true;
+      allow write: if isValidId(groupId) && isAdmin();
     }
 
     // 7. Test connection probe
     match /test/{docId} {
-      allow read: if true;
+      allow get: if isValidId(docId);
     }
   }
 }

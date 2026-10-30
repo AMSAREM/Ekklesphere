@@ -98,7 +98,7 @@ create or replace function public.has_organization_access(
 returns boolean
 language plpgsql
 security definer
-set search_path = public, auth
+set search_path = public, auth, extensions
 stable
 as $$
 declare
@@ -178,7 +178,7 @@ create or replace function public.current_user_organization_ids()
 returns setof uuid
 language sql
 security definer
-set search_path = public, auth
+set search_path = public, auth, extensions
 stable
 as $$
   select organization_id
@@ -192,7 +192,7 @@ create or replace function public.get_user_organization_role(target_org_id uuid)
 returns text
 language sql
 security definer
-set search_path = public, auth
+set search_path = public, auth, extensions
 stable
 as $$
   select role
@@ -237,7 +237,7 @@ create table if not exists public.events (
   dwell_min int not null default 5,
   status text not null default 'scheduled' 
     check (status in ('scheduled', 'active', 'completed', 'cancelled')),
-  qr_secret text not null default encode(gen_random_bytes(24), 'hex'),
+  qr_secret text not null default replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
   created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -408,7 +408,7 @@ create or replace function public.handle_new_organization()
 returns trigger
 language plpgsql
 security definer
-set search_path = public, auth
+set search_path = public, auth, extensions
 as $$
 declare
   v_user_id uuid;
@@ -489,90 +489,47 @@ create trigger touch_attendance_updated_at
   for each row execute function public.touch_updated_at();
 
 -- ----------------------------------------------------------------------------
--- 10. INITIAL PILOT SEED DATA (ACCRA CENTRAL CHURCH)
+-- 10. INITIAL LIVE ORGANIZATION BOOTSTRAP (NO FAKE MEMBERS OR CHECK-INS)
+-- Note: public.members.user_id references auth.users(id). Never insert a
+-- hardcoded placeholder UUID that does not exist in auth.users.
+-- If at least one real Supabase Auth user already exists, link them as owner.
 -- ----------------------------------------------------------------------------
 insert into public.organizations (
   id, name, slug, timezone, settings
 ) values (
   'e0000000-0000-0000-0000-000000000001',
-  'Accra Central Church',
-  'accra-central',
+  'Primary Church Organization',
+  'primary-church',
   'Africa/Accra',
   '{
     "currency": "GHS",
     "absence_threshold_leader": 2,
     "absence_threshold_pastor": 3,
     "dwell_min_default": 5,
-    "geofence_inner_radius_m": 100,
+    "geofence_inner_radius_m": 50,
     "geofence_outer_radius_m": 300,
     "require_dwell": true
   }'::jsonb
-) on conflict (slug) do nothing;
+) on conflict do nothing;
 
--- Seed members
 insert into public.members (
-  id, organization_id, user_id, first_name, last_name, phone_e164, email, role, status
-) values
-(
-  'b0000000-0000-0000-0000-000000000001',
-  'e0000000-0000-0000-0000-000000000001',
-  '00000000-0000-0000-0000-000000000001',
-  'Ama', 'Owusu', '+233241234567', 'ama.owusu@accracentral.org', 'admin', 'active'
-),
-(
-  'b0000000-0000-0000-0000-000000000002',
-  'e0000000-0000-0000-0000-000000000001',
-  null,
-  'Kofi', 'Mensah', '+233249876543', 'kofi.mensah@gmail.com', 'member', 'active'
-),
-(
-  'b0000000-0000-0000-0000-000000000003',
-  'e0000000-0000-0000-0000-000000000001',
-  null,
-  'Kwame', 'Boateng', '+233205551234', 'kwame.boateng@gmail.com', 'usher', 'active'
-),
-(
-  'b0000000-0000-0000-0000-000000000004',
-  'e0000000-0000-0000-0000-000000000001',
-  null,
-  'Abena', 'Antwi', '+233267778899', 'abena.antwi@gmail.com', 'pastor', 'active'
+  organization_id,
+  user_id,
+  first_name,
+  last_name,
+  email,
+  role,
+  status
 )
-on conflict (id) do nothing;
-
--- Seed Sunday Service Event
-insert into public.events (
-  id, organization_id, name, description, location, geo_center,
-  radius_m, inner_radius_m, outer_radius_m,
-  start_time, end_time, checkin_window_start, checkin_window_end, dwell_min, status
-) values (
-  'ee000000-0000-0000-0000-000000000001',
+select
   'e0000000-0000-0000-0000-000000000001',
-  'Sunday Morning Celebration Service',
-  'Weekly Sunday Main Service at Accra Central Sanctuary',
-  'Accra Central Sanctuary, Ring Road Central, Accra',
-  ST_SetSRID(ST_MakePoint(-0.1969, 5.5560), 4326),
-  150, 100, 300,
-  now() - interval '1 hour',
-  now() + interval '2 hours',
-  now() - interval '2 hours',
-  now() + interval '3 hours',
-  5,
+  u.id,
+  coalesce(nullif(u.raw_user_meta_data->>'first_name', ''), split_part(coalesce(u.email, 'admin'), '@', 1)),
+  coalesce(nullif(u.raw_user_meta_data->>'last_name', ''), 'Admin'),
+  u.email,
+  'owner',
   'active'
-) on conflict (id) do nothing;
-
--- Seed Attendance Records
-insert into public.attendance (
-  id, organization_id, event_id, member_id, user_id, checked_in_at, method, status, confidence_score, distance_m, accuracy_m
-) values (
-  'aa000000-0000-0000-0000-000000000001',
-  'e0000000-0000-0000-0000-000000000001',
-  'ee000000-0000-0000-0000-000000000001',
-  'b0000000-0000-0000-0000-000000000001',
-  '00000000-0000-0000-0000-000000000001',
-  now() - interval '45 minutes',
-  'geofence',
-  'accepted',
-  95,
-  28.5,
-  14.0
-) on conflict (organization_id, event_id, member_id) do nothing;
+from auth.users u
+order by u.created_at asc
+limit 1
+on conflict (organization_id, user_id) do nothing;

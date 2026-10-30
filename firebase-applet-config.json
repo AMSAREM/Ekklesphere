@@ -1,12 +1,12 @@
 {
-  "projectId": "elemental-expanse-z8chg",
-  "appId": "1:651753405926:web:be6403ab3734c505fd6a27",
-  "apiKey": "AIzaSyDsVwRXnNhlc5a3BEyn7dHgcX0OLyWfpyI",
-  "authDomain": "elemental-expanse-z8chg.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-ekklesphere-22d577bf-2886-4f24-a8d9-04f58fba023a",
-  "storageBucket": "elemental-expanse-z8chg.firebasestorage.app",
-  "messagingSenderId": "651753405926",
+  "projectId": "gen-lang-client-0174216882",
+  "appId": "1:304404545050:web:9b845db05d608d44765ba3",
+  "apiKey": "AIzaSyD25-HSumHMmcfqfoGTVORezc65i3Rb7IA",
+  "authDomain": "gen-lang-client-0174216882.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-ekklesphere-98482f7a-941d-4b6d-9976-ca3b9e053881",
+  "storageBucket": "gen-lang-client-0174216882.firebasestorage.app",
+  "messagingSenderId": "304404545050",
   "measurementId": "",
-  "oAuthClientId": "651753405926-o93d6282k8o20m5tj8bfheb62pmbtoft.apps.googleusercontent.com",
+  "oAuthClientId": "304404545050-5evasn9nfha09p79nfarhilk3con1li9.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

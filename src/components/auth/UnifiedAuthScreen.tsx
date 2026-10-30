@@ -1,36 +1,34 @@
 import React, { useState } from 'react';
-import { useEkklesphere, DEMO_USERS } from '../../context/EkklesphereContext';
+import { useEkklesphere } from '../../context/EkklesphereContext';
 import { UserRole } from '../../types/ekklesphere';
 import {
-  Church,
   ShieldCheck,
   LayoutDashboard,
   Smartphone,
   QrCode,
-  Radio,
   UserCheck,
   Lock,
   Mail,
   UserPlus,
-  ArrowRight,
-  CheckCircle2,
-  Sparkles,
   KeyRound,
-  Phone,
-  Users,
+  AlertCircle,
+  X,
 } from 'lucide-react';
 
 export const UnifiedAuthScreen: React.FC = () => {
   const {
-    login,
     loginWithCredentials,
     registerMember,
     signInWithGoogle,
     isGoogleAuthLoading,
+    googleAuthError,
+    clearGoogleAuthError,
+    systemSettings,
+    churchGroups,
     showToast,
   } = useEkklesphere();
 
-  const [activeTab, setActiveTab] = useState<'demo' | 'login' | 'register'>('demo');
+  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
@@ -42,7 +40,7 @@ export const UnifiedAuthScreen: React.FC = () => {
   const [regLastName, setRegLastName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPhone, setRegPhone] = useState('+233 ');
-  const [regGroup, setRegGroup] = useState('Osu North cell');
+  const [regGroup, setRegGroup] = useState('General Congregation');
   const [regAutoCheckin, setRegAutoCheckin] = useState(true);
 
   const handleCredentialsSubmit = (e: React.FormEvent) => {
@@ -80,7 +78,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span>Role-Based Access Gateway</span>
                 <span className="text-white/60">·</span>
-                <span className="text-emerald-300">Accra Central Church</span>
+                <span className="text-emerald-300">{systemSettings.churchName || 'PIWC KWADASO'}</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
                 Role-Based Church Management
@@ -103,20 +101,6 @@ export const UnifiedAuthScreen: React.FC = () => {
 
           {/* Tab Navigation */}
           <div className="flex items-center gap-2 mt-6 pt-4 border-t border-white/15">
-            <button
-              onClick={() => setActiveTab('demo')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                activeTab === 'demo'
-                  ? 'bg-white text-[#1D1B3A] shadow-md shadow-black/20'
-                  : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Quick Demo Roles</span>
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-extrabold">
-                Recommended
-              </span>
-            </button>
 
             <button
               onClick={() => setActiveTab('login')}
@@ -175,7 +159,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                 </span>
               </h3>
               <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                Authenticate with your personal Google credentials to access Accra Central portals.
+                Authenticate with your Google account to access {systemSettings.churchName || 'PIWC KWADASO'} portals.
               </p>
             </div>
           </div>
@@ -208,175 +192,26 @@ export const UnifiedAuthScreen: React.FC = () => {
           </button>
         </div>
 
+        {googleAuthError && (
+          <div className="mx-6 sm:mx-8 mt-3 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <span>{googleAuthError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearGoogleAuthError}
+              aria-label="Dismiss notice"
+              className="text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 p-0.5 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Content Body */}
         <div className="p-6 sm:p-8">
-          {/* TAB 1: QUICK DEMO PROFILES */}
-          {activeTab === 'demo' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Select your assigned role to access its dedicated portal
-                </h2>
-                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Every role has its own dedicated portal, tools, and access boundaries. Sign in below to enter your workspace:
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* 1. Admin / Pastor Card */}
-                <div className="group relative bg-[#F8F9FE] dark:bg-[#1A1A3A] border-2 border-indigo-100 dark:border-indigo-950/80 hover:border-[#6D5CF2] dark:hover:border-[#8C7DFF] rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-900/40 text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center font-black text-sm shadow-inner">
-                        DO
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EFEDFF] dark:bg-indigo-950 text-[#6D5CF2] dark:text-[#8C7DFF] border border-indigo-200 dark:border-indigo-800">
-                        ADMIN
-                      </span>
-                    </div>
-
-                    <div>
-                      <h3 className="font-bold text-sm text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {DEMO_USERS.admin.name}
-                      </h3>
-                      <div className="text-[11px] font-medium text-[#666A86] dark:text-[#A9ACC8]">
-                        Senior Pastor & Administrator
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">
-                        {DEMO_USERS.admin.email}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 text-xs text-[#555870] dark:text-[#A9ACC8] space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Executive service attendance tally</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Pastoral care follow-up queue</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Proximity radar diagnostic lab</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => login(DEMO_USERS.admin)}
-                    className="mt-5 w-full py-2.5 px-4 rounded-xl bg-[#6D5CF2] hover:bg-[#5A48DE] text-white text-xs font-bold shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
-                  >
-                    <LayoutDashboard className="w-4 h-4" />
-                    <span>Open Leadership Suite</span>
-                    <ArrowRight className="w-3.5 h-3.5 ml-auto" />
-                  </button>
-                </div>
-
-                {/* 2. Usher Lead Card */}
-                <div className="group relative bg-[#F8F9FE] dark:bg-[#1A1A3A] border-2 border-indigo-100 dark:border-indigo-950/80 hover:border-amber-500 dark:hover:border-amber-400 rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center font-black text-sm shadow-inner">
-                        ST
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                        USHER
-                      </span>
-                    </div>
-
-                    <div>
-                      <h3 className="font-bold text-sm text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {DEMO_USERS.usher.name}
-                      </h3>
-                      <div className="text-[11px] font-medium text-[#666A86] dark:text-[#A9ACC8]">
-                        Ushering Lead & Door Steward
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">
-                        {DEMO_USERS.usher.email}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 text-xs text-[#555870] dark:text-[#A9ACC8] space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Rapid door attendee search</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Offline check-in sync queue</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Quick visitor onboarding</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => login(DEMO_USERS.usher)}
-                    className="mt-5 w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-md shadow-amber-600/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
-                  >
-                    <QrCode className="w-4 h-4" />
-                    <span>Open Door Station</span>
-                    <ArrowRight className="w-3.5 h-3.5 ml-auto" />
-                  </button>
-                </div>
-
-                {/* 3. Member Card */}
-                <div className="group relative bg-[#F8F9FE] dark:bg-[#1A1A3A] border-2 border-indigo-100 dark:border-indigo-950/80 hover:border-emerald-500 dark:hover:border-emerald-400 rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black text-sm shadow-inner">
-                        AM
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                        MEMBER
-                      </span>
-                    </div>
-
-                    <div>
-                      <h3 className="font-bold text-sm text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {DEMO_USERS.member.name}
-                      </h3>
-                      <div className="text-[11px] font-medium text-[#666A86] dark:text-[#A9ACC8]">
-                        Member, Osu North Cell
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">
-                        {DEMO_USERS.member.email}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 text-xs text-[#555870] dark:text-[#A9ACC8] space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Auto proximity radar pass</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>MTN & Telecel MoMo giving</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[11px]">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        <span>Calendar RSVP & personal QR</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => login(DEMO_USERS.member)}
-                    className="mt-5 w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/25 flex items-center justify-center gap-2 group-hover:scale-[1.02] transition-transform"
-                  >
-                    <Smartphone className="w-4 h-4" />
-                    <span>Open Member Portal</span>
-                    <ArrowRight className="w-3.5 h-3.5 ml-auto" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: CREDENTIALS LOGIN */}
+          {/* CREDENTIALS LOGIN */}
           {activeTab === 'login' && (
             <div className="max-w-md mx-auto space-y-5">
               <div className="text-center space-y-1">
@@ -434,7 +269,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                       required
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="e.g. pastor.david@ekklesphere.org"
+                      placeholder="name@church.org"
                       className="w-full pl-10 pr-4 py-2.5 text-xs rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                     />
                   </div>
@@ -505,16 +340,6 @@ export const UnifiedAuthScreen: React.FC = () => {
                     <input type="checkbox" defaultChecked className="rounded text-[#6D5CF2]" />
                     <span>Remember terminal</span>
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('pastor.david@ekklesphere.org');
-                      setSelectedRole('admin');
-                    }}
-                    className="text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline"
-                  >
-                    Fill demo admin
-                  </button>
                 </div>
 
                 <button
@@ -533,7 +358,7 @@ export const UnifiedAuthScreen: React.FC = () => {
             <div className="max-w-lg mx-auto space-y-5">
               <div className="text-center space-y-1">
                 <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Register as a Member of Accra Central
+                  Register as a Member of {systemSettings.churchName || 'PIWC KWADASO'}
                 </h2>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                   Join the congregation database to enable your automated proximity pass, event check-in, and online giving.
@@ -608,14 +433,17 @@ export const UnifiedAuthScreen: React.FC = () => {
                     onChange={(e) => setRegGroup(e.target.value)}
                     className="w-full px-3 py-2 text-xs rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   >
-                    <option value="Osu North cell">Osu North Cell</option>
-                    <option value="Cantonments cell">Cantonments Cell</option>
-                    <option value="Ridge & Airport cell">Ridge & Airport Cell</option>
-                    <option value="Youth fellowship">Youth Fellowship</option>
-                    <option value="Choir">Church Choir</option>
-                    <option value="Ushers">Ushering Department</option>
-                    <option value="Men’s fellowship">Men’s Fellowship</option>
-                    <option value="Women’s fellowship">Women’s Fellowship</option>
+                    <option value="General Congregation">General Congregation</option>
+                    {churchGroups.map((g) => (
+                      <option key={g.id} value={g.name}>
+                        {g.name}
+                      </option>
+                    ))}
+                    <option value="Youth Fellowship">Youth Fellowship</option>
+                    <option value="Choir & Music">Choir & Music</option>
+                    <option value="Ushering Ministry">Ushering Ministry</option>
+                    <option value="Men’s Fellowship">Men’s Fellowship</option>
+                    <option value="Women’s Fellowship">Women’s Fellowship</option>
                   </select>
                 </div>
 
@@ -630,7 +458,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                   <label htmlFor="autoCheckinConsent" className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA] cursor-pointer">
                     <span className="font-bold block">Opt-in to Automated Proximity Check-in</span>
                     <span className="text-[#666A86] dark:text-[#A9ACC8] text-[11px] block mt-0.5">
-                      Your phone will automatically acknowledge your presence when you arrive on Sunday morning via Bluetooth Beacon & Accra Central geofence.
+                      Your phone will automatically acknowledge your presence when you arrive at {systemSettings.campusName || 'church'} via the active campus geofence.
                     </span>
                   </label>
                 </div>

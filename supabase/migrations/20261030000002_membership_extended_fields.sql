@@ -51,9 +51,9 @@ create index if not exists members_squads_idx on public.members (organization_id
 create index if not exists members_marital_status_idx on public.members (organization_id, marital_status);
 
 -- ----------------------------------------------------------------------------
--- 2. EXTEND public.persons TABLE
+-- 2. EXTEND public.persons TABLE (IF PRESENT)
 -- ----------------------------------------------------------------------------
-alter table public.persons
+alter table if exists public.persons
   add column if not exists middle_name text,
   add column if not exists specific_location text,
   add column if not exists remarks text,
@@ -79,9 +79,14 @@ alter table public.persons
   add column if not exists date_of_salvation date,
   add column if not exists date_of_membership date;
 
-create index if not exists persons_member_id_idx on public.persons (member_id);
-create index if not exists persons_home_cell_group_idx on public.persons (tenant_id, home_cell_group);
-create index if not exists persons_department_idx on public.persons (tenant_id, department);
+do $$
+begin
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'persons') then
+    execute 'create index if not exists persons_member_id_idx on public.persons (member_id)';
+    execute 'create index if not exists persons_home_cell_group_idx on public.persons (tenant_id, home_cell_group)';
+    execute 'create index if not exists persons_department_idx on public.persons (tenant_id, department)';
+  end if;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 3. VALIDATION RPC FUNCTION FOR MEMBERSHIP BATCH IMPORT
@@ -93,7 +98,7 @@ create or replace function public.import_members_batch(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, auth
 as $$
 declare
   item jsonb;

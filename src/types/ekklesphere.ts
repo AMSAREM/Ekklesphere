@@ -78,8 +78,8 @@ export interface Person {
   dateOfBirth?: string; // DATE OF BIRTH (YYYY-MM-DD)
   phoneE164: string; // PHONE NUMBER (E.164 format)
   phoneNumber?: string; // raw phone
-  placeOfResidence?: string; // PLACE OF RESIDENCE (e.g. Osu, East Legon)
-  residentialDigitalAddress?: string; // RESIDENTIAL/DIGITAL ADDRESS (e.g. GA-183-9022)
+  placeOfResidence?: string; // PLACE OF RESIDENCE
+  residentialDigitalAddress?: string; // RESIDENTIAL/DIGITAL ADDRESS (GhanaPost GPS)
   hometown?: string; // HOMETOWN
   occupation?: string; // OCCUPATION
   homeCellGroup?: string; // HOME CELL GROUP
@@ -248,6 +248,10 @@ export interface SystemSettings {
   churchName: string;
   campusName: string;
   campusAddress: string;
+  campusLatitude: number | null;
+  campusLongitude: number | null;
+  campusLocationAccuracyM?: number | null;
+  campusLocationUpdatedAt?: string | null;
   seniorPastor: string;
   contactEmail: string;
   contactPhone: string;

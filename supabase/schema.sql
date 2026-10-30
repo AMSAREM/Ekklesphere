@@ -581,97 +581,11 @@ create policy "service_role full signals" on attendance_signals
   for all using (auth.role() = 'service_role');
 
 -- ----------------------------------------------------------------------------
--- 12. SEED DATA (Pilot: Accra Central Church)
+-- 12. INITIAL TENANT BOOTSTRAP (CLEAN — NO FAKE PEOPLE OR FAKE COORDINATES)
 -- ----------------------------------------------------------------------------
-do $$
-declare
-  v_tenant_id uuid := '11111111-1111-1111-1111-111111111111';
-  v_campus_id uuid := '22222222-2222-2222-2222-222222222222';
-  v_service_id uuid := '33333333-3333-3333-3333-333333333333';
-  v_fund_id uuid := '44444444-4444-4444-4444-444444444444';
-  v_person_1 uuid := '55555555-5555-5555-5555-555555555551';
-  v_person_2 uuid := '55555555-5555-5555-5555-555555555552';
-  v_user_1 uuid := '66666666-6666-6666-6666-666666666661';
-begin
-  -- 1. Tenant
-  insert into tenants (id, name, slug, timezone)
-  values (v_tenant_id, 'Accra Central Assembly', 'accra-central', 'Africa/Accra')
-  on conflict (id) do nothing;
-
-  -- 2. Campus with GPS center (Accra Central Sanctuary: lat 5.5560, lng -0.1969)
-  insert into campuses (id, tenant_id, name, address, center, inner_radius_m, outer_radius_m, active)
-  values (
-    v_campus_id,
-    v_tenant_id,
-    'Accra Central Sanctuary',
-    'Liberation Road, Accra, Ghana',
-    ST_SetSRID(ST_MakePoint(-0.1969, 5.5560), 4326)::geography,
-    100,
-    300,
-    true
-  )
-  on conflict (id) do nothing;
-
-  -- 3. Entrance BLE Beacon
-  insert into beacons (tenant_id, campus_id, beacon_uuid, major, minor, label)
-  values (
-    v_tenant_id,
-    v_campus_id,
-    'e2c56db5-dffb-48d2-b060-d0f5a71096e0',
-    10,
-    1,
-    'Main Sanctuary Foyer'
-  )
-  on conflict (beacon_uuid, major, minor) do nothing;
-
-  -- 4. Default Sunday Service
-  insert into services (
-    id, tenant_id, campus_id, name, kind,
-    start_time, duration_min, window_before_min, window_after_min, dwell_min, active
-  )
-  values (
-    v_service_id,
-    v_tenant_id,
-    v_campus_id,
-    'Sunday Morning Celebration Service',
-    'service',
-    '08:30:00',
-    120,
-    60,
-    30,
-    5,
-    true
-  )
-  on conflict (id) do nothing;
-
-  -- 5. Seed Persons (Admin Pastor and Member)
-  insert into persons (id, tenant_id, first_name, last_name, phone_e164, email, status)
-  values
-    (v_person_1, v_tenant_id, 'Kwame', 'Appiah', '+233241234567', 'pastor.kwame@ekklesphere.org', 'member'),
-    (v_person_2, v_tenant_id, 'Ama', 'Mensah', '+233209876543', 'ama.mensah@gmail.com', 'member')
-  on conflict do nothing;
-
-  -- 6. Users & Roles
-  insert into users (id, tenant_id, person_id, status)
-  values (v_user_1, v_tenant_id, v_person_1, 'active')
-  on conflict (id) do nothing;
-
-  insert into user_roles (user_id, role)
-  values (v_user_1, 'admin'), (v_user_1, 'pastor')
-  on conflict do nothing;
-
-  -- 7. Giving Funds (Tithe & Offering)
-  insert into funds (id, tenant_id, name, active)
-  values (v_fund_id, v_tenant_id, 'General Tithe & Missions', true)
-  on conflict (id) do nothing;
-
-  -- 8. Default Consents
-  insert into consents (tenant_id, person_id, type, granted, text_version, channel)
-  values
-    (v_tenant_id, v_person_2, 'auto_checkin', true, 'v1.0-act843', 'app'),
-    (v_tenant_id, v_person_2, 'push', true, 'v1.0-act843', 'app')
-  on conflict do nothing;
-end $$;
+insert into tenants (id, name, slug, timezone)
+values ('11111111-1111-1111-1111-111111111111', 'Primary Church Organization', 'primary-church', 'Africa/Accra')
+on conflict do nothing;
 
 -- ----------------------------------------------------------------------------
 -- 12. MULTI-TENANT SCHEMA (organizations, members, events, attendance)
@@ -847,60 +761,79 @@ alter table public.events enable row level security;
 alter table public.attendance enable row level security;
 
 -- Policies using has_organization_access
+drop policy if exists "org_select_members" on public.organizations;
 create policy "org_select_members" on public.organizations
   for select using (public.has_organization_access(id));
 
+drop policy if exists "org_insert_authenticated" on public.organizations;
 create policy "org_insert_authenticated" on public.organizations
   for insert with check (auth.role() = 'authenticated');
 
+drop policy if exists "org_update_admins" on public.organizations;
 create policy "org_update_admins" on public.organizations
   for update using (public.has_organization_access(id, 'admin'));
 
+drop policy if exists "members_select_policy" on public.members;
 create policy "members_select_policy" on public.members
   for select using (public.has_organization_access(organization_id));
 
+drop policy if exists "members_insert_policy" on public.members;
 create policy "members_insert_policy" on public.members
   for insert with check (
     public.has_organization_access(organization_id, 'admin')
     or (auth.uid() = user_id and public.has_organization_access(organization_id))
   );
 
+drop policy if exists "members_update_policy" on public.members;
 create policy "members_update_policy" on public.members
   for update using (
     public.has_organization_access(organization_id, 'admin')
     or (auth.uid() = user_id and public.has_organization_access(organization_id))
   );
 
+drop policy if exists "members_delete_policy" on public.members;
 create policy "members_delete_policy" on public.members
   for delete using (public.has_organization_access(organization_id, 'admin'));
 
+drop policy if exists "events_select_policy" on public.events;
 create policy "events_select_policy" on public.events
   for select using (public.has_organization_access(organization_id));
 
+drop policy if exists "events_insert_policy" on public.events;
 create policy "events_insert_policy" on public.events
   for insert with check (public.has_organization_access(organization_id, 'admin'));
 
+drop policy if exists "events_update_policy" on public.events;
 create policy "events_update_policy" on public.events
   for update using (public.has_organization_access(organization_id, 'admin'));
 
+drop policy if exists "attendance_select_policy" on public.attendance;
 create policy "attendance_select_policy" on public.attendance
   for select using (public.has_organization_access(organization_id));
 
+drop policy if exists "attendance_insert_policy" on public.attendance;
 create policy "attendance_insert_policy" on public.attendance
   for insert with check (
     public.has_organization_access(organization_id)
     and (auth.uid() = user_id or public.has_organization_access(organization_id, 'usher'))
   );
 
+drop policy if exists "attendance_update_policy" on public.attendance;
 create policy "attendance_update_policy" on public.attendance
   for update using (public.has_organization_access(organization_id, 'usher'));
 
 -- ----------------------------------------------------------------------------
 -- 13. SECURITY ADVISOR REMEDIATIONS & COVERING INDEXES
 -- ----------------------------------------------------------------------------
-alter table if exists public.spatial_ref_sys enable row level security;
-drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
-create policy "allow_read_spatial_ref_sys" on public.spatial_ref_sys for select using (true);
+do $$
+begin
+  alter table if exists public.spatial_ref_sys enable row level security;
+  drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
+  create policy "allow_read_spatial_ref_sys" on public.spatial_ref_sys for select using (true);
+exception
+  when insufficient_privilege or undefined_table then
+    raise notice 'Skipping spatial_ref_sys RLS (managed by PostGIS extension owner).';
+end $$;
 
 -- Revoke execute on sensitive internal RPCs
 do $$
@@ -925,8 +858,7 @@ create index if not exists idx_fk_persons_household on public.persons (household
 create index if not exists idx_fk_users_tenant on public.users (tenant_id);
 create index if not exists idx_fk_users_person on public.users (person_id);
 create index if not exists idx_fk_user_roles_user on public.user_roles (user_id);
-create index if not exists idx_fk_devices_tenant on public.devices (tenant_id);
-create index if not exists idx_fk_devices_person on public.devices (person_id);
+create index if not exists idx_fk_devices_user on public.devices (user_id);
 create index if not exists idx_fk_consents_tenant on public.consents (tenant_id);
 create index if not exists idx_fk_consents_person on public.consents (person_id);
 create index if not exists idx_fk_services_tenant on public.services (tenant_id);
@@ -942,13 +874,13 @@ create index if not exists idx_fk_attendance_signals_device on public.attendance
 create index if not exists idx_fk_attendance_records_tenant on public.attendance_records (tenant_id);
 create index if not exists idx_fk_attendance_records_instance on public.attendance_records (service_instance_id);
 create index if not exists idx_fk_attendance_records_person on public.attendance_records (person_id);
-create index if not exists idx_fk_attendance_records_user on public.attendance_records (user_id);
+create index if not exists idx_fk_attendance_records_recorded_by on public.attendance_records (recorded_by);
 create index if not exists idx_fk_followup_tasks_tenant on public.followup_tasks (tenant_id);
 create index if not exists idx_fk_followup_tasks_person on public.followup_tasks (person_id);
-create index if not exists idx_fk_followup_tasks_assigned_user on public.followup_tasks (assigned_to_user_id);
+create index if not exists idx_fk_followup_tasks_assigned_to on public.followup_tasks (assigned_to);
 create index if not exists idx_fk_pastoral_notes_tenant on public.pastoral_notes (tenant_id);
 create index if not exists idx_fk_pastoral_notes_person on public.pastoral_notes (person_id);
-create index if not exists idx_fk_pastoral_notes_author on public.pastoral_notes (author_user_id);
+create index if not exists idx_fk_pastoral_notes_author on public.pastoral_notes (author_id);
 create index if not exists idx_fk_funds_tenant on public.funds (tenant_id);
 create index if not exists idx_fk_donations_tenant on public.donations (tenant_id);
 create index if not exists idx_fk_donations_person on public.donations (person_id);

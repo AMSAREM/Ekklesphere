@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Camera,
@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Users,
   Search,
-  Sparkles,
   MapPin,
   Clock,
   ShieldCheck,
@@ -31,8 +30,19 @@ interface MemberQrScannerModalProps {
 export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   isOpen,
   onClose,
+  currentUserMember,
 }) => {
-  const { members, checkInPerson, attendanceRecords, showToast, currentService } = useEkklesphere();
+  const {
+    members,
+    checkInPerson,
+    attendanceRecords,
+    showToast,
+    currentService,
+    services,
+    churchGroups,
+    systemSettings,
+    currentUser,
+  } = useEkklesphere();
 
   const [activeMode, setActiveMode] = useState<'scanner' | 'my_code'>('scanner');
   const [flashlightOn, setFlashlightOn] = useState(false);
@@ -42,18 +52,17 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   const [scannedMember, setScannedMember] = useState<Person | null>(null);
   const [scannedSessionList, setScannedSessionList] = useState<{ member: Person; time: string }[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
-  const [fellowshipContext, setFellowshipContext] = useState<string>('Sunday Service');
-  const [isAutoScanning, setIsAutoScanning] = useState(false);
-
-  const autoScanTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
-    };
-  }, []);
+  const [fellowshipContext, setFellowshipContext] = useState<string>(currentService.name);
 
   if (!isOpen) return null;
+
+  const passHolderName = currentUserMember
+    ? `${currentUserMember.firstName} ${currentUserMember.lastName}`
+    : currentUser?.name || 'Registered Member';
+  const passMemberId =
+    currentUserMember?.memberId ||
+    (currentUserMember?.id ? `MEM-${currentUserMember.id.slice(0, 6).toUpperCase()}` : currentUser?.id ? `USR-${currentUser.id.slice(0, 6).toUpperCase()}` : 'UNASSIGNED');
+  const passQrToken = `${passHolderName.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}-${passMemberId}`;
 
   const playScanBeep = () => {
     if (!soundEnabled) return;
@@ -83,7 +92,6 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
 
   const handleProcessScan = (targetMember: Person) => {
     setIsScanning(false);
-    setIsAutoScanning(false);
     playScanBeep();
 
     // Check if member already checked in
@@ -107,32 +115,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
       ];
     });
 
-    showToast(`Scanned ${targetMember.firstName} ${targetMember.lastName} (${targetMember.groupName || targetMember.homeCellGroup})`);
-  };
-
-  const handleAutoScanSimulation = () => {
-    setIsAutoScanning(true);
-    setIsScanning(true);
-    setScannedMember(null);
-
-    // Pick a random member from the list
-    const candidateMembers = members.filter((m) => m.id !== 'm1');
-    const randomMember = candidateMembers[Math.floor(Math.random() * candidateMembers.length)] || members[0];
-
-    autoScanTimerRef.current = setTimeout(() => {
-      if (randomMember) {
-        handleProcessScan(randomMember);
-      }
-    }, 1400);
+    showToast(`Scanned ${targetMember.firstName} ${targetMember.lastName} (${targetMember.groupName || targetMember.homeCellGroup || 'General'})`);
   };
 
   const handleResetScanner = () => {
     setScannedMember(null);
     setIsScanning(true);
-    setIsAutoScanning(false);
   };
 
-  // Filter candidates for quick simulation pills
+  // Filter registered members for badge verification
   const availableMembers = members.filter((m) => {
     if (!searchFilter.trim()) return true;
     const q = searchFilter.toLowerCase();
@@ -229,27 +220,22 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   onChange={(e) => setFellowshipContext(e.target.value)}
                   className="bg-transparent text-white font-bold text-xs outline-none cursor-pointer text-right"
                 >
-                  <option value="Sunday Service" className="bg-[#1C1C3C] text-white">
-                    {currentService.name.split(',')[0]} (Main Sanctuary)
-                  </option>
-                  <option value="Osu North Cell Meeting" className="bg-[#1C1C3C] text-white">
-                    Osu North Cell Meeting
-                  </option>
-                  <option value="Choir Rehearsal" className="bg-[#1C1C3C] text-white">
-                    Choir Rehearsal
-                  </option>
-                  <option value="Youth Fellowship" className="bg-[#1C1C3C] text-white">
-                    Youth Fellowship
-                  </option>
-                  <option value="Midweek Prayer" className="bg-[#1C1C3C] text-white">
-                    Midweek Prayer & Communion
-                  </option>
+                  {services.map((svc) => (
+                    <option key={svc.id} value={svc.name} className="bg-[#1C1C3C] text-white">
+                      {svc.name} ({systemSettings.campusName})
+                    </option>
+                  ))}
+                  {churchGroups.map((grp) => (
+                    <option key={grp.id} value={grp.name} className="bg-[#1C1C3C] text-white">
+                      {grp.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              {/* CAMERA SIMULATION VIEWFINDER HUD */}
+              {/* CAMERA VIEWFINDER HUD */}
               <div className="relative aspect-4/3 w-full rounded-3xl overflow-hidden bg-black border-2 border-white/15 shadow-2xl flex items-center justify-center">
-                {/* Simulated Lens Feed Background */}
+                {/* Lens Feed Background */}
                 <div
                   className={`absolute inset-0 bg-gradient-to-br from-[#121124] via-[#1A1833] to-[#0A0914] ${
                     flashlightOn ? 'brightness-125 saturate-150' : 'brightness-100'
@@ -326,17 +312,8 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   {/* Scanning Status Badge */}
                   <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
                     <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md text-[11px] font-bold text-white/90 border border-white/10 flex items-center gap-1.5">
-                      {isAutoScanning ? (
-                        <>
-                          <RefreshCw className="w-3 h-3 text-[#59C3C3] animate-spin" />
-                          <span>Locking onto QR Code...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Scan className="w-3 h-3 text-[#6D5CF2]" />
-                          <span>Align member QR code inside square</span>
-                        </>
-                      )}
+                      <Scan className="w-3 h-3 text-[#6D5CF2]" />
+                      <span>Align member QR code inside square</span>
                     </span>
                   </div>
                 </div>
@@ -346,15 +323,9 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   <span className="text-[10px] text-slate-400 font-mono">
                     Auto-detects Ekklesphere Badges
                   </span>
-
-                  <button
-                    onClick={handleAutoScanSimulation}
-                    disabled={isAutoScanning}
-                    className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 active:scale-95"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                    <span>Auto-Scan Camera Demo</span>
-                  </button>
+                  <span className="text-[10px] text-emerald-400 font-mono">
+                    {systemSettings.campusName}
+                  </span>
                 </div>
               </div>
 
@@ -382,10 +353,10 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                           </h3>
                         </div>
                         <p className="text-xs text-emerald-300/90 font-mono">
-                          ID: {scannedMember.memberId || `ACC-${scannedMember.id.slice(0, 6)}`}
+                          ID: {scannedMember.memberId || `MEM-${scannedMember.id.slice(0, 6).toUpperCase()}`}
                         </p>
                         <p className="text-[11px] text-slate-300 mt-0.5">
-                          {scannedMember.groupName || scannedMember.homeCellGroup} · {scannedMember.department || 'General'}
+                          {scannedMember.groupName || scannedMember.homeCellGroup || 'General'} · {scannedMember.department || 'General'}
                         </p>
                       </div>
                     </div>
@@ -411,15 +382,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 </div>
               )}
 
-              {/* SIMULATION SELECTOR PILLS: Click any member to simulate scanning their badge */}
+              {/* REGISTERED MEMBER ROSTER SELECTOR */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                     <Users className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                    <span>Or Tap to Simulate Scanning Member Badge:</span>
+                    <span>Select Registered Member Badge:</span>
                   </span>
                   <span className="text-[10px] text-slate-500">
-                    {availableMembers.length} members available
+                    {availableMembers.length} members in roster
                   </span>
                 </div>
 
@@ -510,7 +481,7 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
               <div>
                 <h3 className="text-base font-bold text-white">Your Personal QR Pass Code</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Ama Owusu · Member ID: ACC-2023-001 · Accra Central Church
+                  {passHolderName} · Member ID: {passMemberId} · {systemSettings.churchName}
                 </p>
               </div>
 
@@ -547,7 +518,7 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
 
               <div>
                 <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/30">
-                  AMA-OWUSU-ACC-2023-001
+                  {passQrToken}
                 </span>
                 <span className="block text-[11px] text-slate-400 mt-2">
                   Present this QR code to fellow members or door stewards to verify check-in.

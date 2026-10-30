@@ -79,6 +79,10 @@ export const AdminDashboard: React.FC = () => {
     batchImportMembers,
     attendanceRecords,
     systemSettings,
+    autoCheckinOptedInCount,
+    auditLogs,
+    churchGroups,
+    addService,
   } = useEkklesphere();
 
   // Active sub-navigation tabs inside Admin
@@ -115,14 +119,24 @@ export const AdminDashboard: React.FC = () => {
   // Notifications clear state
   const [notificationsCleared, setNotificationsCleared] = useState(false);
 
-  // Calendar day selector
-  const [selectedDay, setSelectedDay] = useState<number>(29);
+  // Calendar week & day selector (live current week)
+  const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [selectedDateIso, setSelectedDateIso] = useState<string>(
+    () => new Date().toISOString().split('T')[0]
+  );
 
   // Modals
   const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isNewAssignmentOpen, setIsNewAssignmentOpen] = useState(false);
   const [selectedCareTask, setSelectedCareTask] = useState<string | null>(null);
+
+  // Schedule new service form state
+  const [newServiceName, setNewServiceName] = useState('Sunday Main Service');
+  const [newServiceTime, setNewServiceTime] = useState('08:00');
+  const [newServiceExpected, setNewServiceExpected] = useState('');
+  const [newServiceDwell, setNewServiceDwell] = useState(String(systemSettings.dwellTimeMinutes || 5));
+  const [isCreatingService, setIsCreatingService] = useState(false);
 
   // New assignment form state
   const [newAssignMemberId, setNewAssignMemberId] = useState('');
@@ -131,43 +145,80 @@ export const AdminDashboard: React.FC = () => {
 
   // Broadcast message form state
   const [broadcastChannel, setBroadcastChannel] = useState<'push' | 'sms' | 'email'>('push');
-  const [broadcastAudience, setBroadcastAudience] = useState('All active members (520)');
-  const [broadcastSubject, setBroadcastSubject] = useState('Sunday Service Reminder');
-  const [broadcastBody, setBroadcastBody] = useState(
-    'Welcome to Accra Central Church! Service begins at 08:00 AM. If you have auto check-in enabled, your arrival will be marked automatically.'
-  );
+  const [broadcastAudience, setBroadcastAudience] = useState('all');
+  const [broadcastSubject, setBroadcastSubject] = useState('Service Reminder');
+  const [broadcastBody, setBroadcastBody] = useState('');
 
-  const daysList = [
-    { name: 'Mon', date: 26 },
-    { name: 'Tue', date: 27 },
-    { name: 'Wed', date: 28 },
-    { name: 'Thu', date: 29 },
-    { name: 'Fri', date: 30 },
-    { name: 'Sat', date: 31 },
-    { name: 'Sun', date: 1 },
-  ];
+  useEffect(() => {
+    setBroadcastBody(
+      `Welcome to ${systemSettings.churchName || 'PIWC KWADASO'}! Service begins at ${currentService.startsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
+    );
+  }, [systemSettings.churchName, currentService.startsAt]);
 
-  const eventsByDay: Record<number, Array<{ time: string; title: string; location: string }>> = {
-    28: [{ time: '06:30 - 08:00 PM', title: 'Midweek prayer', location: 'Main hall' }],
-    29: [
-      { time: '05:30 - 06:30 PM', title: 'Leaders’ prayer', location: 'Church office' },
-      { time: '07:00 - 08:30 PM', title: 'Choir rehearsal', location: 'Annex' },
-    ],
-    30: [{ time: '06:00 - 07:30 PM', title: 'Ushers & Greeters briefing', location: 'Foyer' }],
-    31: [{ time: '04:00 - 05:30 PM', title: 'Youth fellowship', location: 'Annex' }],
-    1: [
-      { time: '08:00 - 09:30 AM', title: 'First service', location: 'Main hall' },
-      { time: '10:30 - 12:00 PM', title: 'Second service', location: 'Main hall' },
-    ],
-  };
+  const weekDays = React.useMemo(() => {
+    const base = new Date();
+    base.setDate(base.getDate() + weekOffset * 7);
+    const dayOfWeek = base.getDay(); // 0=Sun..6=Sat
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(base);
+    monday.setDate(base.getDate() + mondayOffset);
+
+    const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return names.map((name, idx) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + idx);
+      return {
+        name,
+        date: d.getDate(),
+        iso: d.toISOString().split('T')[0],
+        fullDate: d,
+      };
+    });
+  }, [weekOffset]);
+
+  const weekRangeLabel = React.useMemo(() => {
+    if (weekDays.length === 0) return '';
+    const first = weekDays[0].fullDate;
+    const last = weekDays[6].fullDate;
+    const fmt = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return `${fmt(first)} - ${fmt(last)}`;
+  }, [weekDays]);
+
+  const manualCheckinCount = Math.max(0, members.length - autoCheckinOptedInCount);
+  const manualCheckinPercentage = members.length > 0 ? Math.max(0, 100 - optInPercentage) : 0;
+  const isPremiseConfigured =
+    systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null;
+  const openTasks = followupTasks.filter((t) => t.status === 'open');
+  const primaryOpenTask = openTasks[0] || null;
 
   const handleQuickArrivalCheckin = () => {
-    // Pick an unchecked member
-    const unchecked = members.find((m) => m.id !== 'm1' && m.id !== 'm2' && m.id !== 'm3');
-    if (unchecked) {
-      checkInPerson(unchecked.id, 'geofence', 85, 'Auto check-in approach dwell');
-    } else {
-      showToast('All listed priority members are checked in!');
+    setActiveTab('workflows');
+    setActiveModule('members');
+    showToast(
+      members.length > 0
+        ? 'Select a member from the live directory to check in.'
+        : 'Add members first to begin recording live check-ins.'
+    );
+  };
+
+  const handleCreateServiceSubmit = async () => {
+    if (!newServiceName.trim()) {
+      showToast('Please enter a service name');
+      return;
+    }
+    setIsCreatingService(true);
+    try {
+      await addService({
+        name: newServiceName.trim(),
+        startsAt: newServiceTime || '08:00',
+        expectedAttendance: Number(newServiceExpected) || 0,
+        dwellMinutes: Number(newServiceDwell) || systemSettings.dwellTimeMinutes || 5,
+      });
+      setIsAddServiceOpen(false);
+    } catch (err: any) {
+      showToast(err?.message || 'Could not schedule service');
+    } finally {
+      setIsCreatingService(false);
     }
   };
 
@@ -401,7 +452,7 @@ export const AdminDashboard: React.FC = () => {
             {/* Left Welcome Box */}
             <div className="col-span-2 sm:col-span-2 md:col-span-4 lg:col-span-2 flex flex-col justify-center">
               <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-2">
-                Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Pastor David'}!
+                Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Leader'}!
                 <span className="inline-flex gap-1 ml-2.5 align-middle">
                   <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#6D5CF2] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block shadow-sm" />
                   <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#59C3C3] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block -ml-2 shadow-sm" />
@@ -518,78 +569,62 @@ export const AdminDashboard: React.FC = () => {
 
           {/* Cards Grid: Responsive across mobile (1 col), tablet (2 cols), desktop (6 cols) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
-            {/* 1. Notifications Card (Tablet 1 col, Desktop Span 2) */}
+            {/* 1. Notifications Card (Live Audit & Check-in Feed) */}
             <section id="notifications-card" className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Notifications</h2>
-                  <button
-                    onClick={() => {
-                      setNotificationsCleared(!notificationsCleared);
-                      showToast(notificationsCleared ? 'Notifications restored' : 'Notifications cleared');
-                    }}
-                    className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#EF5A6F] flex items-center gap-1 transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    {notificationsCleared ? 'Restore' : 'Clear'}
-                  </button>
+                  {auditLogs.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setNotificationsCleared(!notificationsCleared);
+                        showToast(notificationsCleared ? 'Notifications restored' : 'Notifications cleared');
+                      }}
+                      className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#EF5A6F] flex items-center gap-1 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      {notificationsCleared ? 'Restore' : 'Clear'}
+                    </button>
+                  )}
                 </div>
 
-                {!notificationsCleared ? (
-                  <div className="space-y-3">
-                    {/* Floating Upcoming Event Card */}
-                    <div className="relative bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-3.5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="flex items-center gap-1.5 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                          <span className="w-2 h-2 rounded-full bg-[#4FBF98]" />
-                          Upcoming event
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => showToast('Editing event briefing')}
-                            className="p-1 rounded-lg text-[#666A86] hover:text-[#6D5CF2]"
-                            title="Edit"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
+                {!notificationsCleared && auditLogs.length > 0 ? (
+                  <div className="space-y-2.5">
+                    {auditLogs.slice(0, 3).map((log) => (
+                      <div
+                        key={log.id}
+                        className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55]"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="flex items-center gap-1.5 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            <span className="w-2 h-2 rounded-full bg-[#4FBF98]" />
+                            {log.action}
+                          </span>
+                          <span className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                            {log.timestamp}
+                          </span>
+                        </div>
+                        <div className="text-xs text-[#666A86] dark:text-[#A9ACC8] line-clamp-2">
+                          {log.details}
                         </div>
                       </div>
-                      <div className="text-xs text-[#666A86] dark:text-[#A9ACC8] mb-2.5">
-                        Sunday service briefing · Duration: 45 min
-                      </div>
-                      <div className="flex items-center gap-3 pt-2 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                        <span className="flex items-center gap-1">
-                          <CalendarIcon className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                          Sun, 1 Nov
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                          07:00 - 07:45 AM
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Follow-up Note Card */}
-                    <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-3.5 border border-[#E9EBF5] dark:border-[#2D2D55]">
-                      <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                        <Mail className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                        Message · Pastoral Care
-                      </div>
-                      <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">Note from Pastor Ruth:</div>
-                      <div className="mt-2 bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-2.5 text-xs text-[#666A86] dark:text-[#A9ACC8] italic">
-                        “Kofi Mensah answered the call. He had fever last week and says he will join 2nd service.”
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 ) : (
-                  <div className="text-center py-10 text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                    All caught up. Tap Restore to view previous alerts.
+                  <div className="text-center py-8 px-2 text-xs text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
+                    <Bell className="w-5 h-5 text-[#6D5CF2] mx-auto mb-2 opacity-80" />
+                    <p className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
+                      No live notifications yet
+                    </p>
+                    <p className="text-[11px]">
+                      Real-time member check-ins, visitor registrations, and premise updates will appear here.
+                    </p>
                   </div>
                 )}
               </div>
             </section>
 
-            {/* 2. Assignments Card (Tablet 1 col, Desktop Span 2) */}
+            {/* 2. Assignments Card (Live Pastoral Care Queue) */}
             <section className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-3">
@@ -599,41 +634,58 @@ export const AdminDashboard: React.FC = () => {
                     className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] flex items-center gap-1"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
-                    View all ({followupTasks.filter((t) => t.status === 'open').length})
+                    View all ({openFollowupCount})
                   </button>
                 </div>
 
-                <div className="flex items-center gap-2 mb-2.5">
-                  <span className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-xs font-semibold px-2 py-0.5 rounded-md">
-                    Pastoral care
-                  </span>
-                  <span className="bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] text-xs font-semibold px-2 py-0.5 rounded-md">
-                    Osu North cell
-                  </span>
-                </div>
+                {primaryOpenTask ? (
+                  <>
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-xs font-semibold px-2 py-0.5 rounded-md">
+                        Pastoral care
+                      </span>
+                      <span className="bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] text-xs font-semibold px-2 py-0.5 rounded-md">
+                        {primaryOpenTask.groupName}
+                      </span>
+                    </div>
 
-                <h3 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-snug mb-3">
-                  Call Kofi Mensah, absent three weeks in a row
-                </h3>
+                    <h3 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-snug mb-3">
+                      Follow up with {primaryOpenTask.personName}
+                    </h3>
 
-                <div className="flex items-center justify-between gap-2 mb-4">
-                  <span className="bg-[#7AD3B6]/20 text-[#12503D] dark:text-[#7AD3B6] text-xs font-bold px-3 py-1 rounded-full">
-                    Care call
-                  </span>
-                  <span className="bg-[#FFE2E6] dark:bg-[#4A2229] text-[#C9314F] dark:text-[#FF9AAA] text-xs font-bold px-3 py-1 rounded-full">
-                    High Priority
-                  </span>
-                </div>
+                    <div className="flex items-center justify-between gap-2 mb-4">
+                      <span className="bg-[#7AD3B6]/20 text-[#12503D] dark:text-[#7AD3B6] text-xs font-bold px-3 py-1 rounded-full">
+                        {primaryOpenTask.reason === 'first_timer'
+                          ? 'First-timer welcome'
+                          : primaryOpenTask.reason === 'absent_3'
+                          ? 'Absent 3 weeks'
+                          : primaryOpenTask.reason === 'absent_2'
+                          ? 'Absent 2 weeks'
+                          : 'Care check'}
+                      </span>
+                      <span className="bg-[#FFE2E6] dark:bg-[#4A2229] text-[#C9314F] dark:text-[#FF9AAA] text-xs font-bold px-3 py-1 rounded-full">
+                        Open
+                      </span>
+                    </div>
 
-                <div className="flex items-center justify-between text-xs pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
-                  <span className="text-[#666A86] dark:text-[#A9ACC8]">Assigned to</span>
-                  <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
-                    <span className="w-6 h-6 rounded-full bg-[#F2B8A6] text-[#5A2A1E] font-bold text-[10px] flex items-center justify-center">
-                      RL
-                    </span>
-                    Ruth Larbi (Pastor)
-                  </span>
-                </div>
+                    <div className="flex items-center justify-between text-xs pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <span className="text-[#666A86] dark:text-[#A9ACC8]">Assigned to</span>
+                      <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {primaryOpenTask.assignedToName}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-8 px-2 text-xs text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
+                    <CheckSquare className="w-5 h-5 text-[#6D5CF2] mx-auto mb-2 opacity-80" />
+                    <p className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
+                      No open care assignments
+                    </p>
+                    <p className="text-[11px]">
+                      Visitor welcomes and absence follow-ups will queue here automatically.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <button
@@ -645,20 +697,20 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </section>
 
-            {/* 3. Calendar & Timeline (Tablet Span 2, Desktop Span 2) */}
+            {/* 3. Calendar & Timeline (Live Current Week) */}
             <section className="md:col-span-2 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Oct 26 - Nov 1</h2>
+                  <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{weekRangeLabel}</h2>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => showToast('Previous week schedule')}
+                      onClick={() => setWeekOffset((w) => w - 1)}
                       className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => showToast('Next week schedule')}
+                      onClick={() => setWeekOffset((w) => w + 1)}
                       className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5"
                     >
                       <ChevronRight className="w-4 h-4" />
@@ -668,12 +720,12 @@ export const AdminDashboard: React.FC = () => {
 
                 {/* 7-day selector */}
                 <div className="grid grid-cols-7 gap-1 text-center mb-4">
-                  {daysList.map((d) => (
+                  {weekDays.map((d) => (
                     <button
-                      key={d.date}
-                      onClick={() => setSelectedDay(d.date)}
+                      key={d.iso}
+                      onClick={() => setSelectedDateIso(d.iso)}
                       className={`flex flex-col items-center py-1.5 rounded-xl transition-all ${
-                        selectedDay === d.date
+                        selectedDateIso === d.iso
                           ? 'bg-[#6D5CF2] text-white shadow-sm font-bold'
                           : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
                       }`}
@@ -684,137 +736,145 @@ export const AdminDashboard: React.FC = () => {
                   ))}
                 </div>
 
-                {/* Events list for selected day */}
+                {/* Live scheduled services list */}
                 <div className="space-y-2">
-                  {(eventsByDay[selectedDay] || []).length > 0 ? (
-                    eventsByDay[selectedDay].map((ev, idx) => (
-                      <div
-                        key={idx}
-                        className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border border-[#E9EBF5] dark:border-[#2D2D55]"
-                      >
-                        <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
-                          <CalendarIcon className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                            {ev.title}
-                          </b>
-                          <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                            {ev.time} · {ev.location}
-                          </span>
-                        </div>
+                  {services.map((svc) => (
+                    <button
+                      key={svc.id}
+                      type="button"
+                      onClick={() => setActiveServiceId(svc.id)}
+                      className={`w-full text-left bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-all ${
+                        svc.id === activeServiceId
+                          ? 'border-[#6D5CF2]'
+                          : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                      }`}
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
+                        <CalendarIcon className="w-4 h-4" />
                       </div>
-                    ))
-                  ) : (
-                    <div className="text-center py-6 text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                      No services or events scheduled for this day.
-                    </div>
-                  )}
+                      <div className="flex-1 min-w-0">
+                        <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {svc.name}
+                        </b>
+                        <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          {svc.startsAt} - {svc.endsAt} · {systemSettings.campusName}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <div className="pt-3 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#666A86] dark:text-[#A9ACC8] flex justify-between items-center">
                 <span>Active Service:</span>
-                <span className="font-bold text-[#6D5CF2]">{currentService.name.split(',')[0]}</span>
+                <span className="font-bold text-[#6D5CF2]">{currentService.name}</span>
               </div>
             </section>
 
-            {/* 4. Today's Tasks (Tablet Span 2, Desktop Span 3) */}
+            {/* 4. Live Session Readiness (Tablet Span 2, Desktop Span 3) */}
             <section className="md:col-span-2 lg:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55]">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                 <div className="flex items-center gap-3">
-                  <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Today’s tasks</h2>
-                  {/* Avatar stack */}
+                  <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live readiness</h2>
                   <div className="flex -space-x-2">
-                    <span className="w-6 h-6 rounded-full bg-[#6D5CF2] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
-                      RL
-                    </span>
-                    <span className="w-6 h-6 rounded-full bg-[#59C3C3] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
-                      KA
-                    </span>
-                    <span className="w-6 h-6 rounded-full bg-[#F29F6D] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
-                      EQ
-                    </span>
-                    <span className="w-6 h-6 rounded-full bg-[#1D1B3A] text-white text-[9px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
-                      +4
-                    </span>
+                    {members.slice(0, 3).map((m) => (
+                      <span
+                        key={m.id}
+                        className="w-6 h-6 rounded-full bg-[#6D5CF2] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]"
+                      >
+                        {m.avatarInitials}
+                      </span>
+                    ))}
+                    {members.length === 0 && currentUser && (
+                      <span className="w-6 h-6 rounded-full bg-[#6D5CF2] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
+                        {currentUser.initials}
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
                   <button
-                    onClick={() => showToast('Editing task list')}
-                    className="hover:text-[#1D1B3A] flex items-center gap-1"
+                    onClick={() => {
+                      setActiveTab('settings');
+                      setActiveModule('settings');
+                    }}
+                    className="hover:text-[#1D1B3A] dark:hover:text-white flex items-center gap-1"
                   >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => showToast('Sharing checklist with Sunday team')}
-                    className="hover:text-[#1D1B3A] flex items-center gap-1"
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                    Share
+                    <Settings className="w-3.5 h-3.5" />
+                    Configure
                   </button>
                 </div>
               </div>
 
-              {/* Task Row 1 */}
+              {/* Readiness Row 1: Premise Geofence */}
               <div className="p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] mb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Brief the greeters</b>
-                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">1 Nov 07:00 AM</em>
-                </div>
-                <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  <em>Duration:</em> <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">00 h 45 m</b>
+                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Church Premise Geofence</b>
+                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
+                    {systemSettings.campusName} · {systemSettings.innerGeofenceMeters}m inner radius
+                  </em>
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
-                  <span>90%</span>
+                  <span>{isPremiseConfigured ? '100%' : '0%'}</span>
                   <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                    <div className="h-full bg-[#6D5CF2] rounded-full" style={{ width: '90%' }} />
+                    <div
+                      className="h-full bg-[#4FBF98] rounded-full transition-all"
+                      style={{ width: isPremiseConfigured ? '100%' : '0%' }}
+                    />
                   </div>
                 </div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">4 + 16</span>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">
+                  {isPremiseConfigured ? 'Active' : 'Unset'}
+                </span>
               </div>
 
-              {/* Task Row 2 */}
+              {/* Readiness Row 2: Congregation Roster */}
               <div className="p-3 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] mb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Check entrance beacons</b>
-                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">31 Oct 04:00 PM</em>
-                </div>
-                <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  <em>Duration:</em> <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">01 h 00 m</b>
+                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Congregation Roster</b>
+                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
+                    Supabase live member directory
+                  </em>
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
-                  <span>50%</span>
+                  <span>{members.length > 0 ? '100%' : '0%'}</span>
                   <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                    <div className="h-full bg-[#6D5CF2] rounded-full" style={{ width: '50%' }} />
+                    <div
+                      className="h-full bg-[#6D5CF2] rounded-full transition-all"
+                      style={{ width: members.length > 0 ? '100%' : '0%' }}
+                    />
                   </div>
                 </div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">2 + 3</span>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold tabular-nums">
+                  {members.length} {members.length === 1 ? 'member' : 'members'}
+                </span>
               </div>
 
-              {/* Task Row 3 */}
+              {/* Readiness Row 3: Live Session Check-ins */}
               <div className="p-3 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Send service reminders</b>
-                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">31 Oct 06:00 PM</em>
-                </div>
-                <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  <em>Duration:</em> <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">00 h 30 m</b>
+                  <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live Service Check-ins</b>
+                  <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
+                    {currentService.name} ({currentService.startsAt})
+                  </em>
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
-                  <span>10%</span>
+                  <span>{attendancePercentage}%</span>
                   <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                    <div className="h-full bg-[#6D5CF2] rounded-full" style={{ width: '10%' }} />
+                    <div
+                      className="h-full bg-[#6D5CF2] rounded-full transition-all"
+                      style={{ width: `${attendancePercentage}%` }}
+                    />
                   </div>
                 </div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">1 + 187</span>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold tabular-nums">
+                  {totalCheckedInCount} checked in
+                </span>
               </div>
             </section>
 
-            {/* 5. Promo Card (Tablet 1 col, Desktop Span 1) */}
+            {/* 5. Auto Check-In Opt-In Card */}
             <section className="md:col-span-1 lg:col-span-1 bg-[#6D5CF2] text-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-between text-center shadow-[0_10px_30px_rgba(109,92,242,0.3)]">
               <svg className="w-16 h-16 sm:w-20 sm:h-20 mb-1" viewBox="0 0 84 84" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="20" y="38" width="44" height="30" rx="5" fill="#8C7DFF" />
@@ -823,22 +883,29 @@ export const AdminDashboard: React.FC = () => {
                 <path d="M10 18v8M6 22h8M72 14v6M69 17h6" />
               </svg>
               <div>
-                <h2 className="text-sm sm:text-base font-bold mb-1">Turn on auto check-in!</h2>
+                <h2 className="text-sm sm:text-base font-bold mb-1">Auto check-in</h2>
                 <p className="text-xs text-white/90 leading-snug mb-3">
-                  36% of members still sign in by hand. Invite them to switch it on.
+                  {members.length === 0
+                    ? 'Enroll members to enable automated proximity arrival.'
+                    : `${manualCheckinPercentage}% of members (${manualCheckinCount}) currently sign in manually.`}
                 </p>
               </div>
               <button
                 onClick={() => {
-                  showToast('Invitation SMS & Push queued for 187 members');
+                  if (members.length === 0) {
+                    setEditingMember(null);
+                    setIsAddMemberOpen(true);
+                  } else {
+                    setIsMessageModalOpen(true);
+                  }
                 }}
                 className="w-full bg-[#1D1B3A] hover:bg-[#1D1B3A]/90 text-white rounded-xl py-2 text-xs font-bold transition-all shadow-sm cursor-pointer"
               >
-                Invite members
+                {members.length === 0 ? 'Add first member' : 'Invite members'}
               </button>
             </section>
 
-            {/* 6. Metrics & Meetings (Tablet 1 col, Desktop Span 2) */}
+            {/* 6. Metrics & Live Premise Status */}
             <div className="md:col-span-1 lg:col-span-2 flex flex-col gap-4">
               {/* Row with two Circular Progress Rings */}
               <div className="grid grid-cols-2 gap-3">
@@ -863,7 +930,7 @@ export const AdminDashboard: React.FC = () => {
                     </span>
                   </div>
                   <small className="text-[10px] font-bold text-[#6D5CF2] tracking-wider uppercase">ATTENDANCE</small>
-                  <b className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Sunday Service</b>
+                  <b className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA] truncate max-w-full">{currentService.name}</b>
                   <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
                     {totalCheckedInCount} of {expectedAttendance}
                   </span>
@@ -891,39 +958,47 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                   <small className="text-[10px] font-bold text-[#6D5CF2] tracking-wider uppercase">AUTO CHECK-IN</small>
                   <b className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Opt-in rate</b>
-                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">187 to go</span>
+                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+                    {manualCheckinCount} manual
+                  </span>
                 </div>
               </div>
 
-              {/* Leaders Meeting Card */}
+              {/* Live Premise & Geofence Card */}
               <section className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55]">
                 <div className="flex items-center justify-between mb-1">
-                  <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Leaders’ meeting</h2>
-                  <button
-                    onClick={() => showToast('Editing leaders meeting agenda')}
-                    className="text-xs text-[#666A86] hover:text-[#6D5CF2]"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                  </button>
+                  <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                    {systemSettings.campusName || 'Church Premise'}
+                  </h2>
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      isPremiseConfigured ? 'bg-[#4FBF98]' : 'bg-amber-400'
+                    }`}
+                  />
                 </div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">
-                  Wed, 4 Nov at 06:30 PM
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-mono block">
+                  {isPremiseConfigured
+                    ? `${systemSettings.campusLatitude?.toFixed(6)}, ${systemSettings.campusLongitude?.toFixed(6)}`
+                    : 'GPS coordinates not pinned'}
                 </span>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] my-2 leading-relaxed">
-                  Easter planning and cell group reports, church office, room 2.
+                  Inner perimeter: {systemSettings.innerGeofenceMeters}m · Dwell rule: {systemSettings.dwellTimeMinutes} min
                 </p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => showToast('Reschedule modal opened')}
-                    className="flex-1 bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-1.5 text-xs font-bold hover:opacity-90 transition-all"
+                    onClick={() => setActiveTab('proximity')}
+                    className="flex-1 bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-1.5 text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
                   >
-                    Reschedule
+                    Live Radar
                   </button>
                   <button
-                    onClick={() => showToast('Invite accepted for Leaders meeting')}
-                    className="flex-1 bg-[#6D5CF2] text-white rounded-xl py-1.5 text-xs font-bold hover:bg-[#5b4be0] transition-all"
+                    onClick={() => {
+                      setActiveTab('settings');
+                      setActiveModule('settings');
+                    }}
+                    className="flex-1 bg-[#6D5CF2] text-white rounded-xl py-1.5 text-xs font-bold hover:bg-[#5b4be0] transition-all cursor-pointer"
                   >
-                    Accept invite
+                    Edit Premise
                   </button>
                 </div>
               </section>
@@ -946,10 +1021,7 @@ export const AdminDashboard: React.FC = () => {
               setIsAddMemberOpen(true);
             }}
             onDeleteMember={(id) => {
-              const target = members.find((m) => m.id === id);
-              if (window.confirm(`Are you sure you want to remove ${target?.firstName} ${target?.lastName} from the member directory?`)) {
-                deleteMember(id);
-              }
+              deleteMember(id);
             }}
             onOpenImportModal={() => setIsImportModalOpen(true)}
             onCheckinMember={(id) => {
@@ -977,18 +1049,26 @@ export const AdminDashboard: React.FC = () => {
             <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm">
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2 flex items-center justify-between">
                 <span>PostGIS Campus Geofencing</span>
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                <span className={`w-2.5 h-2.5 rounded-full ${isPremiseConfigured ? 'bg-emerald-400' : 'bg-amber-400'}`} />
               </h3>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mb-3">
-                Outer Ring: 300 m (App approach wake-up)
+                Outer Ring: {systemSettings.outerGeofenceMeters} m (App approach wake-up)
                 <br />
-                Inner Ring: 100 m (5-min dwell required)
+                Inner Ring: {systemSettings.innerGeofenceMeters} m ({systemSettings.dwellTimeMinutes}-min dwell required)
               </p>
               <div className="bg-[#F6F7FC] dark:bg-[#14142E] p-2.5 rounded-xl text-xs font-mono text-[#6D5CF2] dark:text-[#8C7DFF] mb-3">
-                POINT(5.5560, -0.1969)
+                {isPremiseConfigured
+                  ? `POINT(${systemSettings.campusLatitude?.toFixed(6)}, ${systemSettings.campusLongitude?.toFixed(6)})`
+                  : 'Unconfigured — Set Premise GPS'}
               </div>
               <button
-                onClick={() => showToast('Geofence test calibrated at Accra Central campus')}
+                onClick={() =>
+                  showToast(
+                    isPremiseConfigured
+                      ? `Geofence verified at ${systemSettings.campusName}`
+                      : 'Please pin your Church Premise GPS in System Settings first.'
+                  )
+                }
                 className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold cursor-pointer hover:opacity-90 transition-all"
               >
                 Test Radius Accuracy
@@ -1070,7 +1150,9 @@ export const AdminDashboard: React.FC = () => {
                 <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Service Name</label>
                 <input
                   type="text"
-                  defaultValue="Sunday Youth & Praise, 16:00"
+                  value={newServiceName}
+                  onChange={(e) => setNewServiceName(e.target.value)}
+                  placeholder="e.g. Sunday First Service"
                   className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                 />
               </div>
@@ -1079,7 +1161,8 @@ export const AdminDashboard: React.FC = () => {
                   <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Start Time</label>
                   <input
                     type="time"
-                    defaultValue="16:00"
+                    value={newServiceTime}
+                    onChange={(e) => setNewServiceTime(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                   />
                 </div>
@@ -1087,7 +1170,10 @@ export const AdminDashboard: React.FC = () => {
                   <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Expected Attendance</label>
                   <input
                     type="number"
-                    defaultValue="300"
+                    min="0"
+                    value={newServiceExpected}
+                    onChange={(e) => setNewServiceExpected(e.target.value)}
+                    placeholder="Optional"
                     className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                   />
                 </div>
@@ -1096,11 +1182,13 @@ export const AdminDashboard: React.FC = () => {
                 <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Dwell Rule (Minutes)</label>
                 <input
                   type="number"
-                  defaultValue="5"
+                  min="1"
+                  value={newServiceDwell}
+                  onChange={(e) => setNewServiceDwell(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                 />
                 <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                  Geofence auto check-in requires 5 min presence inside 100 m ring.
+                  Geofence auto check-in requires {newServiceDwell || systemSettings.dwellTimeMinutes} min presence inside {systemSettings.innerGeofenceMeters} m ring.
                 </span>
               </div>
             </div>
@@ -1112,13 +1200,11 @@ export const AdminDashboard: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  showToast('New service scheduled and geofence window assigned.');
-                  setIsAddServiceOpen(false);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold shadow-sm"
+                disabled={isCreatingService}
+                onClick={handleCreateServiceSubmit}
+                className="flex-1 py-2.5 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold shadow-sm disabled:opacity-60 cursor-pointer"
               >
-                Create Service
+                {isCreatingService ? 'Saving...' : 'Create Service'}
               </button>
             </div>
           </div>
@@ -1167,10 +1253,18 @@ export const AdminDashboard: React.FC = () => {
                   onChange={(e) => setBroadcastAudience(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
                 >
-                  <option>All active members (520)</option>
-                  <option>Absent members last 2 weeks (14)</option>
-                  <option>First-time visitors this month (32)</option>
-                  <option>Osu North cell group (28)</option>
+                  <option value="all">All registered members ({members.length})</option>
+                  <option value="absent">
+                    Absent members ({members.filter((m) => m.consecutiveAbsences >= 2).length})
+                  </option>
+                  <option value="visitors">
+                    Registered visitors ({members.filter((m) => m.status === 'visitor').length})
+                  </option>
+                  {churchGroups.map((g) => (
+                    <option key={g.id} value={g.name}>
+                      {g.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1234,58 +1328,64 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
-              {followupTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <b className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{t.personName}</b>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFE2E6] text-[#C9314F]">
-                        {t.reason === 'absent_3'
-                          ? 'Absent 3 Weeks'
-                          : t.reason === 'absent_2'
-                          ? 'Absent 2 Weeks'
-                          : 'First Timer'}
-                      </span>
-                    </div>
-                    <div className="text-[#666A86] dark:text-[#A9ACC8]">
-                      {t.groupName} · Assigned to: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{t.assignedToName}</b>
-                    </div>
-                    {t.outcome && (
-                      <div className="mt-1 text-emerald-600 dark:text-emerald-400 italic">Outcome: {t.outcome}</div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {t.status === 'open' ? (
-                      <>
-                        <button
-                          onClick={() => {
-                            showToast(`Dialing ${t.personName}...`);
-                            resolveFollowupTask(t.id, 'Contacted via phone. Returning this Sunday.');
-                          }}
-                          className="bg-[#6D5CF2] text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1 shadow-sm"
-                        >
-                          <PhoneCall className="w-3.5 h-3.5" />
-                          Log Call
-                        </button>
-                        <button
-                          onClick={() => resolveFollowupTask(t.id, 'Excused absence (traveling)')}
-                          className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] px-3 py-1.5 rounded-xl font-semibold"
-                        >
-                          Mark Excused
-                        </button>
-                      </>
-                    ) : (
-                      <span className="text-emerald-500 font-bold flex items-center gap-1">
-                        <Check className="w-4 h-4" /> Resolved
-                      </span>
-                    )}
-                  </div>
+              {followupTasks.length === 0 ? (
+                <div className="text-center py-10 text-[#666A86] dark:text-[#A9ACC8]">
+                  No pastoral follow-up tasks in the queue yet.
                 </div>
-              ))}
+              ) : (
+                followupTasks.map((t) => (
+                  <div
+                    key={t.id}
+                    className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <b className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{t.personName}</b>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFE2E6] text-[#C9314F]">
+                          {t.reason === 'absent_3'
+                            ? 'Absent 3 Weeks'
+                            : t.reason === 'absent_2'
+                            ? 'Absent 2 Weeks'
+                            : 'First Timer'}
+                        </span>
+                      </div>
+                      <div className="text-[#666A86] dark:text-[#A9ACC8]">
+                        {t.groupName} · Assigned to: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{t.assignedToName}</b>
+                      </div>
+                      {t.outcome && (
+                        <div className="mt-1 text-emerald-600 dark:text-emerald-400 italic">Outcome: {t.outcome}</div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {t.status === 'open' ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              showToast(`Dialing ${t.personName}...`);
+                              resolveFollowupTask(t.id, 'Contacted via phone.');
+                            }}
+                            className="bg-[#6D5CF2] text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1 shadow-sm"
+                          >
+                            <PhoneCall className="w-3.5 h-3.5" />
+                            Log Call
+                          </button>
+                          <button
+                            onClick={() => resolveFollowupTask(t.id, 'Excused absence')}
+                            className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] px-3 py-1.5 rounded-xl font-semibold"
+                          >
+                            Mark Excused
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-emerald-500 font-bold flex items-center gap-1">
+                          <Check className="w-4 h-4" /> Resolved
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="pt-4 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex justify-end">

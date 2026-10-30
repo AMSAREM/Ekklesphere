@@ -6,3 +6,4 @@ coverage/
 *.log
 .env*
 !.env.example
+.live_campus_state.json

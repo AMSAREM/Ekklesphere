@@ -38,6 +38,7 @@ export const UsherTool: React.FC = () => {
     showToast,
     setIsSettingsModalOpen,
     isSettingsModalOpen,
+    systemSettings,
   } = useEkklesphere();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -73,7 +74,10 @@ export const UsherTool: React.FC = () => {
   const uncheckedMembers = members.filter((m) => !attendanceRecords.some((r) => r.personId === m.id));
 
   const handleScanClick = () => {
-    // Pick the first unchecked member from the list
+    if (members.length === 0) {
+      showToast('No registered members in the roster yet. Add a member or visitor first.');
+      return;
+    }
     const unchecked = uncheckedMembers[0];
     if (!unchecked) {
       showToast('All registered members in the roster are already checked in!');
@@ -250,7 +254,7 @@ export const UsherTool: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
-              Accra Central Church · Door 1 (Main Sanctuary Foyer)
+              {systemSettings.churchName} · {systemSettings.campusName}
             </p>
           </div>
         </div>
@@ -413,7 +417,7 @@ export const UsherTool: React.FC = () => {
                 className="flex-1 py-3 px-4 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
               >
                 <QrCode className="w-4 h-4" />
-                <span>Simulate Camera Scan</span>
+                <span>Check In Next Member</span>
               </button>
               <button
                 onClick={() => setIsVisitorSheetOpen(true)}
@@ -622,7 +626,7 @@ export const UsherTool: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold mb-1.5 text-[#1D1B3A] dark:text-[#F2F2FA]">
-                How did they hear about Accra Central Church?
+                How did they hear about {systemSettings.churchName}?
               </label>
               <select
                 value={visitorHowHeard}

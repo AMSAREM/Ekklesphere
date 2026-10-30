@@ -14,25 +14,80 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- 1. CRITICAL: SECURE spatial_ref_sys (PostGIS)
+-- 1. CRITICAL: SECURE spatial_ref_sys (PostGIS) SAFELY
+-- Wrapped in privilege guard because spatial_ref_sys is owned by supabase_admin
 -- ----------------------------------------------------------------------------
-alter table if exists public.spatial_ref_sys enable row level security;
+do $$
+begin
+  alter table if exists public.spatial_ref_sys enable row level security;
+  drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
+  create policy "allow_read_spatial_ref_sys" on public.spatial_ref_sys
+    for select
+    using (true);
+exception
+  when insufficient_privilege or undefined_table then
+    raise notice 'Skipping spatial_ref_sys RLS (managed by PostGIS extension owner).';
+end $$;
 
-drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
-create policy "allow_read_spatial_ref_sys" on public.spatial_ref_sys
-  for select
-  using (true);
+-- Ensure prerequisite columns/tables exist if 20261029000001 was run earlier
+alter table if exists public.sites
+  add column if not exists active boolean not null default true;
+
+alter table if exists public.users
+  add column if not exists auth_user_id uuid references auth.users(id) on delete set null;
+
+create table if not exists public.funds (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  name text not null,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table if exists public.donations
+  add column if not exists fund_id uuid references public.funds(id) on delete set null;
+
+create table if not exists public.audit_logs (
+  id bigserial primary key,
+  tenant_id uuid not null,
+  actor_user_id uuid,
+  action text not null,
+  entity_type text not null,
+  entity_id uuid,
+  before jsonb,
+  after jsonb,
+  ip inet,
+  at timestamptz not null default now()
+);
+
+-- Ensure RLS is enabled on all core tables
+alter table if exists public.tenants enable row level security;
+alter table if exists public.campuses enable row level security;
+alter table if exists public.beacons enable row level security;
+alter table if exists public.households enable row level security;
+alter table if exists public.persons enable row level security;
+alter table if exists public.users enable row level security;
+alter table if exists public.user_roles enable row level security;
+alter table if exists public.devices enable row level security;
+alter table if exists public.consents enable row level security;
+alter table if exists public.services enable row level security;
+alter table if exists public.service_instances enable row level security;
+alter table if exists public.attendance_signals enable row level security;
+alter table if exists public.attendance_records enable row level security;
+alter table if exists public.followup_tasks enable row level security;
+alter table if exists public.pastoral_notes enable row level security;
+alter table if exists public.funds enable row level security;
+alter table if exists public.donations enable row level security;
+alter table if exists public.audit_logs enable row level security;
 
 -- ----------------------------------------------------------------------------
 -- 2. HARDEN SECURITY DEFINER FUNCTIONS & FIX MUTABLE search_path
 -- ----------------------------------------------------------------------------
-
--- Revoke execute from public/anon/authenticated on internal admin & shift automation functions
 do $$
 begin
   if exists (
-    select 1 from pg_proc p 
-    join pg_namespace n on p.pronamespace = n.oid 
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
     where n.nspname = 'public' and p.proname = 'auto_close_open_shifts'
   ) then
     revoke execute on function public.auto_close_open_shifts from public, anon, authenticated;
@@ -40,16 +95,52 @@ begin
   end if;
 
   if exists (
-    select 1 from pg_proc p 
-    join pg_namespace n on p.pronamespace = n.oid 
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
     where n.nspname = 'public' and p.proname = 'rls_auto_enable'
   ) then
     revoke execute on function public.rls_auto_enable from public, anon, authenticated;
     grant execute on function public.rls_auto_enable to service_role;
   end if;
+
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public'
+      and p.proname = 'site_distance'
+      and pg_get_function_identity_arguments(p.oid) = 'p_site uuid, p_lng double precision, p_lat double precision'
+  ) then
+    execute 'alter function public.site_distance(uuid, double precision, double precision) set search_path = public, extensions';
+  end if;
+
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public'
+      and p.proname = 'travel_speed_kmh'
+      and pg_get_function_identity_arguments(p.oid) = 'p_user uuid, p_lng double precision, p_lat double precision, p_at timestamp with time zone'
+  ) then
+    execute 'alter function public.travel_speed_kmh(uuid, double precision, double precision, timestamptz) set search_path = public, extensions';
+  end if;
+
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public' and p.proname = 'get_current_organization_id'
+  ) then
+    execute 'alter function public.get_current_organization_id() set search_path = public, auth, extensions';
+  end if;
+
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on p.pronamespace = n.oid
+    where n.nspname = 'public' and p.proname = 'touch_updated_at'
+  ) then
+    execute 'alter function public.touch_updated_at() set search_path = public';
+  end if;
 end $$;
 
--- Set explicit immutable search_path on spatial distance and speed functions
+-- Coordinate-pair spatial distance and speed helpers with pinned search_path
 create or replace function public.site_distance(
   lat1 double precision,
   lng1 double precision,
@@ -60,7 +151,7 @@ returns double precision
 language sql
 immutable
 parallel safe
-set search_path = public, auth
+set search_path = public, auth, extensions
 as $$
   select ST_Distance(
     ST_SetSRID(ST_MakePoint(lng1, lat1), 4326)::geography,
@@ -76,16 +167,16 @@ returns double precision
 language sql
 immutable
 parallel safe
-set search_path = public, auth
+set search_path = public, auth, extensions
 as $$
-  select case 
+  select case
     when time_seconds <= 0 then 0.0
     else (dist_meters / 1000.0) / (time_seconds / 3600.0)
   end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 3. COVERING INDEXES FOR ALL FOREIGN KEYS (Eliminates sequential scans on joins/deletes)
+-- 3. COVERING INDEXES FOR ALL FOREIGN KEYS
 -- ----------------------------------------------------------------------------
 
 -- Tenancy, Campuses & Beacons
@@ -99,9 +190,10 @@ create index if not exists idx_fk_persons_tenant on public.persons (tenant_id);
 create index if not exists idx_fk_persons_household on public.persons (household_id);
 create index if not exists idx_fk_users_tenant on public.users (tenant_id);
 create index if not exists idx_fk_users_person on public.users (person_id);
+create index if not exists idx_fk_users_auth_user on public.users (auth_user_id);
 create index if not exists idx_fk_user_roles_user on public.user_roles (user_id);
-create index if not exists idx_fk_devices_tenant on public.devices (tenant_id);
-create index if not exists idx_fk_devices_person on public.devices (person_id);
+create index if not exists idx_fk_user_roles_campus on public.user_roles (scope_campus_id);
+create index if not exists idx_fk_devices_user on public.devices (user_id);
 create index if not exists idx_fk_consents_tenant on public.consents (tenant_id);
 create index if not exists idx_fk_consents_person on public.consents (person_id);
 
@@ -122,15 +214,16 @@ create index if not exists idx_fk_attendance_signals_device on public.attendance
 create index if not exists idx_fk_attendance_records_tenant on public.attendance_records (tenant_id);
 create index if not exists idx_fk_attendance_records_instance on public.attendance_records (service_instance_id);
 create index if not exists idx_fk_attendance_records_person on public.attendance_records (person_id);
-create index if not exists idx_fk_attendance_records_user on public.attendance_records (user_id);
+create index if not exists idx_fk_attendance_records_campus on public.attendance_records (campus_id);
+create index if not exists idx_fk_attendance_records_recorded_by on public.attendance_records (recorded_by);
 
 -- Care & Pastoral Notes
 create index if not exists idx_fk_followup_tasks_tenant on public.followup_tasks (tenant_id);
 create index if not exists idx_fk_followup_tasks_person on public.followup_tasks (person_id);
-create index if not exists idx_fk_followup_tasks_assigned_user on public.followup_tasks (assigned_to_user_id);
+create index if not exists idx_fk_followup_tasks_assigned_to on public.followup_tasks (assigned_to);
 create index if not exists idx_fk_pastoral_notes_tenant on public.pastoral_notes (tenant_id);
 create index if not exists idx_fk_pastoral_notes_person on public.pastoral_notes (person_id);
-create index if not exists idx_fk_pastoral_notes_author on public.pastoral_notes (author_user_id);
+create index if not exists idx_fk_pastoral_notes_author on public.pastoral_notes (author_id);
 
 -- Giving & Funds
 create index if not exists idx_fk_funds_tenant on public.funds (tenant_id);
@@ -144,7 +237,7 @@ create index if not exists idx_fk_attendance_user on public.attendance (user_id)
 create index if not exists idx_fk_attendance_checked_by on public.attendance (checked_in_by);
 
 -- ----------------------------------------------------------------------------
--- 4. RLS POLICIES FOR THE 16 TABLES WITH OPTIMIZED (SELECT AUTH.*) WRAPPING
+-- 4. RLS POLICIES WITH OPTIMIZED (SELECT AUTH.*) WRAPPING
 -- ----------------------------------------------------------------------------
 
 -- 4.1 TENANTS
@@ -154,13 +247,13 @@ create policy "tenants_select_active" on public.tenants
   using (
     (select auth.role()) = 'service_role'
     or exists (
-      select 1 from public.users u 
-      where u.tenant_id = public.tenants.id 
+      select 1 from public.users u
+      where u.tenant_id = public.tenants.id
         and u.auth_user_id = (select auth.uid())
     )
     or exists (
-      select 1 from public.members m 
-      where m.organization_id = public.tenants.id 
+      select 1 from public.members m
+      where m.organization_id = public.tenants.id
         and m.user_id = (select auth.uid())
     )
   );
@@ -178,7 +271,7 @@ create policy "persons_select_policy" on public.persons
       select 1 from public.user_roles ur
       join public.users u on u.id = ur.user_id
       where u.auth_user_id = (select auth.uid())
-        and ur.role in ('admin', 'pastor', 'usher', 'leader')
+        and ur.role in ('admin', 'pastor', 'usher', 'group_leader')
         and u.tenant_id = public.persons.tenant_id
     )
   );
@@ -230,21 +323,24 @@ create policy "user_roles_select_policy" on public.user_roles
     )
   );
 
--- 4.5 DEVICES
+-- 4.5 DEVICES (uses devices.user_id -> public.users.id)
 drop policy if exists "devices_select_write" on public.devices;
 create policy "devices_select_write" on public.devices
   for all
   using (
     (select auth.role()) = 'service_role'
-    or person_id in (
-      select u.person_id from public.users u where u.auth_user_id = (select auth.uid())
+    or exists (
+      select 1 from public.users u
+      where u.id = public.devices.user_id
+        and u.auth_user_id = (select auth.uid())
     )
     or exists (
-      select 1 from public.user_roles ur
-      join public.users u on u.id = ur.user_id
-      where u.auth_user_id = (select auth.uid())
+      select 1 from public.users target_u
+      join public.users actor_u on actor_u.tenant_id = target_u.tenant_id
+      join public.user_roles ur on ur.user_id = actor_u.id
+      where target_u.id = public.devices.user_id
+        and actor_u.auth_user_id = (select auth.uid())
         and ur.role = 'admin'
-        and u.tenant_id = public.devices.tenant_id
     )
   );
 
@@ -281,7 +377,7 @@ create policy "households_select_policy" on public.households
       select 1 from public.user_roles ur
       join public.users u on u.id = ur.user_id
       where u.auth_user_id = (select auth.uid())
-        and ur.role in ('admin', 'pastor', 'leader')
+        and ur.role in ('admin', 'pastor', 'group_leader')
         and u.tenant_id = public.households.tenant_id
     )
   );
@@ -311,7 +407,7 @@ create policy "donations_select_policy" on public.donations
       select 1 from public.user_roles ur
       join public.users u on u.id = ur.user_id
       where u.auth_user_id = (select auth.uid())
-        and ur.role in ('admin', 'pastor')
+        and ur.role in ('admin', 'pastor', 'finance')
         and u.tenant_id = public.donations.tenant_id
     )
   );
@@ -324,20 +420,20 @@ create policy "donations_insert_policy" on public.donations
     or (select auth.role()) = 'authenticated'
   );
 
--- 4.11 FOLLOWUP_TASKS
+-- 4.11 FOLLOWUP_TASKS (uses followup_tasks.assigned_to -> public.users.id)
 drop policy if exists "followup_tasks_select_policy" on public.followup_tasks;
 create policy "followup_tasks_select_policy" on public.followup_tasks
   for select
   using (
     (select auth.role()) = 'service_role'
-    or assigned_to_user_id in (
+    or assigned_to in (
       select u.id from public.users u where u.auth_user_id = (select auth.uid())
     )
     or exists (
       select 1 from public.user_roles ur
       join public.users u on u.id = ur.user_id
       where u.auth_user_id = (select auth.uid())
-        and ur.role in ('admin', 'pastor', 'leader')
+        and ur.role in ('admin', 'pastor', 'group_leader')
         and u.tenant_id = public.followup_tasks.tenant_id
     )
   );
@@ -347,7 +443,7 @@ create policy "followup_tasks_update_policy" on public.followup_tasks
   for update
   using (
     (select auth.role()) = 'service_role'
-    or assigned_to_user_id in (
+    or assigned_to in (
       select u.id from public.users u where u.auth_user_id = (select auth.uid())
     )
     or exists (
@@ -359,13 +455,13 @@ create policy "followup_tasks_update_policy" on public.followup_tasks
     )
   );
 
--- 4.12 PASTORAL_NOTES
+-- 4.12 PASTORAL_NOTES (uses pastoral_notes.author_id -> public.users.id)
 drop policy if exists "pastoral_notes_select_policy" on public.pastoral_notes;
 create policy "pastoral_notes_select_policy" on public.pastoral_notes
   for select
   using (
     (select auth.role()) = 'service_role'
-    or author_user_id in (
+    or author_id in (
       select u.id from public.users u where u.auth_user_id = (select auth.uid())
     )
     or exists (
@@ -401,7 +497,6 @@ create policy "signals_insert_client" on public.attendance_signals
   );
 
 -- 4.14 AUDIT_LOGS
-alter table if exists public.audit_logs enable row level security;
 drop policy if exists "audit_logs_select_admin" on public.audit_logs;
 create policy "audit_logs_select_admin" on public.audit_logs
   for select
@@ -416,6 +511,7 @@ create policy "audit_logs_select_admin" on public.audit_logs
     )
   );
 
+drop policy if exists "audit_logs_insert_all" on public.audit_logs;
 create policy "audit_logs_insert_all" on public.audit_logs
   for insert
   with check (true);

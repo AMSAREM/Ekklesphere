@@ -76,6 +76,7 @@ create table if not exists users (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
   person_id uuid not null unique references persons(id) on delete cascade,
+  auth_user_id uuid references auth.users(id) on delete set null,
   phone_verified_at timestamptz,
   email_verified_at timestamptz,
   mfa_secret_enc bytea,
@@ -83,6 +84,8 @@ create table if not exists users (
   last_login_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table users add column if not exists auth_user_id uuid references auth.users(id) on delete set null;
 
 create table if not exists user_roles (
   id uuid primary key default gen_random_uuid(),
@@ -204,10 +207,19 @@ create table if not exists pastoral_notes (
   created_at timestamptz not null default now()
 );
 
+create table if not exists funds (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  name text not null,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists donations (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
   person_id uuid references persons(id) on delete set null,
+  fund_id uuid references funds(id) on delete set null,
   amount_minor bigint not null check (amount_minor > 0),
   currency char(3) not null default 'GHS',
   method text not null check (method in ('momo','card','cash','bank')),
@@ -216,4 +228,19 @@ create table if not exists donations (
   status text not null default 'pending',
   paid_at timestamptz,
   created_at timestamptz not null default now()
+);
+
+alter table donations add column if not exists fund_id uuid references funds(id) on delete set null;
+
+create table if not exists audit_logs (
+  id bigserial primary key,
+  tenant_id uuid not null,
+  actor_user_id uuid,
+  action text not null,
+  entity_type text not null,
+  entity_id uuid,
+  before jsonb,
+  after jsonb,
+  ip inet,
+  at timestamptz not null default now()
 );

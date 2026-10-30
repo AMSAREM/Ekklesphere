@@ -41,7 +41,7 @@ export function expressOrganizationMiddleware(
   if (headerOrg && validateOrganizationId(headerOrg)) {
     validOrgId = headerOrg.trim();
   } else {
-    // Default to Accra Central Church for dev/pilot
+    // Default primary organization ID
     validOrgId = 'e0000000-0000-0000-0000-000000000001';
   }
 

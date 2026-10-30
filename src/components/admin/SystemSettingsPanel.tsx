@@ -37,6 +37,8 @@ import {
   ExternalLink,
   Layers,
   MessageSquare,
+  Navigation,
+  Crosshair,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -49,6 +51,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     systemSettings,
     updateSystemSettings,
     resetSystemSettings,
+    setChurchPremiseLocation,
+    clearChurchPremiseLocation,
     showToast,
     auditLogs,
     churchGroups,
@@ -64,6 +68,34 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [formData, setFormData] = useState<SystemSettings>({ ...systemSettings });
   const [hasChanges, setHasChanges] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState<string>('Just now');
+  const [isCapturingGps, setIsCapturingGps] = useState(false);
+  const [gpsCaptureError, setGpsCaptureError] = useState<string | null>(null);
+  const [latInput, setLatInput] = useState<string>(
+    systemSettings.campusLatitude != null ? String(systemSettings.campusLatitude) : ''
+  );
+  const [lngInput, setLngInput] = useState<string>(
+    systemSettings.campusLongitude != null ? String(systemSettings.campusLongitude) : ''
+  );
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState<string | null>(null);
+  const [sharedMapLink, setSharedMapLink] = useState('');
+  const [isResolvingMapLink, setIsResolvingMapLink] = useState(false);
+
+  React.useEffect(() => {
+    if (!hasChanges) {
+      setFormData({ ...systemSettings });
+      setLatInput(systemSettings.campusLatitude != null ? String(systemSettings.campusLatitude) : '');
+      setLngInput(systemSettings.campusLongitude != null ? String(systemSettings.campusLongitude) : '');
+    }
+  }, [
+    systemSettings.campusLatitude,
+    systemSettings.campusLongitude,
+    systemSettings.campusName,
+    systemSettings.churchName,
+    systemSettings.innerGeofenceMeters,
+    systemSettings.outerGeofenceMeters,
+    hasChanges,
+  ]);
 
   // Groups Management Local States
   const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | 'ministry' | 'fellowship' | 'cell_group'>('all');
@@ -178,19 +210,379 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     });
   };
 
-  const handleSave = (e?: React.FormEvent) => {
+  const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    updateSystemSettings(formData);
+    let updatedPayload: SystemSettings = { ...formData };
+
+    if (latInput.trim() !== '' && lngInput.trim() !== '') {
+      const parsedLat = Number(latInput);
+      const parsedLng = Number(lngInput);
+      if (
+        Number.isNaN(parsedLat) ||
+        Number.isNaN(parsedLng) ||
+        parsedLat < -90 ||
+        parsedLat > 90 ||
+        parsedLng < -180 ||
+        parsedLng > 180
+      ) {
+        setGpsCaptureError('Enter valid Latitude (-90 to 90) and Longitude (-180 to 180).');
+        showToast('Invalid GPS coordinates entered');
+        return;
+      }
+      updatedPayload = {
+        ...updatedPayload,
+        campusLatitude: parsedLat,
+        campusLongitude: parsedLng,
+      };
+      await setChurchPremiseLocation({
+        lat: parsedLat,
+        lng: parsedLng,
+        accuracyM: updatedPayload.campusLocationAccuracyM ?? null,
+        churchName: updatedPayload.churchName,
+        campusName: updatedPayload.campusName,
+        campusAddress: updatedPayload.campusAddress,
+        innerGeofenceMeters: updatedPayload.innerGeofenceMeters,
+        outerGeofenceMeters: updatedPayload.outerGeofenceMeters,
+        dwellTimeMinutes: updatedPayload.dwellTimeMinutes,
+      });
+    }
+
+    updateSystemSettings(updatedPayload);
+    setFormData(updatedPayload);
     setHasChanges(false);
+    setGpsCaptureError(null);
     setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   };
 
-  const handleReset = () => {
-    if (window.confirm('Restore default campus configuration for Accra Central Church?')) {
-      resetSystemSettings();
-      setFormData({ ...systemSettings });
+  const handleCaptureCurrentPremiseGps = () => {
+    if (!navigator.geolocation) {
+      setGpsCaptureError('Browser geolocation is not available on this device.');
+      return;
+    }
+    setIsCapturingGps(true);
+    setGpsCaptureError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
+        const accuracyM = Math.round(pos.coords.accuracy * 10) / 10;
+
+        setLatInput(String(lat));
+        setLngInput(String(lng));
+        const nextForm: SystemSettings = {
+          ...formData,
+          campusLatitude: lat,
+          campusLongitude: lng,
+          campusLocationAccuracyM: accuracyM,
+          campusLocationUpdatedAt: new Date().toISOString(),
+        };
+        setFormData(nextForm);
+        await setChurchPremiseLocation({
+          lat,
+          lng,
+          accuracyM,
+          churchName: nextForm.churchName,
+          campusName: nextForm.campusName,
+          campusAddress: nextForm.campusAddress,
+          innerGeofenceMeters: nextForm.innerGeofenceMeters,
+          outerGeofenceMeters: nextForm.outerGeofenceMeters,
+          dwellTimeMinutes: nextForm.dwellTimeMinutes,
+        });
+        setHasChanges(false);
+        setIsCapturingGps(false);
+      },
+      (err) => {
+        setIsCapturingGps(false);
+        if (err.code === err.PERMISSION_DENIED) {
+          setGpsCaptureError('Location permission denied. Allow location access in your browser or enter coordinates manually below.');
+        } else {
+          setGpsCaptureError(`Could not acquire GPS fix: ${err.message}`);
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const handleSaveManualCoordinates = async () => {
+    const parsedLat = Number(latInput);
+    const parsedLng = Number(lngInput);
+    if (
+      latInput.trim() === '' ||
+      lngInput.trim() === '' ||
+      Number.isNaN(parsedLat) ||
+      Number.isNaN(parsedLng) ||
+      parsedLat < -90 ||
+      parsedLat > 90 ||
+      parsedLng < -180 ||
+      parsedLng > 180
+    ) {
+      setGpsCaptureError('Please enter valid Latitude (-90 to 90) and Longitude (-180 to 180).');
+      return;
+    }
+    setGpsCaptureError(null);
+    const ok = await setChurchPremiseLocation({
+      lat: parsedLat,
+      lng: parsedLng,
+      accuracyM: null,
+      churchName: formData.churchName,
+      campusName: formData.campusName,
+      campusAddress: formData.campusAddress,
+      innerGeofenceMeters: formData.innerGeofenceMeters,
+      outerGeofenceMeters: formData.outerGeofenceMeters,
+      dwellTimeMinutes: formData.dwellTimeMinutes,
+    });
+    if (ok) {
+      setFormData((prev) => ({
+        ...prev,
+        campusLatitude: parsedLat,
+        campusLongitude: parsedLng,
+        campusLocationAccuracyM: null,
+        campusLocationUpdatedAt: new Date().toISOString(),
+      }));
       setHasChanges(false);
     }
+  };
+
+  const handleResolveSharedMapLink = async () => {
+    if (!sharedMapLink.trim()) {
+      setGpsCaptureError('Paste a shared Google Maps or WhatsApp location link first.');
+      return;
+    }
+    setIsResolvingMapLink(true);
+    setGpsCaptureError(null);
+    try {
+      const res = await fetch('/api/campus-premise/resolve-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: sharedMapLink.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setGpsCaptureError(data.message || 'Could not extract coordinates from that shared link.');
+        return;
+      }
+
+      const updatedCampusName =
+        data.placeName && (!formData.campusName || formData.campusName === 'Main Church Premise')
+          ? data.placeName
+          : formData.campusName;
+
+      setLatInput(String(data.lat));
+      setLngInput(String(data.lng));
+
+      const ok = await setChurchPremiseLocation({
+        lat: data.lat,
+        lng: data.lng,
+        accuracyM: null,
+        churchName: formData.churchName,
+        campusName: updatedCampusName,
+        campusAddress: formData.campusAddress,
+        innerGeofenceMeters: formData.innerGeofenceMeters,
+        outerGeofenceMeters: formData.outerGeofenceMeters,
+        dwellTimeMinutes: formData.dwellTimeMinutes,
+      });
+
+      if (ok) {
+        setFormData((prev) => ({
+          ...prev,
+          campusName: updatedCampusName,
+          campusLatitude: data.lat,
+          campusLongitude: data.lng,
+          campusLocationAccuracyM: null,
+          campusLocationUpdatedAt: new Date().toISOString(),
+        }));
+        setSharedMapLink('');
+        setHasChanges(false);
+      }
+    } catch (err: unknown) {
+      setGpsCaptureError(err instanceof Error ? err.message : 'Failed to resolve shared Google Maps link.');
+    } finally {
+      setIsResolvingMapLink(false);
+    }
+  };
+
+  const handleClearPremise = async () => {
+    await clearChurchPremiseLocation();
+    setLatInput('');
+    setLngInput('');
+    setFormData((prev) => ({
+      ...prev,
+      campusLatitude: null,
+      campusLongitude: null,
+      campusLocationAccuracyM: null,
+      campusLocationUpdatedAt: null,
+    }));
+  };
+
+  const handleReset = () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setTimeout(() => setConfirmReset(false), 4000);
+      return;
+    }
+    resetSystemSettings();
+    setConfirmReset(false);
+    setLatInput('');
+    setLngInput('');
+    setHasChanges(false);
+  };
+
+  const renderPremiseGpsSetupCard = () => {
+    const isConfigured = formData.campusLatitude != null && formData.campusLongitude != null;
+    return (
+      <div
+        className={`rounded-2xl p-4 sm:p-5 border-2 transition-all space-y-4 ${
+          isConfigured
+            ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-400/50 dark:border-emerald-700/60'
+            : 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-400/60 dark:border-amber-700/60'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                <Crosshair className="w-4 h-4 text-[#6D5CF2]" />
+                <span>Church Premise GPS Coordinates (Live Geofence Anchor)</span>
+              </span>
+              {isConfigured ? (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Live Premise Active
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-300 text-[11px] font-bold">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Not Set Yet — Required for Live Check-in
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1">
+              Stand on your church premise and tap <b>Use My Current GPS Location</b>, or enter exact Latitude &amp; Longitude below. All member devices immediately verify attendance against this point.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={handleCaptureCurrentPremiseGps}
+              disabled={isCapturingGps}
+              className="px-4 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-sm flex items-center gap-2 transition-all cursor-pointer active:scale-95 disabled:opacity-60"
+            >
+              <Navigation className={`w-3.5 h-3.5 ${isCapturingGps ? 'animate-spin' : ''}`} />
+              <span>{isCapturingGps ? 'Capturing Live GPS...' : 'Use My Current GPS Location'}</span>
+            </button>
+            {isConfigured && (
+              <button
+                type="button"
+                onClick={handleClearPremise}
+                className="px-3 py-2.5 rounded-xl bg-white dark:bg-[#14142E] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 text-xs font-bold transition-all cursor-pointer"
+              >
+                Clear Pin
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isConfigured && (
+          <div className="p-3 rounded-xl bg-white dark:bg-[#14142E] border border-emerald-200 dark:border-emerald-900/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{formData.campusName || 'Church Premise'}:</span>
+              <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                {formData.campusLatitude?.toFixed(6)}, {formData.campusLongitude?.toFixed(6)}
+              </span>
+              {formData.campusLocationAccuracyM != null && (
+                <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">
+                  (±{formData.campusLocationAccuracyM}m GPS accuracy)
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+              Active Perimeter: <b className="text-[#1D1B3A] dark:text-white">{formData.innerGeofenceMeters}m</b>
+              {formData.campusLocationUpdatedAt
+                ? ` · Updated ${new Date(formData.campusLocationUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                : ''}
+            </span>
+          </div>
+        )}
+
+        {gpsCaptureError && (
+          <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{gpsCaptureError}</span>
+          </div>
+        )}
+
+        {/* Paste Shared Google Maps / WhatsApp Location Link */}
+        <div className="pt-1">
+          <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+            Paste Shared Google Maps or WhatsApp Location Link
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              placeholder="e.g. https://maps.app.goo.gl/... or https://maps.google.com/?q=5.6037,-0.1870"
+              value={sharedMapLink}
+              onChange={(e) => setSharedMapLink(e.target.value)}
+              className="flex-1 px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+            />
+            <button
+              type="button"
+              onClick={handleResolveSharedMapLink}
+              disabled={isResolvingMapLink}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-60"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>{isResolvingMapLink ? 'Resolving...' : 'Extract & Pin Link'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Manual Latitude / Longitude Entry */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-1">
+          <div>
+            <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+              Premise Latitude (-90 to 90)
+            </label>
+            <input
+              type="number"
+              step="any"
+              placeholder="e.g. 5.603717"
+              value={latInput}
+              onChange={(e) => {
+                setLatInput(e.target.value);
+                setHasChanges(true);
+              }}
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+              Premise Longitude (-180 to 180)
+            </label>
+            <input
+              type="number"
+              step="any"
+              placeholder="e.g. -0.186964"
+              value={lngInput}
+              onChange={(e) => {
+                setLngInput(e.target.value);
+                setHasChanges(true);
+              }}
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveManualCoordinates}
+            className="px-4 py-2 rounded-xl bg-[#1D1B3A] dark:bg-[#2A2A55] hover:bg-[#2b2855] text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 h-[34px]"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>Pin Coordinates</span>
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const handleTestSms = () => {
@@ -241,10 +633,14 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           <button
             type="button"
             onClick={handleReset}
-            className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-slate-200 dark:hover:bg-white/10 text-[#666A86] dark:text-[#A9ACC8] border border-[#E9EBF5] dark:border-[#2D2D55] transition-all flex items-center gap-1.5 cursor-pointer"
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+              confirmReset
+                ? 'bg-rose-600 text-white border-rose-600'
+                : 'bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-slate-200 dark:hover:bg-white/10 text-[#666A86] dark:text-[#A9ACC8] border-[#E9EBF5] dark:border-[#2D2D55]'
+            }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Defaults</span>
+            <span>{confirmReset ? 'Click Again to Confirm Reset' : 'Reset Defaults'}</span>
           </button>
           <button
             type="button"
@@ -361,6 +757,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         {/* TAB 1: General & Campus Profile */}
         {activeTab === 'general' && (
           <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-5">
+            {renderPremiseGpsSetupCard()}
+
             <div>
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2 mb-1">
                 <Building2 className="w-4 h-4 text-[#6D5CF2]" />
@@ -498,7 +896,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     </span>
                     <span className="text-[#666A86] dark:text-[#A9ACC8]">·</span>
                     <span className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
-                      Accra Central Campus
+                      {formData.campusName || systemSettings.campusName}
                     </span>
                   </div>
                   <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
@@ -611,7 +1009,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     {churchGroups.filter((g) => g.category === 'cell_group').length}
                   </div>
                   <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Osu, Ridge, Cantonments, Airport & more
+                    Neighborhood & area fellowships
                   </div>
                 </div>
               </div>
@@ -861,12 +1259,20 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                           <button
                             type="button"
                             onClick={() => {
-                              if (window.confirm(`Are you sure you want to remove the group "${group.name}"?`)) {
+                              if (confirmDeleteGroupId === group.id) {
                                 deleteChurchGroup(group.id);
+                                setConfirmDeleteGroupId(null);
+                              } else {
+                                setConfirmDeleteGroupId(group.id);
+                                setTimeout(() => setConfirmDeleteGroupId(null), 3500);
                               }
                             }}
-                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                            title="Delete Group"
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              confirmDeleteGroupId === group.id
+                                ? 'bg-rose-600 text-white'
+                                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40'
+                            }`}
+                            title={confirmDeleteGroupId === group.id ? 'Click again to confirm delete' : 'Delete Group'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -914,13 +1320,15 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         {activeTab === 'proximity' && (
           <div className="space-y-5">
             <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-6">
+              {renderPremiseGpsSetupCard()}
+
               <div>
                 <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2 mb-1">
                   <Radio className="w-4 h-4 text-[#6D5CF2]" />
                   <span>Two-Tier Proximity Radar Engine</span>
                 </h3>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Calibrate the outer approach wake-up circle and inner sanctuary dwell perimeter to guarantee accurate check-ins without battery drain.
+                  Calibrate the outer approach wake-up circle and inner sanctuary dwell perimeter around your configured church premise coordinates.
                 </p>
               </div>
 
@@ -998,7 +1406,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     className="w-full accent-[#6D5CF2] cursor-pointer"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Wakes device background task when member arrives within this distance of Accra Central.
+                    Wakes device background task when member arrives within this distance of {formData.campusName || systemSettings.campusName}.
                   </p>
                 </div>
 
@@ -1104,7 +1512,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     Drive-by Speed & False-Positive Filter
                   </div>
                   <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                    Discards proximity events if the device moves faster than 15 km/h across the perimeter, preventing false check-ins from passing road traffic on Independence Ave.
+                    Discards proximity events if the device moves faster than 15 km/h across the perimeter, preventing false check-ins from passing road traffic.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer ml-4">
@@ -1179,7 +1587,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     Auto-Assign Care Tasks to Cell Group Leaders
                   </div>
                   <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                    Automatically directs absentee follow-ups to Osu North cell, Ridge Fellowship, or Youth leaders rather than centralized pastors.
+                    Automatically directs absentee follow-ups to assigned home cell, ministry, or youth leaders rather than centralized pastors.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer ml-4">
@@ -1277,7 +1685,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   System Audit Trail & Compliance Export
                 </div>
                 <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                  {auditLogs.length} verified security audit logs stored for Accra Central campus.
+                  {auditLogs.length} verified security audit logs stored for {formData.campusName || systemSettings.campusName}.
                 </div>
               </div>
               <button
@@ -1510,7 +1918,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Cantonments Cell, Choir & Music Ministry, Men’s Fellowship"
+                  placeholder="e.g. Choir & Music Ministry, Men’s Fellowship, Home Cell"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
                   className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
@@ -1528,7 +1936,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Elder Samuel Darko"
+                    placeholder="Leader full name"
                     value={groupLeader}
                     onChange={(e) => setGroupLeader(e.target.value)}
                     className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
@@ -1559,7 +1967,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   </label>
                   <input
                     type="email"
-                    placeholder="leader@accracentral.org"
+                    placeholder="leader@church.org"
                     value={groupLeaderEmail}
                     onChange={(e) => setGroupLeaderEmail(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
@@ -1572,7 +1980,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Sister Joyce Mensah"
+                    placeholder="Assistant leader full name"
                     value={groupAssistant}
                     onChange={(e) => setGroupAssistant(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
@@ -1616,7 +2024,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Main Sanctuary Loft, Elder Mensah’s Residence, Osu RE, Zoom / Hybrid"
+                  placeholder="e.g. Main Sanctuary Hall, Home Cell Venue, Online / Hybrid"
                   value={groupLocation}
                   onChange={(e) => setGroupLocation(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
@@ -1630,7 +2038,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Members in Osu zone, Vocalists, Married couples, Ages 18-35"
+                  placeholder="e.g. Vocalists, Married couples, Young Adults (Ages 18-35)"
                   value={groupDemographic}
                   onChange={(e) => setGroupDemographic(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"

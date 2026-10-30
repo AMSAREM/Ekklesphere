@@ -22,51 +22,21 @@ import {
 } from '../types/ekklesphere';
 
 
-export const DEMO_USERS: Record<UserRole, AuthUser> = {
-  admin: {
-    id: 'u-admin-1',
-    name: 'Pastor David Osei',
-    email: 'pastor.david@ekklesphere.org',
-    role: 'admin',
-    initials: 'DO',
-    title: 'Senior Pastor & System Admin',
-    campusName: 'Accra Central Campus',
-    permissions: ['all_access', 'pastoral_care', 'service_management', 'system_settings'],
-  },
-  usher: {
-    id: 'u-usher-1',
-    name: 'Samuel Tetteh',
-    email: 'samuel.usher@ekklesphere.org',
-    role: 'usher',
-    initials: 'ST',
-    title: 'Ushering Head & Door Steward',
-    campusName: 'Accra Central Campus',
-    permissions: ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar'],
-  },
-  member: {
-    id: 'u-member-1',
-    name: 'Ama Mensah',
-    email: 'ama.mensah@gmail.com',
-    role: 'member',
-    initials: 'AM',
-    title: 'Congregation Member (Osu North Cell)',
-    campusName: 'Accra Central Campus',
-    memberId: 'm1',
-    permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-  },
-};
-
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
-  churchName: 'Accra Central Church',
-  campusName: 'Accra Central Campus',
-  campusAddress: 'Independence Avenue, Ridge, Accra, Ghana',
-  seniorPastor: 'Pastor David Osei',
-  contactEmail: 'admin@ekklesphere.org',
-  contactPhone: '+233 24 123 4567',
+  churchName: 'PIWC KWADASO',
+  campusName: 'PIWC KWADASO',
+  campusAddress: '',
+  campusLatitude: null,
+  campusLongitude: null,
+  campusLocationAccuracyM: null,
+  campusLocationUpdatedAt: null,
+  seniorPastor: '',
+  contactEmail: '',
+  contactPhone: '',
   timezone: 'Africa/Accra (GMT)',
   currency: 'GHS (Ghana Cedi)',
   outerGeofenceMeters: 300,
-  innerGeofenceMeters: 100,
+  innerGeofenceMeters: 50,
   dwellTimeMinutes: 5,
   serviceWindowBeforeMinutes: 45,
   serviceWindowAfterMinutes: 30,
@@ -90,6 +60,8 @@ interface EkklesphereContextType {
   loginWithCredentials: (email: string, password?: string, preferredRole?: UserRole) => boolean;
   signInWithGoogle: () => Promise<void>;
   isGoogleAuthLoading: boolean;
+  googleAuthError: string | null;
+  clearGoogleAuthError: () => void;
   registerMember: (firstName: string, lastName: string, email: string, phone: string, groupName: string) => AuthUser;
   logout: () => void;
   switchUserRole: (role: UserRole) => void;
@@ -123,21 +95,42 @@ interface EkklesphereContextType {
   setActiveServiceId: (id: string) => void;
   services: ServiceInstance[];
   currentService: ServiceInstance;
+  refreshServices: () => Promise<void>;
+  addService: (params: {
+    name: string;
+    startsAt: string;
+    expectedAttendance?: number;
+    dwellMinutes?: number;
+  }) => Promise<void>;
 
   // People & Members
   members: Person[];
   visitorsCount: number;
-  addVisitor: (name: string, phone: string, howHeard: string) => void;
-  addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Person;
-  batchImportMembers: (newMembers: Person[]) => void;
-  updateMember: (memberId: string, updates: Partial<Person>) => void;
-  deleteMember: (memberId: string) => void;
+  refreshMembers: () => Promise<void>;
+  addVisitor: (name: string, phone: string, howHeard: string) => Promise<void>;
+  addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Promise<Person>;
+  batchImportMembers: (newMembers: Person[]) => Promise<Person[]>;
+  updateMember: (memberId: string, updates: Partial<Person>) => Promise<Person>;
+  deleteMember: (memberId: string) => Promise<void>;
   updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => void;
 
-  // System Settings
+  // System Settings & Live Church Premise Location
   systemSettings: SystemSettings;
   updateSystemSettings: (newSettings: Partial<SystemSettings>) => void;
   resetSystemSettings: () => void;
+  setChurchPremiseLocation: (params: {
+    lat: number;
+    lng: number;
+    accuracyM?: number | null;
+    churchName?: string;
+    campusName?: string;
+    campusAddress?: string;
+    innerGeofenceMeters?: number;
+    outerGeofenceMeters?: number;
+    dwellTimeMinutes?: number;
+  }) => Promise<boolean>;
+  clearChurchPremiseLocation: () => Promise<void>;
+  refreshLivePremise: () => Promise<void>;
 
   // Ministries, Fellowships & Cell Groups Management
   churchGroups: ChurchGroup[];
@@ -201,602 +194,23 @@ interface EkklesphereContextType {
   showToast: (msg: string) => void;
 }
 
-const INITIAL_SERVICES: ServiceInstance[] = [
-  {
-    id: 'svc-sun-1',
-    serviceId: 'def-sun-1',
-    campusId: 'campus-accra-central',
-    name: 'Sunday first service, 08:00',
-    startsAt: '08:00',
-    endsAt: '09:30',
-    status: 'open',
-    expectedAttendance: 520,
-  },
-  {
-    id: 'svc-sun-2',
-    serviceId: 'def-sun-2',
-    campusId: 'campus-accra-central',
-    name: 'Sunday second service, 10:30',
-    startsAt: '10:30',
-    endsAt: '12:00',
-    status: 'scheduled',
-    expectedAttendance: 480,
-  },
-  {
-    id: 'svc-wed-midweek',
-    serviceId: 'def-wed-1',
-    campusId: 'campus-accra-central',
-    name: 'Midweek prayer, Wed 18:30',
-    startsAt: '18:30',
-    endsAt: '20:00',
-    status: 'scheduled',
-    expectedAttendance: 210,
-  },
-];
+const LIVE_DEFAULT_SERVICE: ServiceInstance = {
+  id: 'svc-live-main',
+  serviceId: 'svc-live-main',
+  campusId: '00000000-0000-0000-0000-000000000001',
+  name: 'Main Worship Service',
+  startsAt: '08:00',
+  endsAt: '10:30',
+  status: 'open',
+  expectedAttendance: 0,
+};
 
-export const INITIAL_CHURCH_GROUPS: ChurchGroup[] = [
-  // --- MINISTRIES ---
-  {
-    id: 'grp-min-1',
-    name: 'Choir & Music Ministry',
-    category: 'ministry',
-    leaderName: 'Elder Samuel Darko',
-    leaderPhone: '+233 24 111 2233',
-    leaderEmail: 'samuel.darko@accracentral.org',
-    assistantLeader: 'Sister Joyce Mensah',
-    meetingDay: 'Thursdays & Saturdays',
-    meetingTime: '18:00 - 20:00',
-    meetingLocation: 'Main Sanctuary Choir Loft',
-    targetDemographic: 'Vocalists, Instrumentalists & Sound Engineers',
-    description: 'Leading praise and worship, anthems, hymnody, and musical spiritual preparation for Sunday and midweek services.',
-    active: true,
-    createdAt: '2023-01-10',
-  },
-  {
-    id: 'grp-min-2',
-    name: 'Ushers & Greeters Ministry',
-    category: 'ministry',
-    leaderName: 'Samuel Tetteh',
-    leaderPhone: '+233 24 555 6677',
-    leaderEmail: 'samuel.usher@accracentral.org',
-    assistantLeader: 'Brother Joseph Abbey',
-    meetingDay: 'Saturdays',
-    meetingTime: '16:00 - 17:30',
-    meetingLocation: 'Sanctuary Foyer & Reception Hall',
-    targetDemographic: 'Door Stewards, Welcomers, Protocol team',
-    description: 'Welcoming visitors, door scanning and assistance, distributing church bulletins, and maintaining reverence and order in the sanctuary.',
-    active: true,
-    createdAt: '2023-01-15',
-  },
-  {
-    id: 'grp-min-3',
-    name: 'Media & Tech Broadcast',
-    category: 'ministry',
-    leaderName: 'Emmanuel Osei',
-    leaderPhone: '+233 55 999 8811',
-    leaderEmail: 'media@accracentral.org',
-    assistantLeader: 'Sister Clara Ansah',
-    meetingDay: 'Fridays',
-    meetingTime: '17:30 - 19:30',
-    meetingLocation: 'Production Control Booth & Stage',
-    targetDemographic: 'Audio, Camera, Projection & Social Media Team',
-    description: 'Sanctuary acoustics, video livestreaming, multi-camera mixing, screen visual projection, and podcast broadcasting.',
-    active: true,
-    createdAt: '2023-02-01',
-  },
-  {
-    id: 'grp-min-4',
-    name: 'Children’s Ministry Workers',
-    category: 'ministry',
-    leaderName: 'Deaconess Comfort Mensah',
-    leaderPhone: '+233 20 777 4433',
-    leaderEmail: 'children@accracentral.org',
-    assistantLeader: 'Sister Naa Korkoi',
-    meetingDay: 'Saturdays',
-    meetingTime: '15:00 - 16:30',
-    meetingLocation: 'Children’s Chapel, Block B',
-    targetDemographic: 'Sunday School Teachers and Toddler Caregivers',
-    description: 'Age-graded biblical curriculum, Scripture memory recitation, Christian activities, and safety monitoring for ages 2 through 12.',
-    active: true,
-    createdAt: '2023-03-01',
-  },
-  {
-    id: 'grp-min-5',
-    name: 'Intercessory Prayer Band',
-    category: 'ministry',
-    leaderName: 'Pastor Ruth Larbi',
-    leaderPhone: '+233 24 333 9922',
-    leaderEmail: 'ruth.larbi@accracentral.org',
-    assistantLeader: 'Elder Daniel Kpodo',
-    meetingDay: 'Tuesdays & Fridays',
-    meetingTime: '05:30 - 06:45',
-    meetingLocation: 'Prayer Grotto & Online Dial-in',
-    targetDemographic: 'Congregational Prayer Intercessors',
-    description: 'Spiritual warfare, revival intercession, personal petition prayer, and 24/7 vigil coverage for the church and nation.',
-    active: true,
-    createdAt: '2023-01-20',
-  },
-  {
-    id: 'grp-min-6',
-    name: 'Health & Welfare Outreach',
-    category: 'ministry',
-    leaderName: 'Dr. Kwabena Boateng',
-    leaderPhone: '+233 27 888 1234',
-    leaderEmail: 'welfare@accracentral.org',
-    assistantLeader: 'Nurse Beatrice Addo',
-    meetingDay: '1st Saturday of Month',
-    meetingTime: '10:00 - 12:00',
-    meetingLocation: 'Campus Medical Post',
-    targetDemographic: 'Doctors, Nurses, Pharmacists & Welfare Officers',
-    description: 'First aid response during services, elderly and bereaved home visitations, hospital benevolence, and campus health screenings.',
-    active: true,
-    createdAt: '2023-04-12',
-  },
-
-  // --- FELLOWSHIPS ---
-  {
-    id: 'grp-fel-1',
-    name: 'Men’s Fellowship',
-    category: 'fellowship',
-    leaderName: 'Elder Kofi Mensah',
-    leaderPhone: '+233 24 667 7889',
-    leaderEmail: 'mensfellowship@accracentral.org',
-    assistantLeader: 'Brother Patrick Ofori',
-    meetingDay: '2nd & 4th Saturdays',
-    meetingTime: '07:00 - 08:30',
-    meetingLocation: 'Sanctuary Annex Conference Room',
-    targetDemographic: 'All Men & Fathers (18+)',
-    description: 'Christian manhood, integrity, biblical fatherhood, financial stewardship, vocational growth, and brotherhood support.',
-    active: true,
-    createdAt: '2023-01-18',
-  },
-  {
-    id: 'grp-fel-2',
-    name: 'Women of Faith (Virtuous Women)',
-    category: 'fellowship',
-    leaderName: 'Deaconess Grace Appiah',
-    leaderPhone: '+233 54 112 2334',
-    leaderEmail: 'women@accracentral.org',
-    assistantLeader: 'Sister Martha Boakye',
-    meetingDay: '3rd Saturday of Month',
-    meetingTime: '09:00 - 11:00',
-    meetingLocation: 'Main Hall Conference Room 1',
-    targetDemographic: 'All Women & Mothers (18+)',
-    description: 'Proverbs 31 spiritual enrichment, godly home builders, widow and orphan care, and mentorship for young wives and ladies.',
-    active: true,
-    createdAt: '2023-01-18',
-  },
-  {
-    id: 'grp-fel-3',
-    name: 'Youth & Young Adults (Ignite)',
-    category: 'fellowship',
-    leaderName: 'Pastor David Annan',
-    leaderPhone: '+233 50 123 9900',
-    leaderEmail: 'youth@accracentral.org',
-    assistantLeader: 'Brother Felix Quarshie',
-    meetingDay: 'Saturdays',
-    meetingTime: '16:00 - 18:00',
-    meetingLocation: 'Youth Auditorium & Creative Hub',
-    targetDemographic: 'High School Grads, University Students & Young Professionals (18-35)',
-    description: 'Dynamic worship, biblical worldview, career navigation, Christian relationship mentoring, and urban campus evangelism.',
-    active: true,
-    createdAt: '2023-02-14',
-  },
-  {
-    id: 'grp-fel-4',
-    name: 'Teens Fellowship (Crown of Glory)',
-    category: 'fellowship',
-    leaderName: 'Sister Efua Asante',
-    leaderPhone: '+233 55 123 4567',
-    leaderEmail: 'teens@accracentral.org',
-    assistantLeader: 'Brother Kelvin Tawiah',
-    meetingDay: 'Sundays',
-    meetingTime: '09:30 - 10:45',
-    meetingLocation: 'Teens Auditorium (Annex 2nd Floor)',
-    targetDemographic: 'Teenagers aged 13 - 17',
-    description: 'Empowering teens to stand for Christ, resist peer pressure, navigate academic choices, and develop daily devotion habits.',
-    active: true,
-    createdAt: '2023-02-20',
-  },
-  {
-    id: 'grp-fel-5',
-    name: 'Couples & Family Life Fellowship',
-    category: 'fellowship',
-    leaderName: 'Elder & Mrs. Darko',
-    leaderPhone: '+233 24 444 8822',
-    leaderEmail: 'familylife@accracentral.org',
-    assistantLeader: 'Deacon & Mrs. Boateng',
-    meetingDay: '2nd Friday of Month',
-    meetingTime: '18:30 - 20:30',
-    meetingLocation: 'Sanctuary Garden Terrace',
-    targetDemographic: 'Married Couples & Engaged Partners',
-    description: 'Marriage strengthening, healthy communication, parenting workshops, pre-marital counseling, and conflict resolution.',
-    active: true,
-    createdAt: '2023-03-10',
-  },
-
-  // --- CELL GROUPS (SMALL GROUPS) ---
-  {
-    id: 'grp-cell-1',
-    name: 'Osu North cell',
-    category: 'cell_group',
-    leaderName: 'Leader Yaw Boateng',
-    leaderPhone: '+233 24 455 6677',
-    leaderEmail: 'yaw.boateng@accracentral.org',
-    assistantLeader: 'Brother Kofi Mensah',
-    meetingDay: 'Wednesdays',
-    meetingTime: '18:30 - 19:45',
-    meetingLocation: 'Elder Mensah’s Residence, Osu RE (Near Danquah Circle)',
-    targetDemographic: 'Members living in Osu, Ringway Estates, and Lokko Road',
-    description: 'Midweek home cell fellowship, sermon reflection, intercession for families, and neighbor care.',
-    active: true,
-    createdAt: '2023-01-05',
-  },
-  {
-    id: 'grp-cell-2',
-    name: 'Ridge Fellowship',
-    category: 'cell_group',
-    leaderName: 'Leader Adwoa Sarpong',
-    leaderPhone: '+233 54 888 3322',
-    leaderEmail: 'adwoa.sarpong@accracentral.org',
-    assistantLeader: 'Elder David Kpodo',
-    meetingDay: 'Wednesdays',
-    meetingTime: '18:30 - 19:45',
-    meetingLocation: 'Independence Avenue Church Boardroom',
-    targetDemographic: 'Ridge, North Ridge, and Ministries enclave residents',
-    description: 'Midweek discipleship and interactive Bible study centered on Sunday sermon application.',
-    active: true,
-    createdAt: '2023-01-08',
-  },
-  {
-    id: 'grp-cell-3',
-    name: 'Cantonments Cell',
-    category: 'cell_group',
-    leaderName: 'Leader Kojo Appiah',
-    leaderPhone: '+233 26 998 8776',
-    leaderEmail: 'kojo.appiah@accracentral.org',
-    assistantLeader: 'Sister Abigail Oduro',
-    meetingDay: 'Wednesdays',
-    meetingTime: '19:00 - 20:15',
-    meetingLocation: 'Embassy Gardens / 4th Circular Road, Cantonments',
-    targetDemographic: 'Cantonments, Labone, and Burma Camp families',
-    description: 'Home fellowship providing mutual encouragement, scripture study, and pastoral accountability.',
-    active: true,
-    createdAt: '2023-01-12',
-  },
-  {
-    id: 'grp-cell-4',
-    name: 'Airport Residential Cell',
-    category: 'cell_group',
-    leaderName: 'Elder Kwame Ansah',
-    leaderPhone: '+233 20 555 4321',
-    leaderEmail: 'kwame.ansah@accracentral.org',
-    assistantLeader: 'Sister Georgina Mensah',
-    meetingDay: 'Thursdays',
-    meetingTime: '18:30 - 19:45',
-    meetingLocation: 'Airport Residential Area (Near Kotoka Int. Airport)',
-    targetDemographic: 'Airport Residential, Roman Ridge, and Dzorwulu zone',
-    description: 'Small group gathering for prayer, worship, practical spiritual support, and cell evangelism.',
-    active: true,
-    createdAt: '2023-02-15',
-  },
-  {
-    id: 'grp-cell-5',
-    name: 'East Legon Cell',
-    category: 'cell_group',
-    leaderName: 'Deacon Prince Quaye',
-    leaderPhone: '+233 24 777 6655',
-    leaderEmail: 'prince.quaye@accracentral.org',
-    assistantLeader: 'Brother Mark Baah',
-    meetingDay: 'Wednesdays',
-    meetingTime: '19:00 - 20:15',
-    meetingLocation: 'Lagos Avenue, East Legon',
-    targetDemographic: 'East Legon, Shiashie, and Bawaleshie neighborhood',
-    description: 'Home fellowship for families and students living in East Legon and surrounding areas.',
-    active: true,
-    createdAt: '2023-03-05',
-  },
-  {
-    id: 'grp-cell-6',
-    name: 'Labone Shalom Cell',
-    category: 'cell_group',
-    leaderName: 'Sister Akosua Darko',
-    leaderPhone: '+233 27 334 4556',
-    leaderEmail: 'akosua.darko@accracentral.org',
-    assistantLeader: 'Sister Joyce Acheampong',
-    meetingDay: 'Wednesdays',
-    meetingTime: '18:30 - 19:45',
-    meetingLocation: 'Labone Junction, Near Coffee Shop',
-    targetDemographic: 'Labone, South La, and Nyaniba Estate families',
-    description: 'Warm community fellowship, visiting sick brethren, and studying Sunday preaching points.',
-    active: true,
-    createdAt: '2023-03-20',
-  },
-  {
-    id: 'grp-cell-7',
-    name: 'Kaneshie - Odorkor Cell',
-    category: 'cell_group',
-    leaderName: 'Sister Abigail Tetteh',
-    leaderPhone: '+233 50 444 3322',
-    leaderEmail: 'abigail.tetteh@accracentral.org',
-    assistantLeader: 'Brother Joseph Sowah',
-    meetingDay: 'Wednesdays',
-    meetingTime: '18:30 - 19:45',
-    meetingLocation: 'Kaneshie Market Road / Annex 3',
-    targetDemographic: 'Kaneshie, Odorkor, Bubuashie, and Darkuman residents',
-    description: 'West Accra home fellowship and mutual pastoral care anchor.',
-    active: true,
-    createdAt: '2023-04-10',
-  },
-];
-
-const INITIAL_MEMBERS: Person[] = [
-  {
-    id: 'm1',
-    tenantId: 'tenant-accra',
-    firstName: 'Ama',
-    middleName: 'Akua',
-    lastName: 'Owusu',
-    preferredName: 'Ama',
-    specificLocation: 'Near Danquah Circle, Oxford Street',
-    remarks: 'Faithful cell leader, coordinates Sunday hospitality',
-    memberId: 'ACC-2023-001',
-    squads: 'Squad Alpha',
-    department: 'Hospitality & Greeters',
-    officerName: 'Cell Leader',
-    gender: 'female',
-    dateOfBirth: '1992-04-18',
-    phoneE164: '+233241234567',
-    phoneNumber: '+233241234567',
-    placeOfResidence: 'Osu RE, Accra',
-    residentialDigitalAddress: 'GA-032-8812',
-    hometown: 'Akuapem Akropong',
-    occupation: 'Financial Analyst',
-    homeCellGroup: 'Osu North cell',
-    groupName: 'Osu North cell',
-    monthOfBirth: 'April',
-    maritalStatus: 'Married',
-    spouseName: 'Kofi Owusu',
-    numberOfChildren: 2,
-    emergencyContactPerson: 'Kofi Owusu',
-    emergencyContactPhone: '+233244112233',
-    imageUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    dateOfBaptism: '2016-08-14',
-    dateOfMarriage: '2020-11-21',
-    dateOfSalvation: '2012-03-05',
-    dateOfMembership: '2023-01-15',
-    email: 'ama@example.com',
-    status: 'member',
-    autoCheckinOptedIn: true,
-    avatarInitials: 'AO',
-    joinedOn: '2023-01-15',
-    consecutiveAbsences: 0,
-  },
-  {
-    id: 'm2',
-    tenantId: 'tenant-accra',
-    firstName: 'Kwame',
-    middleName: 'Kofi',
-    lastName: 'Mensah',
-    preferredName: 'Kwame',
-    specificLocation: 'Airport Residential near Nyaho Clinic',
-    remarks: 'Tenor section leader in choir',
-    memberId: 'ACC-2022-014',
-    squads: 'Davidic Praisers',
-    department: 'Choir & Music Ministry',
-    officerName: 'Music Secretary',
-    gender: 'male',
-    dateOfBirth: '1989-08-25',
-    phoneE164: '+233201112233',
-    phoneNumber: '+233201112233',
-    placeOfResidence: 'Airport Residential, Accra',
-    residentialDigitalAddress: 'GA-112-4091',
-    hometown: 'Kumasi',
-    occupation: 'Architect',
-    homeCellGroup: 'Ridge Fellowship',
-    groupName: 'Choir',
-    monthOfBirth: 'August',
-    maritalStatus: 'Married',
-    spouseName: 'Abena Mensah',
-    numberOfChildren: 3,
-    emergencyContactPerson: 'Abena Mensah',
-    emergencyContactPhone: '+233202223344',
-    imageUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    dateOfBaptism: '2014-04-20',
-    dateOfMarriage: '2018-09-15',
-    dateOfSalvation: '2010-06-12',
-    dateOfMembership: '2022-04-10',
-    email: 'kwame@example.com',
-    status: 'member',
-    autoCheckinOptedIn: true,
-    avatarInitials: 'KM',
-    joinedOn: '2022-04-10',
-    consecutiveAbsences: 0,
-  },
-  {
-    id: 'm3',
-    tenantId: 'tenant-accra',
-    firstName: 'Efua',
-    middleName: 'Mansah',
-    lastName: 'Asante',
-    preferredName: 'Efua',
-    specificLocation: 'Behind Ridge Church School',
-    remarks: 'Active in youth mentorship and media camera operation',
-    memberId: 'ACC-2024-055',
-    squads: 'NextGen Force',
-    department: 'Youth & Young Adults',
-    officerName: 'Youth Executive',
-    gender: 'female',
-    dateOfBirth: '1998-11-10',
-    phoneE164: '+233551234567',
-    phoneNumber: '+233551234567',
-    placeOfResidence: 'Ridge, Accra',
-    residentialDigitalAddress: 'GA-084-3321',
-    hometown: 'Cape Coast',
-    occupation: 'Graphic Designer',
-    homeCellGroup: 'Youth',
-    groupName: 'Youth',
-    monthOfBirth: 'November',
-    maritalStatus: 'Single',
-    spouseName: '',
-    numberOfChildren: 0,
-    emergencyContactPerson: 'Mrs. Janet Asante',
-    emergencyContactPhone: '+233559988776',
-    dateOfBaptism: '2018-12-02',
-    dateOfMarriage: '',
-    dateOfSalvation: '2017-04-16',
-    dateOfMembership: '2024-02-01',
-    email: 'efua@example.com',
-    status: 'member',
-    autoCheckinOptedIn: true,
-    avatarInitials: 'EA',
-    joinedOn: '2024-02-01',
-    consecutiveAbsences: 0,
-  },
-  {
-    id: 'm4',
-    tenantId: 'tenant-accra',
-    firstName: 'Yaw',
-    middleName: 'Boateng',
-    lastName: 'Boateng',
-    preferredName: 'Yaw',
-    specificLocation: 'Labone, near Coffee Shop',
-    remarks: 'Finance auditing committee volunteer',
-    memberId: 'ACC-2021-089',
-    squads: 'Squad Beta',
-    department: 'Finance & Audit',
-    officerName: 'Deacon',
-    gender: 'male',
-    dateOfBirth: '1985-02-14',
-    phoneE164: '+233244556677',
-    phoneNumber: '+233244556677',
-    placeOfResidence: 'Labone, Accra',
-    residentialDigitalAddress: 'GA-201-9483',
-    hometown: 'Mampong Ashanti',
-    occupation: 'Senior Auditor',
-    homeCellGroup: 'Osu North cell',
-    groupName: 'Osu North cell',
-    monthOfBirth: 'February',
-    maritalStatus: 'Married',
-    spouseName: 'Yaa Boateng',
-    numberOfChildren: 2,
-    emergencyContactPerson: 'Yaa Boateng',
-    emergencyContactPhone: '+233244889900',
-    dateOfBaptism: '2011-06-19',
-    dateOfMarriage: '2015-10-24',
-    dateOfSalvation: '2008-01-13',
-    dateOfMembership: '2021-08-20',
-    status: 'member',
-    autoCheckinOptedIn: true,
-    avatarInitials: 'YB',
-    joinedOn: '2021-08-20',
-    consecutiveAbsences: 0,
-  },
-  {
-    id: 'm5',
-    tenantId: 'tenant-accra',
-    firstName: 'Akosua',
-    middleName: 'Serwaa',
-    lastName: 'Darko',
-    preferredName: 'Akosua',
-    specificLocation: 'Cantonments, 4th Circular Road',
-    remarks: 'Chief usher for Sunday second service',
-    memberId: 'ACC-2023-102',
-    squads: 'Door Stewards',
-    department: 'Ushering Ministry',
-    officerName: 'Usher Captain',
-    gender: 'female',
-    dateOfBirth: '1991-07-03',
-    phoneE164: '+233273344556',
-    phoneNumber: '+233273344556',
-    placeOfResidence: 'Cantonments, Accra',
-    residentialDigitalAddress: 'GA-492-1029',
-    hometown: 'Koforidua',
-    occupation: 'Human Resource Specialist',
-    homeCellGroup: 'Cantonments Cell',
-    groupName: 'Ushers',
-    monthOfBirth: 'July',
-    maritalStatus: 'Married',
-    spouseName: 'Kwabena Darko',
-    numberOfChildren: 1,
-    emergencyContactPerson: 'Kwabena Darko',
-    emergencyContactPhone: '+233277001122',
-    dateOfBaptism: '2015-09-27',
-    dateOfMarriage: '2021-05-08',
-    dateOfSalvation: '2013-11-17',
-    dateOfMembership: '2023-06-12',
-    status: 'member',
-    autoCheckinOptedIn: true,
-    avatarInitials: 'AD',
-    joinedOn: '2023-06-12',
-    consecutiveAbsences: 0,
-  },
-  {
-    id: 'm6',
-    tenantId: 'tenant-accra',
-    firstName: 'Kofi',
-    middleName: 'Atta',
-    lastName: 'Mensah',
-    preferredName: 'Kofi',
-    specificLocation: 'Adabraka, near Roxy Cinema',
-    remarks: 'Absent for 3 weeks consecutive. Pastoral care call scheduled.',
-    memberId: 'ACC-2020-007',
-    squads: 'Men of Valor',
-    department: 'Men’s Fellowship',
-    officerName: 'Elder',
-    gender: 'male',
-    dateOfBirth: '1979-10-15',
-    phoneE164: '+233246677889',
-    phoneNumber: '+233246677889',
-    placeOfResidence: 'Adabraka, Accra',
-    residentialDigitalAddress: 'GA-050-7714',
-    hometown: 'Abeokuta / Winneba',
-    occupation: 'Logistics Manager',
-    homeCellGroup: 'Men’s fellowship',
-    groupName: 'Men’s fellowship',
-    monthOfBirth: 'October',
-    maritalStatus: 'Married',
-    spouseName: 'Mary Mensah',
-    numberOfChildren: 4,
-    emergencyContactPerson: 'Mary Mensah',
-    emergencyContactPhone: '+233249001122',
-    dateOfBaptism: '2005-04-10',
-    dateOfMarriage: '2009-12-12',
-    dateOfSalvation: '2001-08-25',
-    dateOfMembership: '2020-03-05',
-    status: 'member',
-    autoCheckinOptedIn: false,
-    avatarInitials: 'KM',
-    joinedOn: '2020-03-05',
-    consecutiveAbsences: 3,
-    notes: 'Absent for 3 weeks consecutive. Pastoral care call scheduled.',
-  },
-];
-
-const INITIAL_FOLLOWUPS: FollowupTask[] = [
-  {
-    id: 'task-1',
-    personId: 'm6',
-    personName: 'Kofi Mensah',
-    groupName: 'Osu North / Men’s Fellowship',
-    reason: 'absent_3',
-    assignedToName: 'Ruth Larbi',
-    status: 'open',
-    dueOn: '2026-11-02',
-    createdAt: '2026-10-28',
-  },
-  {
-    id: 'task-2',
-    personId: 'm8',
-    personName: 'Nana Addo',
-    groupName: 'Youth Fellowship',
-    reason: 'absent_2',
-    assignedToName: 'Kojo Appiah (Cell Leader)',
-    status: 'open',
-    dueOn: '2026-11-01',
-    createdAt: '2026-10-29',
-  },
-];
+const DEMO_USER_IDS = new Set(['u-admin-1', 'u-usher-1', 'u-member-1']);
+const DEMO_USER_EMAILS = new Set([
+  'pastor.david@ekklesphere.org',
+  'samuel.usher@ekklesphere.org',
+  'ama.mensah@gmail.com',
+]);
 
 const EkklesphereContext = createContext<EkklesphereContextType | undefined>(undefined);
 
@@ -805,12 +219,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     try {
       const saved = localStorage.getItem('ekklesphere_user');
       if (saved) {
-        return JSON.parse(saved);
+        const parsed: AuthUser = JSON.parse(saved);
+        if (
+          parsed &&
+          !DEMO_USER_IDS.has(parsed.id) &&
+          !DEMO_USER_EMAILS.has((parsed.email || '').toLowerCase())
+        ) {
+          return parsed;
+        }
+        localStorage.removeItem('ekklesphere_user');
       }
     } catch {
-      // fallback
+      // ignore invalid storage
     }
-    return DEMO_USERS.admin;
+    return null;
   });
 
   const [activePortalState, setActivePortalState] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
@@ -877,63 +299,31 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, []);
 
   const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
+  const [googleAuthError, setGoogleAuthError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
-        const email = fbUser.email || '';
-        const name = fbUser.displayName || email.split('@')[0] || 'Church Member';
-        const initials =
-          name
-            .split(' ')
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase() || 'EM';
+  const clearGoogleAuthError = () => setGoogleAuthError(null);
 
-        const role: UserRole =
-          email.toLowerCase() === 'elenamends@gmail.com' ||
-          email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-          email.toLowerCase().includes('pastor') ||
-          email.toLowerCase().includes('admin')
-            ? 'admin'
-            : email.toLowerCase().includes('usher')
-            ? 'usher'
-            : 'member';
-
-        const gUser: AuthUser = {
-          id: fbUser.uid,
-          name,
-          email,
-          role,
-          avatar: fbUser.photoURL || undefined,
-          initials,
-          title:
-            role === 'admin'
-              ? 'Administrator / Executive Pastor'
-              : role === 'usher'
-              ? 'Door Steward / Usher'
-              : 'Congregation Member',
-          campusName: 'Accra Central Campus',
-          permissions:
-            role === 'admin'
-              ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-              : role === 'usher'
-              ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-              : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-        };
-
-        setCurrentUser(gUser);
-        try {
-          localStorage.setItem('ekklesphere_user', JSON.stringify(gUser));
-        } catch {
-          // ignore
-        }
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
+  const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
+    const normalized = rawEmail.trim().toLowerCase();
+    if (normalized === 'amoakoemmanuel2026@gmail.com') {
+      return 'admin';
+    }
+    const officer = (matchedMember?.officerName || '').toLowerCase();
+    const dept = (matchedMember?.department || '').toLowerCase();
+    if (officer.includes('admin') || officer.includes('pastor') || officer.includes('elder')) {
+      return 'admin';
+    }
+    if (officer.includes('usher') || dept.includes('usher')) {
+      return 'usher';
+    }
+    if (normalized.includes('pastor') || normalized.includes('admin')) {
+      return 'admin';
+    }
+    if (normalized.includes('usher')) {
+      return 'usher';
+    }
+    return 'member';
+  };
 
   const login = (user: AuthUser) => {
     setCurrentUser(user);
@@ -950,28 +340,28 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const signInWithGoogle = async () => {
     setIsGoogleAuthLoading(true);
+    setGoogleAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const fbUser = result.user;
       const email = fbUser.email || '';
-      const name = fbUser.displayName || 'Google Member';
+      const matchedMember = members.find(
+        (m) => (m.email || '').toLowerCase() === email.trim().toLowerCase()
+      );
+      const name =
+        fbUser.displayName ||
+        (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : '') ||
+        'Google Member';
       const initials =
         name
           .split(' ')
+          .filter(Boolean)
           .map((n) => n[0])
           .slice(0, 2)
           .join('')
           .toUpperCase() || 'GM';
 
-      const role: UserRole =
-        email.toLowerCase() === 'elenamends@gmail.com' ||
-        email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-        email.toLowerCase().includes('pastor') ||
-        email.toLowerCase().includes('admin')
-          ? 'admin'
-          : email.toLowerCase().includes('usher')
-          ? 'usher'
-          : 'member';
+      const role = resolveUserRoleForEmail(email, matchedMember);
 
       const gUser: AuthUser = {
         id: fbUser.uid,
@@ -980,13 +370,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         role,
         avatar: fbUser.photoURL || undefined,
         initials,
+        memberId: matchedMember?.id,
         title:
           role === 'admin'
             ? 'Administrator / Executive Pastor'
             : role === 'usher'
             ? 'Door Steward / Usher'
+            : matchedMember?.groupName
+            ? `Member (${matchedMember.groupName})`
             : 'Congregation Member',
-        campusName: 'Accra Central Campus',
+        campusName: systemSettings.campusName || 'PIWC KWADASO',
         permissions:
           role === 'admin'
             ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
@@ -998,12 +391,29 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       login(gUser);
       showToast(`Authenticated with Google as ${name}`);
     } catch (err: unknown) {
-      console.error('Google Sign-in error:', err);
+      const errCode =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code || '')
+          : '';
       const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('popup-closed-by-user')) {
-        showToast('Google sign-in was closed before completion');
+
+      if (errCode.includes('popup-closed-by-user') || errCode.includes('cancelled-popup-request') || errMsg.includes('popup-closed-by-user')) {
+        showToast('Google sign-in popup was closed before completion.');
+      } else if (errCode.includes('popup-blocked') || errMsg.includes('popup-blocked')) {
+        const msg = 'Your browser blocked the Google sign-in popup. Please allow popups for this site and try again.';
+        setGoogleAuthError(msg);
+        showToast(msg);
+      } else if (errCode.includes('unauthorized-domain') || errMsg.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
+        const msg = `Domain "${host}" is not yet authorized in Firebase Authentication → Settings → Authorized domains. You can also sign in immediately below using your email.`;
+        console.warn('[Auth] Unauthorized domain during Google Sign-in:', host);
+        setGoogleAuthError(msg);
+        showToast('Google domain authorization required — use email sign-in below or refresh.');
       } else {
-        showToast('Google sign-in encountered an issue. You can also sign in via Demo Roles.');
+        console.warn('[Auth] Google Sign-in warning:', errMsg);
+        const msg = 'Google sign-in could not complete right now. Please retry or sign in with your church email below.';
+        setGoogleAuthError(msg);
+        showToast(msg);
       }
     } finally {
       setIsGoogleAuthLoading(false);
@@ -1012,6 +422,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const logout = () => {
     setCurrentUser(null);
+    setGoogleAuthError(null);
     try {
       firebaseSignOut(auth).catch(() => {});
       localStorage.removeItem('ekklesphere_user');
@@ -1022,50 +433,85 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const switchUserRole = (role: UserRole) => {
-    const targetUser = DEMO_USERS[role];
-    login(targetUser);
+    if (!currentUser) return;
+    const updatedUser: AuthUser = {
+      ...currentUser,
+      role,
+      title:
+        role === 'admin'
+          ? 'Administrator / Executive Pastor'
+          : role === 'usher'
+          ? 'Door Steward / Usher'
+          : 'Congregation Member',
+      permissions:
+        role === 'admin'
+          ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+          : role === 'usher'
+          ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+          : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+    };
+    login(updatedUser);
   };
 
   const loginWithCredentials = (email: string, _password?: string, preferredRole?: UserRole): boolean => {
     const trimmed = email.trim().toLowerCase();
-    let selectedUser: AuthUser;
+    if (!trimmed) return false;
 
-    if (preferredRole && DEMO_USERS[preferredRole]) {
-      selectedUser = {
-        ...DEMO_USERS[preferredRole],
-        email: trimmed || DEMO_USERS[preferredRole].email,
-      };
-    } else if (trimmed.includes('pastor') || trimmed.includes('admin') || trimmed.includes('david')) {
-      selectedUser = DEMO_USERS.admin;
-    } else if (trimmed.includes('usher') || trimmed.includes('samuel') || trimmed.includes('door')) {
-      selectedUser = DEMO_USERS.usher;
-    } else {
-      selectedUser = DEMO_USERS.member;
-    }
+    const matchedMember = members.find((m) => (m.email || '').toLowerCase() === trimmed);
+    const derivedRole: UserRole = preferredRole || resolveUserRoleForEmail(trimmed, matchedMember);
 
-    login(selectedUser);
+    const rawName = matchedMember
+      ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim()
+      : trimmed
+          .split('@')[0]
+          .replace(/[._-]+/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const initials =
+      rawName
+        .split(' ')
+        .filter(Boolean)
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase() || 'MB';
+
+    const authenticatedUser: AuthUser = {
+      id: matchedMember?.id || `u-${Date.now()}`,
+      name: rawName || 'Church Member',
+      email: trimmed,
+      role: derivedRole,
+      initials,
+      title:
+        derivedRole === 'admin'
+          ? 'Administrator / Executive Pastor'
+          : derivedRole === 'usher'
+          ? 'Door Steward / Usher'
+          : matchedMember?.groupName
+          ? `Member (${matchedMember.groupName})`
+          : 'Congregation Member',
+      campusName: systemSettings.campusName || 'PIWC KWADASO',
+      memberId: matchedMember?.id,
+      permissions:
+        derivedRole === 'admin'
+          ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+          : derivedRole === 'usher'
+          ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+          : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+    };
+
+    login(authenticatedUser);
     return true;
   };
 
   const registerMember = (firstName: string, lastName: string, email: string, phone: string, groupName: string): AuthUser => {
     const initials = `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase();
-    const newMemberId = `m-${Date.now()}`;
-    const newPerson: Person = {
-      id: newMemberId,
-      tenantId: 'tenant-accra',
-      firstName,
-      lastName,
-      phoneE164: phone.startsWith('+') ? phone : `+233${phone.replace(/^0/, '')}`,
-      email,
-      status: 'member',
-      groupName: groupName || 'Osu North cell',
-      autoCheckinOptedIn: true,
-      avatarInitials: initials,
-      joinedOn: new Date().toISOString().split('T')[0],
-      consecutiveAbsences: 0,
-    };
-
-    setMembers((prev) => [newPerson, ...prev]);
+    const formattedPhone = phone
+      ? phone.startsWith('+')
+        ? phone
+        : `+233${phone.replace(/^0/, '').replace(/\D/g, '')}`
+      : '';
+    const tempMemberId = `m-${Date.now()}`;
 
     const newUser: AuthUser = {
       id: `u-${Date.now()}`,
@@ -1074,13 +520,44 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       role: 'member',
       initials,
       title: `Member (${groupName || 'Congregation'})`,
-      campusName: 'Accra Central Campus',
-      memberId: newMemberId,
+      campusName: systemSettings.campusName || 'Main Church Premise',
+      memberId: tempMemberId,
       permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
     };
 
+    // Persist newly self-registered member to Supabase database
+    fetch('/api/members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName,
+        lastName,
+        phoneE164: formattedPhone || undefined,
+        email: email || undefined,
+        status: 'member',
+        homeCellGroup: groupName || 'General Congregation',
+        groupName: groupName || 'General Congregation',
+        autoCheckinOptedIn: true,
+        consecutiveAbsences: 0,
+      }),
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const savedPerson: Person = await res.json();
+          setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
+          const updatedUser = { ...newUser, memberId: savedPerson.id };
+          setCurrentUser(updatedUser);
+          try {
+            localStorage.setItem('ekklesphere_user', JSON.stringify(updatedUser));
+          } catch {
+            // ignore
+          }
+        }
+      })
+      .catch((err) => console.error('Failed to persist registered member:', err));
+
     login(newUser);
-    showToast(`Welcome to Accra Central Church, ${firstName}!`);
+    showToast(`Welcome to ${systemSettings.churchName || 'Church'}, ${firstName}!`);
     return newUser;
   };
 
@@ -1098,27 +575,34 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     return 'light';
   });
-  const [activeServiceId, setActiveServiceId] = useState<string>('svc-sun-1');
-  const [services] = useState<ServiceInstance[]>(INITIAL_SERVICES);
-  const [members, setMembers] = useState<Person[]>(() => {
-    try {
-      const saved = localStorage.getItem('ekklesphere_members');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch {
-      // fallback
-    }
-    return INITIAL_MEMBERS;
-  });
+  const [activeServiceId, setActiveServiceId] = useState<string>(LIVE_DEFAULT_SERVICE.id);
+  const [services, setServices] = useState<ServiceInstance[]>([LIVE_DEFAULT_SERVICE]);
+  const [members, setMembers] = useState<Person[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_system_settings');
       if (saved) {
-        return { ...DEFAULT_SYSTEM_SETTINGS, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        const cleaned: SystemSettings = {
+          ...DEFAULT_SYSTEM_SETTINGS,
+          ...parsed,
+          churchName:
+            !parsed.churchName || parsed.churchName === 'Ekklesphere Church'
+              ? 'PIWC KWADASO'
+              : parsed.churchName,
+          campusName:
+            !parsed.campusName || parsed.campusName === 'Main Church Premise'
+              ? 'PIWC KWADASO'
+              : parsed.campusName,
+          seniorPastor:
+            parsed.seniorPastor === 'Pastor David Osei' ? '' : parsed.seniorPastor || '',
+          contactEmail:
+            parsed.contactEmail === 'admin@ekklesphere.org' ? '' : parsed.contactEmail || '',
+          contactPhone:
+            parsed.contactPhone === '+233 24 123 4567' ? '' : parsed.contactPhone || '',
+        };
+        localStorage.setItem('ekklesphere_system_settings', JSON.stringify(cleaned));
+        return cleaned;
       }
     } catch {
       // fallback
@@ -1126,22 +610,92 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return DEFAULT_SYSTEM_SETTINGS;
   });
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        const email = fbUser.email || '';
+        const matchedMember = members.find(
+          (m) => (m.email || '').toLowerCase() === email.trim().toLowerCase()
+        );
+        const name =
+          fbUser.displayName ||
+          (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : '') ||
+          email.split('@')[0] ||
+          'Church Member';
+        const initials =
+          name
+            .split(' ')
+            .filter(Boolean)
+            .map((n) => n[0])
+            .slice(0, 2)
+            .join('')
+            .toUpperCase() || 'CM';
+
+        const role = resolveUserRoleForEmail(email, matchedMember);
+
+        const gUser: AuthUser = {
+          id: fbUser.uid,
+          name,
+          email,
+          role,
+          avatar: fbUser.photoURL || undefined,
+          initials,
+          memberId: matchedMember?.id,
+          title:
+            role === 'admin'
+              ? 'Administrator / Executive Pastor'
+              : role === 'usher'
+              ? 'Door Steward / Usher'
+              : matchedMember?.groupName
+              ? `Member (${matchedMember.groupName})`
+              : 'Congregation Member',
+          campusName: systemSettings.campusName || 'PIWC KWADASO',
+          permissions:
+            role === 'admin'
+              ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+              : role === 'usher'
+              ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+              : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+        };
+
+        setCurrentUser(gUser);
+        setGoogleAuthError(null);
+        try {
+          localStorage.setItem('ekklesphere_user', JSON.stringify(gUser));
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [members, systemSettings.campusName]);
+
   const [churchGroups, setChurchGroups] = useState<ChurchGroup[]>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_church_groups');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          const liveOnly = parsed.filter(
+            (g: ChurchGroup) =>
+              g &&
+              typeof g.id === 'string' &&
+              !g.id.startsWith('grp-min-') &&
+              !g.id.startsWith('grp-fel-') &&
+              !g.id.startsWith('grp-cell-')
+          );
+          localStorage.setItem('ekklesphere_church_groups', JSON.stringify(liveOnly));
+          return liveOnly;
         }
       }
     } catch {
       // fallback
     }
-    return INITIAL_CHURCH_GROUPS;
+    return [];
   });
-  const [visitorsCount, setVisitorsCount] = useState<number>(3);
-  const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>(INITIAL_FOLLOWUPS);
+  const [visitorsCount, setVisitorsCount] = useState<number>(0);
+  const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>([]);
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
@@ -1158,86 +712,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     sms: false,
     email: true,
   });
-  const [memberRsvps, setMemberRsvps] = useState<Record<string, boolean>>({
-    'Sunday Service': true,
-    'Midweek prayer': false,
-    'Youth fellowship': false,
-    'Harvest thanksgiving': true,
-  });
-  const [donations, setDonations] = useState<Donation[]>([
-    {
-      id: 'don-1',
-      personId: 'm1',
-      personName: 'Ama Owusu',
-      fundId: 'tithe',
-      fundName: 'Tithe',
-      amountMinor: 15000,
-      currency: 'GHS',
-      method: 'momo',
-      provider: 'MTN MoMo',
-      status: 'paid',
-      paidAt: '2026-10-25',
-    },
-  ]);
+  const [memberRsvps, setMemberRsvps] = useState<Record<string, boolean>>({});
+  const [donations, setDonations] = useState<Donation[]>([]);
 
-  // Initial checked-in records (matches prototype baseline 408 + individual members checked in)
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
-    const records: AttendanceRecord[] = [
-      {
-        id: 'rec-m1',
-        tenantId: 'tenant-accra',
-        personId: 'm1',
-        serviceInstanceId: 'svc-sun-1',
-        campusId: 'campus-accra-central',
-        method: 'geofence',
-        confidence: 85,
-        checkedInAt: '07:45 AM',
-        late: false,
-      },
-      {
-        id: 'rec-m2',
-        tenantId: 'tenant-accra',
-        personId: 'm2',
-        serviceInstanceId: 'svc-sun-1',
-        campusId: 'campus-accra-central',
-        method: 'beacon',
-        confidence: 95,
-        checkedInAt: '07:50 AM',
-        late: false,
-      },
-      {
-        id: 'rec-m3',
-        tenantId: 'tenant-accra',
-        personId: 'm3',
-        serviceInstanceId: 'svc-sun-1',
-        campusId: 'campus-accra-central',
-        method: 'usher',
-        confidence: 98,
-        checkedInAt: '07:58 AM',
-        late: false,
-      },
-    ];
-    return records;
-  });
+  // Real live attendance records synchronized across devices via /api/campus-premise & /api/live-checkins
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([
-    {
-      id: 'log-1',
-      actor: 'System',
-      action: 'Service window opened',
-      entityType: 'ServiceInstance',
-      timestamp: '07:00 AM',
-      details: 'Check-in window active for Sunday first service',
-    },
-    {
-      id: 'log-2',
-      actor: 'Ama Owusu (Device)',
-      action: 'Signed Arrival Signal Verified',
-      entityType: 'AttendanceSignal',
-      timestamp: '07:45 AM',
-      details: 'Inner ring dwell 5m satisfied, confidence 85%',
-    },
-  ]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -1278,25 +759,23 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
-  const currentService = services.find((s) => s.id === activeServiceId) || services[0];
+  const currentService = services.find((s) => s.id === activeServiceId) || services[0] || LIVE_DEFAULT_SERVICE;
 
-  // Dynamic attendance tally:
-  // Baseline count (408 expected in prototype) + additional checked-in members beyond the initial 3 + visitors
-  const baseCount = 408;
-  const currentCheckedInMemberCount = members.filter((m) =>
-    attendanceRecords.some((r) => r.personId === m.id)
-  ).length;
-  // Net added beyond the initial 3
-  const netAddedMembers = Math.max(0, currentCheckedInMemberCount - 3);
-  const totalCheckedInCount = baseCount + netAddedMembers + (visitorsCount - 3);
-  const expectedAttendance = currentService.expectedAttendance;
-  const attendancePercentage = Math.min(100, Math.round((totalCheckedInCount / expectedAttendance) * 100));
+  // Real-time attendance metrics (zero synthetic baseline)
+  const totalCheckedInCount = attendanceRecords.length;
+  const expectedAttendance =
+    currentService.expectedAttendance > 0 ? currentService.expectedAttendance : members.length;
+  const attendancePercentage =
+    expectedAttendance > 0
+      ? Math.min(100, Math.round((totalCheckedInCount / expectedAttendance) * 100))
+      : 0;
 
-  const totalMembersCount = 520;
-  const autoCheckinOptedInCount = 333 + (memberConsents.autoCheckin ? 1 : 0);
-  const optInPercentage = Math.round((autoCheckinOptedInCount / totalMembersCount) * 100);
+  const totalMembersCount = members.length;
+  const autoCheckinOptedInCount = members.filter((m) => m.autoCheckinOptedIn).length;
+  const optInPercentage =
+    totalMembersCount > 0 ? Math.round((autoCheckinOptedInCount / totalMembersCount) * 100) : 0;
 
-  // Check-in action (handles offline queue vs instant online update)
+  // Check-in action (handles offline queue vs instant online server sync)
   const checkInPerson = (
     personId: string,
     method: CheckinMethod,
@@ -1309,12 +788,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     const person = members.find((m) => m.id === personId);
+    const personFullName = person ? `${person.firstName} ${person.lastName}`.trim() : currentUser?.name || 'Member';
     const newRecord: AttendanceRecord = {
       id: `rec-${personId}-${Date.now()}`,
-      tenantId: 'tenant-accra',
+      tenantId: 'tenant-live',
       personId,
       serviceInstanceId: activeServiceId,
-      campusId: 'campus-accra-central',
+      campusId: '00000000-0000-0000-0000-000000000001',
       method,
       confidence,
       checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -1329,17 +809,26 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setPendingSyncCount((c) => c + 1);
       showToast(`${person?.firstName || 'Member'} saved locally. Will sync when online.`);
     } else {
-      showToast(`${person?.firstName || 'Member'} checked in (${method})`);
+      fetch('/api/live-checkins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newRecord,
+          personName: personFullName,
+          recordedBy: currentUser?.name,
+        }),
+      }).catch((err) => console.warn('Could not sync check-in to server:', err));
+      showToast(`${person?.firstName || personFullName} checked in (${method})`);
     }
 
     setAuditLogs((prev) => [
       {
         id: `log-${Date.now()}`,
-        actor: method === 'usher' ? 'Usher Desk' : `${person?.firstName || 'Member'} Device`,
+        actor: method === 'usher' ? 'Usher Desk' : `${person?.firstName || personFullName} Device`,
         action: 'Attendance Recorded',
         entityType: 'AttendanceRecord',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Method: ${method}, Confidence: ${confidence}%`,
+        details: note || `Method: ${method}, Confidence: ${confidence}%`,
       },
       ...prev,
     ]);
@@ -1349,46 +838,85 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const removeCheckIn = (personId: string) => {
     setAttendanceRecords((prev) => prev.filter((r) => r.personId !== personId));
+    fetch(`/api/live-checkins/${encodeURIComponent(personId)}`, {
+      method: 'DELETE',
+    }).catch((err) => console.warn('Could not remove check-in on server:', err));
     const person = members.find((m) => m.id === personId);
     showToast(`Check-in removed for ${person?.firstName || 'Member'}`);
   };
 
-  const addVisitor = (name: string, phone: string, howHeard: string) => {
-    setVisitorsCount((c) => c + 1);
+  const refreshMembers = async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/members');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setMembers(data);
+        try {
+          localStorage.removeItem('ekklesphere_members');
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch members from server:', err);
+    }
+  };
+
+  const addVisitor = async (name: string, phone: string, howHeard: string): Promise<void> => {
     const parts = name.trim().split(' ');
     const firstName = parts[0] || 'Visitor';
-    const lastName = parts.slice(1).join(' ') || '';
-    const newId = `vis-${Date.now()}`;
+    const lastName = parts.slice(1).join(' ') || 'Guest';
+    const cleanDigits = phone ? phone.replace(/\D/g, '') : '';
+    const formattedPhone = phone
+      ? phone.startsWith('+')
+        ? phone.trim()
+        : cleanDigits.startsWith('0')
+        ? `+233${cleanDigits.slice(1)}`
+        : `+233${cleanDigits}`
+      : undefined;
 
-    const newPerson: Person = {
-      id: newId,
-      tenantId: 'tenant-accra',
-      firstName,
-      lastName,
-      phoneE164: phone ? (phone.startsWith('+') ? phone : `+233${phone.replace(/\D/g, '')}`) : '',
-      status: 'visitor',
-      groupName: 'First-time Visitor',
-      autoCheckinOptedIn: false,
-      avatarInitials: `${firstName[0] || 'V'}${lastName[0] || 'I'}`,
-      joinedOn: new Date().toISOString().split('T')[0],
-      consecutiveAbsences: 0,
-      notes: `Heard via: ${howHeard}`,
-    };
+    const res = await fetch('/api/members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName,
+        lastName,
+        phoneE164: formattedPhone,
+        status: 'visitor',
+        officerName: 'Guest',
+        homeCellGroup: 'First-time Visitor',
+        groupName: 'First-time Visitor',
+        autoCheckinOptedIn: false,
+        consecutiveAbsences: 0,
+        remarks: `Heard via: ${howHeard}`,
+        notes: `Heard via: ${howHeard}`,
+      }),
+    });
 
-    setMembers((prev) => [newPerson, ...prev]);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      const msg = errBody?.message || 'Failed to save visitor to database.';
+      showToast(msg);
+      throw new Error(msg);
+    }
+
+    const savedPerson: Person = await res.json();
+    setVisitorsCount((c) => c + 1);
+    setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
 
     // Check them in immediately
-    checkInPerson(newId, 'usher', 95, `Visitor registration. Heard via ${howHeard}`);
+    checkInPerson(savedPerson.id, 'usher', 95, `Visitor registration. Heard via ${howHeard}`);
 
     // Create visitor follow-up task
     setFollowupTasks((prev) => [
       {
         id: `task-vis-${Date.now()}`,
-        personId: newId,
+        personId: savedPerson.id,
         personName: name,
         groupName: 'Visitors Welcome Team',
         reason: 'first_timer',
-        assignedToName: 'Welcome Ministry (Pastor Ruth)',
+        assignedToName: systemSettings.seniorPastor || 'Welcome & Pastoral Care Team',
         status: 'open',
         dueOn: 'Tomorrow 10:00 AM',
         createdAt: new Date().toISOString().split('T')[0],
@@ -1396,31 +924,25 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ...prev,
     ]);
 
-    showToast(`${name} added! Welcome follow-up task created.`);
+    showToast(`${name} saved to database! Welcome follow-up task created.`);
   };
 
-  const addMember = (
+  const addMember = async (
     memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>
-  ): Person => {
-    const initials = `${memberData.firstName[0] || 'M'}${memberData.lastName[0] || 'M'}`.toUpperCase();
-    const newMemberId = `m-${Date.now()}`;
-    const newPerson: Person = {
-      ...memberData,
-      id: newMemberId,
-      tenantId: 'tenant-accra',
-      avatarInitials: initials,
-      joinedOn: new Date().toISOString().split('T')[0],
-    };
-
-    setMembers((prev) => {
-      const updated = [newPerson, ...prev];
-      try {
-        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
-      return updated;
+  ): Promise<Person> => {
+    const res = await fetch('/api/members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(memberData),
     });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.message || 'Failed to save member to Supabase database.');
+    }
+
+    const savedPerson = data as Person;
+    setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
 
     setAuditLogs((prev) => [
       {
@@ -1429,55 +951,33 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Member registered',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `${newPerson.firstName} ${newPerson.lastName} enrolled into ${newPerson.groupName}`,
+        details: `${savedPerson.firstName} ${savedPerson.lastName} saved to Supabase (${savedPerson.groupName})`,
       },
       ...prev,
     ]);
 
-    showToast(`Member ${newPerson.firstName} ${newPerson.lastName} added successfully!`);
-    return newPerson;
+    showToast(`Member ${savedPerson.firstName} ${savedPerson.lastName} saved to database!`);
+    return savedPerson;
   };
 
-  const batchImportMembers = (newMembers: Person[]) => {
-    if (!newMembers || newMembers.length === 0) return;
+  const batchImportMembers = async (newMembers: Person[]): Promise<Person[]> => {
+    if (!newMembers || newMembers.length === 0) return [];
 
-    setMembers((prev) => {
-      // Upsert: replace matching member if phone or ID already exists, otherwise prepend
-      const existingPhoneMap = new Map(prev.map((m) => [m.phoneE164, m.id]));
-      const existingIdMap = new Map(
-        prev.filter((m) => m.memberId).map((m) => [m.memberId?.toUpperCase(), m.id])
-      );
-
-      const toAdd: Person[] = [];
-      const updatedMap = new Map(prev.map((m) => [m.id, m]));
-
-      newMembers.forEach((incoming) => {
-        const matchId =
-          (incoming.phoneE164 && existingPhoneMap.get(incoming.phoneE164)) ||
-          (incoming.memberId && existingIdMap.get(incoming.memberId.toUpperCase()));
-
-        if (matchId && updatedMap.has(matchId)) {
-          // Merge with existing record
-          const current = updatedMap.get(matchId)!;
-          updatedMap.set(matchId, {
-            ...current,
-            ...incoming,
-            id: current.id,
-            avatarInitials: incoming.avatarInitials || current.avatarInitials,
-          });
-        } else {
-          toAdd.push(incoming);
-        }
-      });
-
-      const finalMembers = [...toAdd, ...Array.from(updatedMap.values())];
-      try {
-        localStorage.setItem('ekklesphere_members', JSON.stringify(finalMembers));
-      } catch {
-        // ignore
-      }
-      return finalMembers;
+    const res = await fetch('/api/members/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members: newMembers }),
     });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.message || 'Failed to import members into database.';
+      showToast(msg);
+      throw new Error(msg);
+    }
+
+    const updatedRoster: Person[] = Array.isArray(data?.members) ? data.members : [];
+    setMembers(updatedRoster);
 
     setAuditLogs((prev) => [
       {
@@ -1486,52 +986,317 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Batch Member Import',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Imported ${newMembers.length} members with verified 28-field schema.`,
+        details: `Imported ${data.importedCount ?? newMembers.length} members into Supabase.`,
       },
       ...prev,
     ]);
 
-    showToast(`Successfully imported ${newMembers.length} members!`);
+    showToast(`Successfully imported ${data.importedCount ?? newMembers.length} members to database!`);
+    return updatedRoster;
   };
 
-  const updateMember = (memberId: string, updates: Partial<Person>) => {
-    setMembers((prev) => {
-      const updated = prev.map((m) => {
-        if (m.id === memberId) {
-          const firstName = updates.firstName ?? m.firstName;
-          const lastName = updates.lastName ?? m.lastName;
-          const initials = `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase();
-          return {
-            ...m,
-            ...updates,
-            avatarInitials: initials,
-          };
-        }
-        return m;
-      });
-      try {
-        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
-      return updated;
+  const updateMember = async (memberId: string, updates: Partial<Person>): Promise<Person> => {
+    const existing = members.find((m) => m.id === memberId);
+    const mergedPayload = existing ? { ...existing, ...updates } : updates;
+
+    const res = await fetch(`/api/members/${encodeURIComponent(memberId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mergedPayload),
     });
-    showToast('Member details updated');
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.message || 'Failed to update member in Supabase database.');
+    }
+
+    const updatedPerson = data as Person;
+    setMembers((prev) => prev.map((m) => (m.id === memberId ? updatedPerson : m)));
+
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'Member updated',
+        entityType: 'Person',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: `Updated ${updatedPerson.firstName} ${updatedPerson.lastName} in Supabase`,
+      },
+      ...prev,
+    ]);
+
+    showToast(`Member ${updatedPerson.firstName} ${updatedPerson.lastName} updated in database!`);
+    return updatedPerson;
   };
 
-  const deleteMember = (memberId: string) => {
+  const deleteMember = async (memberId: string): Promise<void> => {
     const memberToDelete = members.find((m) => m.id === memberId);
-    setMembers((prev) => {
-      const updated = prev.filter((m) => m.id !== memberId);
-      try {
-        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
-      return updated;
+    const res = await fetch(`/api/members/${encodeURIComponent(memberId)}`, {
+      method: 'DELETE',
     });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data?.message || 'Failed to delete member from database.';
+      showToast(msg);
+      return;
+    }
+
+    setMembers((prev) => prev.filter((m) => m.id !== memberId));
     setAttendanceRecords((prev) => prev.filter((r) => r.personId !== memberId));
-    showToast(`Member ${memberToDelete ? memberToDelete.firstName + ' ' + memberToDelete.lastName : ''} removed`);
+    showToast(
+      `Member ${memberToDelete ? `${memberToDelete.firstName} ${memberToDelete.lastName}` : ''} removed from database`
+    );
+  };
+
+  const refreshLivePremise = async () => {
+    try {
+      const res = await fetch('/api/campus-premise');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (data.premiseSettings) {
+        const ps = data.premiseSettings;
+        setSystemSettings((prev) => {
+          const next: SystemSettings = {
+            ...prev,
+            churchName: ps.churchName || prev.churchName,
+            campusName: ps.campusName || prev.campusName,
+            campusAddress: ps.campusAddress ?? prev.campusAddress,
+            campusLatitude: typeof ps.lat === 'number' ? ps.lat : null,
+            campusLongitude: typeof ps.lng === 'number' ? ps.lng : null,
+            campusLocationAccuracyM: typeof ps.accuracyM === 'number' ? ps.accuracyM : null,
+            campusLocationUpdatedAt: ps.updatedAt || null,
+            innerGeofenceMeters: ps.innerGeofenceMeters ?? prev.innerGeofenceMeters,
+            outerGeofenceMeters: ps.outerGeofenceMeters ?? prev.outerGeofenceMeters,
+            dwellTimeMinutes: ps.dwellTimeMinutes ?? prev.dwellTimeMinutes,
+          };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+          } catch {
+            // ignore
+          }
+          return next;
+        });
+      } else if (data.configured === false) {
+        setSystemSettings((prev) => {
+          if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
+          const next = {
+            ...prev,
+            campusLatitude: null,
+            campusLongitude: null,
+            campusLocationAccuracyM: null,
+            campusLocationUpdatedAt: null,
+          };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+          } catch {
+            // ignore
+          }
+          return next;
+        });
+      }
+
+      if (Array.isArray(data.liveCheckins)) {
+        setAttendanceRecords((prev) => {
+          const offlineQueued = prev.filter((r) => r.waitingToSync);
+          const serverIds = new Set(data.liveCheckins.map((r: AttendanceRecord) => r.personId));
+          const remainingOffline = offlineQueued.filter((r) => !serverIds.has(r.personId));
+          return [...remainingOffline, ...data.liveCheckins];
+        });
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
+  const mapDbEventToService = (ev: any): ServiceInstance => {
+    const startStr = ev.starts_at
+      ? new Date(ev.starts_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      : '08:00';
+    const endStr = ev.ends_at
+      ? new Date(ev.ends_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      : '10:30';
+    return {
+      id: ev.id,
+      serviceId: ev.id,
+      campusId: ev.site_id || '00000000-0000-0000-0000-000000000001',
+      name: ev.name || 'Worship Service',
+      startsAt: startStr,
+      endsAt: endStr,
+      status: ev.status === 'closed' ? 'closed' : ev.status === 'draft' ? 'scheduled' : 'open',
+      expectedAttendance: Number(ev.expected_attendance) || 0,
+    };
+  };
+
+  const refreshServices = async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/events');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const mapped = data.map(mapDbEventToService);
+        setServices(mapped);
+        setActiveServiceId((prev) =>
+          mapped.some((s) => s.id === prev) ? prev : mapped[0].id
+        );
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
+  const addService = async (params: {
+    name: string;
+    startsAt: string;
+    expectedAttendance?: number;
+    dwellMinutes?: number;
+  }): Promise<void> => {
+    const res = await fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to schedule service');
+    }
+    const created: ServiceInstance = {
+      ...mapDbEventToService(data),
+      expectedAttendance: params.expectedAttendance ?? 0,
+    };
+    setServices((prev) => {
+      const withoutPlaceholder = prev.filter((s) => s.id !== LIVE_DEFAULT_SERVICE.id);
+      return [...withoutPlaceholder, created];
+    });
+    setActiveServiceId(created.id);
+    showToast(`Scheduled "${created.name}" (${created.startsAt})`);
+  };
+
+  useEffect(() => {
+    refreshLivePremise();
+    refreshMembers();
+    refreshServices();
+    const interval = setInterval(refreshLivePremise, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const setChurchPremiseLocation = async (params: {
+    lat: number;
+    lng: number;
+    accuracyM?: number | null;
+    churchName?: string;
+    campusName?: string;
+    campusAddress?: string;
+    innerGeofenceMeters?: number;
+    outerGeofenceMeters?: number;
+    dwellTimeMinutes?: number;
+  }): Promise<boolean> => {
+    try {
+      const payload = {
+        lat: params.lat,
+        lng: params.lng,
+        accuracyM: params.accuracyM ?? null,
+        churchName: params.churchName ?? systemSettings.churchName,
+        campusName: params.campusName ?? systemSettings.campusName,
+        campusAddress: params.campusAddress ?? systemSettings.campusAddress,
+        innerGeofenceMeters: params.innerGeofenceMeters ?? systemSettings.innerGeofenceMeters,
+        outerGeofenceMeters: params.outerGeofenceMeters ?? systemSettings.outerGeofenceMeters,
+        dwellTimeMinutes: params.dwellTimeMinutes ?? systemSettings.dwellTimeMinutes,
+        updatedBy: currentUser?.name || 'Administrator',
+      };
+
+      const res = await fetch('/api/campus-premise', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        showToast('Failed to save church premise GPS location on server.');
+        return false;
+      }
+
+      const data = await res.json();
+      const ps = data.premiseSettings;
+      setSystemSettings((prev) => {
+        const updated: SystemSettings = {
+          ...prev,
+          churchName: ps?.churchName ?? payload.churchName,
+          campusName: ps?.campusName ?? payload.campusName,
+          campusAddress: ps?.campusAddress ?? payload.campusAddress,
+          campusLatitude: params.lat,
+          campusLongitude: params.lng,
+          campusLocationAccuracyM: params.accuracyM ?? null,
+          campusLocationUpdatedAt: ps?.updatedAt || new Date().toISOString(),
+          innerGeofenceMeters: payload.innerGeofenceMeters,
+          outerGeofenceMeters: Math.max(payload.outerGeofenceMeters, payload.innerGeofenceMeters),
+          dwellTimeMinutes: payload.dwellTimeMinutes,
+        };
+        try {
+          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
+
+      setAuditLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          actor: currentUser?.name || 'Administrator',
+          action: 'Church Premise GPS Set',
+          entityType: 'CampusGeofence',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          details: `Pinned ${payload.campusName} at (${params.lat.toFixed(6)}, ${params.lng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m`,
+        },
+        ...prev,
+      ]);
+
+      showToast(
+        `Church premise pinned at (${params.lat.toFixed(5)}, ${params.lng.toFixed(5)}) · ${payload.innerGeofenceMeters}m radius`
+      );
+      return true;
+    } catch (err) {
+      console.error('Error setting church premise location:', err);
+      showToast('Network error saving church premise location.');
+      return false;
+    }
+  };
+
+  const clearChurchPremiseLocation = async (): Promise<void> => {
+    try {
+      await fetch('/api/campus-premise', { method: 'DELETE' });
+      setSystemSettings((prev) => {
+        const updated: SystemSettings = {
+          ...prev,
+          campusLatitude: null,
+          campusLongitude: null,
+          campusLocationAccuracyM: null,
+          campusLocationUpdatedAt: null,
+        };
+        try {
+          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
+      setAuditLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          actor: currentUser?.name || 'Administrator',
+          action: 'Church Premise GPS Cleared',
+          entityType: 'CampusGeofence',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          details: 'Cleared configured church premise coordinates',
+        },
+        ...prev,
+      ]);
+      showToast('Church premise GPS location cleared');
+    } catch (err) {
+      console.error('Error clearing church premise location:', err);
+    }
   };
 
   const updateSystemSettings = (newSettings: Partial<SystemSettings>) => {
@@ -1541,6 +1306,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
       } catch {
         // ignore
+      }
+      if (updated.campusLatitude != null && updated.campusLongitude != null) {
+        fetch('/api/campus-premise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lat: updated.campusLatitude,
+            lng: updated.campusLongitude,
+            accuracyM: updated.campusLocationAccuracyM ?? null,
+            churchName: updated.churchName,
+            campusName: updated.campusName,
+            campusAddress: updated.campusAddress,
+            innerGeofenceMeters: updated.innerGeofenceMeters,
+            outerGeofenceMeters: updated.outerGeofenceMeters,
+            dwellTimeMinutes: updated.dwellTimeMinutes,
+            updatedBy: currentUser?.name || 'Administrator',
+          }),
+        }).catch((err) => console.warn('Could not sync updated premise settings:', err));
       }
       return updated;
     });
@@ -1560,12 +1343,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resetSystemSettings = () => {
     setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+    fetch('/api/campus-premise', { method: 'DELETE' }).catch(() => {});
     try {
       localStorage.removeItem('ekklesphere_system_settings');
     } catch {
       // ignore
     }
-    showToast('System settings restored to campus defaults');
+    showToast('System settings reset. Please set your Church Premise GPS location.');
   };
 
   const addChurchGroup = (groupData: Omit<ChurchGroup, 'id' | 'createdAt'>): ChurchGroup => {
@@ -1678,6 +1462,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return 0;
     }
     const count = pendingSyncCount;
+    const queued = attendanceRecords.filter((r) => r.waitingToSync);
+    queued.forEach((rec) => {
+      const person = members.find((m) => m.id === rec.personId);
+      fetch('/api/live-checkins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...rec,
+          waitingToSync: false,
+          personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
+          recordedBy: currentUser?.name,
+        }),
+      }).catch(() => {});
+    });
     setAttendanceRecords((prev) => prev.map((r) => ({ ...r, waitingToSync: false })));
     setPendingSyncCount(0);
     showToast(`Synced ${count} check-in${count === 1 ? '' : 's'} to server.`);
@@ -1686,9 +1484,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const updateMemberConsent = (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => {
     setMemberConsents({ autoCheckin, push, sms, email });
-    setMembers((prev) =>
-      prev.map((m) => (m.id === 'm1' ? { ...m, autoCheckinOptedIn: autoCheckin } : m))
-    );
+    const targetMemberId = currentUser?.memberId || currentUser?.id;
+    if (targetMemberId) {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === targetMemberId ? { ...m, autoCheckinOptedIn: autoCheckin } : m))
+      );
+    }
     showToast(
       autoCheckin
         ? 'Auto check-in activated. Location is used only when arriving at church.'
@@ -1709,10 +1510,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     fund: string,
     method: 'MTN MoMo' | 'Telecel Cash' | 'Card'
   ) => {
+    const donorId = currentUser?.memberId || currentUser?.id || 'guest';
+    const donorName = currentUser?.name || 'Member';
     const newDonation: Donation = {
       id: `don-${Date.now()}`,
-      personId: 'm1',
-      personName: 'Ama Owusu',
+      personId: donorId,
+      personName: donorName,
       fundId: fund.toLowerCase().replace(/\s+/g, '-'),
       fundName: fund,
       amountMinor: amountGhs * 100,
@@ -1740,7 +1543,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const addFollowupTask = (
     personId: string,
     reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual',
-    notes: string
+    _notes: string
   ) => {
     const person = members.find((m) => m.id === personId);
     const newTask: FollowupTask = {
@@ -1749,7 +1552,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       personName: person ? `${person.firstName} ${person.lastName}` : 'Member',
       groupName: person?.groupName || 'General',
       reason,
-      assignedToName: 'Pastor Ruth',
+      assignedToName: systemSettings.seniorPastor || currentUser?.name || 'Pastoral Care Team',
       status: 'open',
       dueOn: 'In 3 days',
       createdAt: new Date().toISOString().split('T')[0],
@@ -1762,36 +1565,44 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const advanceProximityStage = () => {
     if (proximityStage === 0) {
       setProximityStage(1);
-      showToast('Woke app on outer geofence (300m). Approach signal sent.');
+      showToast(`Woke app on outer geofence (${systemSettings.outerGeofenceMeters}m). Approach signal sent.`);
     } else if (proximityStage === 1) {
       setProximityStage(2);
-      setDwellTimerSeconds(300);
-      showToast('Entered inner ring (100m). Dwell timer started (5:00).');
+      setDwellTimerSeconds(systemSettings.dwellTimeMinutes * 60);
+      showToast(`Entered inner ring (${systemSettings.innerGeofenceMeters}m). Dwell timer started.`);
     } else if (proximityStage === 2) {
       triggerDwellComplete();
     }
   };
 
   const triggerBeaconScan = () => {
+    const targetId = currentUser?.memberId || currentUser?.id || 'live-device';
     setIsBeaconDetected(true);
     setProximityStage(3);
-    checkInPerson('m1', 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
+    checkInPerson(targetId, 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
     showToast('Entrance BLE beacon detected! Immediate check-in confirmed.');
   };
 
   const triggerDwellComplete = () => {
+    const targetId = currentUser?.memberId || currentUser?.id || 'live-device';
     setProximityStage(3);
     setDwellTimerSeconds(0);
-    checkInPerson('m1', 'geofence', 85, '5-minute dwell verified at Accra Central campus');
-    showToast('Dwell verified (5 mins). Auto check-in completed for Ama Owusu.');
+    checkInPerson(
+      targetId,
+      'geofence',
+      85,
+      `${systemSettings.dwellTimeMinutes}-minute dwell verified at ${systemSettings.campusName}`
+    );
+    showToast(`Dwell verified (${systemSettings.dwellTimeMinutes} mins). Auto check-in completed.`);
   };
 
   const resetProximity = () => {
+    const targetId = currentUser?.memberId || currentUser?.id || 'live-device';
     setProximityStage(0);
-    setDwellTimerSeconds(300);
+    setDwellTimerSeconds(systemSettings.dwellTimeMinutes * 60);
     setIsBeaconDetected(false);
-    removeCheckIn('m1');
-    showToast('Proximity simulation reset. Person is outside campus (>300m).');
+    removeCheckIn(targetId);
+    showToast(`Proximity reset. Person is outside ${systemSettings.campusName} (>${systemSettings.outerGeofenceMeters}m).`);
   };
 
   return (
@@ -1803,6 +1614,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         loginWithCredentials,
         signInWithGoogle,
         isGoogleAuthLoading,
+        googleAuthError,
+        clearGoogleAuthError,
         registerMember,
         logout,
         switchUserRole,
@@ -1832,8 +1645,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setActiveServiceId,
         services,
         currentService,
+        refreshServices,
+        addService,
         members,
         visitorsCount,
+        refreshMembers,
         addVisitor,
         addMember,
         batchImportMembers,
@@ -1843,6 +1659,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         systemSettings,
         updateSystemSettings,
         resetSystemSettings,
+        setChurchPremiseLocation,
+        clearChurchPremiseLocation,
+        refreshLivePremise,
         churchGroups,
         addChurchGroup,
         updateChurchGroup,

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 export const HelpDocsModal: React.FC = () => {
-  const { isHelpModalOpen, setIsHelpModalOpen } = useEkklesphere();
+  const { isHelpModalOpen, setIsHelpModalOpen, systemSettings } = useEkklesphere();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -46,7 +46,7 @@ export const HelpDocsModal: React.FC = () => {
                 Ekklesphere Documentation & Guide
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Accra Central Church Operating System Architecture
+                {systemSettings.churchName} · Operating System Architecture
               </p>
             </div>
           </div>
