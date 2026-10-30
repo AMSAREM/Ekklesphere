@@ -1545,16 +1545,42 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     dwellTimeMinutes?: number;
   }): Promise<boolean> => {
     try {
+      const parsedLat = typeof params.lat === 'number' ? params.lat : parseFloat(String(params.lat));
+      const parsedLng = typeof params.lng === 'number' ? params.lng : parseFloat(String(params.lng));
+
+      if (
+        !Number.isFinite(parsedLat) ||
+        !Number.isFinite(parsedLng) ||
+        parsedLat < -90 ||
+        parsedLat > 90 ||
+        parsedLng < -180 ||
+        parsedLng > 180
+      ) {
+        showToast('Valid latitude (-90 to 90) and longitude (-180 to 180) are required.');
+        return false;
+      }
+
+      const churchName = (params.churchName || systemSettings.churchName || 'PIWC KWADASO').trim() || 'PIWC KWADASO';
+      const campusName = (params.campusName || systemSettings.campusName || 'PIWC KWADASO').trim() || 'PIWC KWADASO';
+      const campusAddress = params.campusAddress ?? systemSettings.campusAddress ?? '';
+      const innerGeofenceMeters = Math.max(10, Number(params.innerGeofenceMeters ?? systemSettings.innerGeofenceMeters ?? 50));
+      const outerGeofenceMeters = Math.max(25, Number(params.outerGeofenceMeters ?? systemSettings.outerGeofenceMeters ?? 300));
+      const dwellTimeMinutes = Math.max(1, Number(params.dwellTimeMinutes ?? systemSettings.dwellTimeMinutes ?? 5));
+      const accuracyM =
+        params.accuracyM != null && !Number.isNaN(Number(params.accuracyM))
+          ? Math.max(0, Number(params.accuracyM))
+          : null;
+
       const payload = {
-        lat: params.lat,
-        lng: params.lng,
-        accuracyM: params.accuracyM ?? null,
-        churchName: params.churchName ?? systemSettings.churchName,
-        campusName: params.campusName ?? systemSettings.campusName,
-        campusAddress: params.campusAddress ?? systemSettings.campusAddress,
-        innerGeofenceMeters: params.innerGeofenceMeters ?? systemSettings.innerGeofenceMeters,
-        outerGeofenceMeters: params.outerGeofenceMeters ?? systemSettings.outerGeofenceMeters,
-        dwellTimeMinutes: params.dwellTimeMinutes ?? systemSettings.dwellTimeMinutes,
+        lat: parsedLat,
+        lng: parsedLng,
+        accuracyM,
+        churchName,
+        campusName,
+        campusAddress,
+        innerGeofenceMeters,
+        outerGeofenceMeters: Math.max(outerGeofenceMeters, innerGeofenceMeters),
+        dwellTimeMinutes,
         updatedBy: currentUser?.name || 'Administrator',
       };
 
@@ -1565,7 +1591,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
 
       if (!res.ok) {
-        showToast('Failed to save church premise GPS location on server.');
+        const errorJson = await res.json().catch(() => ({}));
+        const message = errorJson.message || errorJson.error || 'Failed to save church premise GPS location on server.';
+        console.error('Failed to save church premise GPS location on server:', res.status, errorJson);
+        showToast(message);
         return false;
       }
 
@@ -1577,12 +1606,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           churchName: ps?.churchName ?? payload.churchName,
           campusName: ps?.campusName ?? payload.campusName,
           campusAddress: ps?.campusAddress ?? payload.campusAddress,
-          campusLatitude: params.lat,
-          campusLongitude: params.lng,
-          campusLocationAccuracyM: params.accuracyM ?? null,
+          campusLatitude: parsedLat,
+          campusLongitude: parsedLng,
+          campusLocationAccuracyM: accuracyM,
           campusLocationUpdatedAt: ps?.updatedAt || new Date().toISOString(),
           innerGeofenceMeters: payload.innerGeofenceMeters,
-          outerGeofenceMeters: Math.max(payload.outerGeofenceMeters, payload.innerGeofenceMeters),
+          outerGeofenceMeters: payload.outerGeofenceMeters,
           dwellTimeMinutes: payload.dwellTimeMinutes,
         };
         try {
@@ -1600,13 +1629,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           action: 'Church Premise GPS Set',
           entityType: 'CampusGeofence',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          details: `Pinned ${payload.campusName} at (${params.lat.toFixed(6)}, ${params.lng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m`,
+          details: `Pinned ${payload.campusName} at (${parsedLat.toFixed(6)}, ${parsedLng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m`,
         },
         ...prev,
       ]);
 
       showToast(
-        `Church premise pinned at (${params.lat.toFixed(5)}, ${params.lng.toFixed(5)}) · ${payload.innerGeofenceMeters}m radius`
+        `Church premise pinned at (${parsedLat.toFixed(5)}, ${parsedLng.toFixed(5)}) · ${payload.innerGeofenceMeters}m radius`
       );
       return true;
     } catch (err) {

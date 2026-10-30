@@ -1,6 +1,15 @@
 export type CheckinMethod = 'usher' | 'posted_qr' | 'beacon' | 'geofence' | 'email_link' | 'manual';
 
-export type UserRole = 'admin' | 'usher' | 'member';
+export type UserRole =
+  | 'super_admin'
+  | 'creator'
+  | 'admin'
+  | 'teacher'
+  | 'accountant'
+  | 'pastor'
+  | 'usher'
+  | 'member'
+  | 'student';
 
 export interface AuthUser {
   id: string;
@@ -12,6 +21,9 @@ export interface AuthUser {
   title: string;
   campusName: string;
   memberId?: string;
+  school_id?: string;
+  organization_id?: string;
+  username?: string;
   permissions: string[];
 }
 

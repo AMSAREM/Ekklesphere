@@ -7,3 +7,10 @@ coverage/
 .env*
 !.env.example
 .live_campus_state.json
+
+# Step 1: Purged sensitive credential, license, and fallback files
+registered_users.json
+generated_licenses.json
+license_status.json
+sync_logs.json
+school_db_fallback.json

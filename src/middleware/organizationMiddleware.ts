@@ -20,33 +20,29 @@ export function validateOrganizationId(id: string | null | undefined): boolean {
 }
 
 /**
- * Express Middleware companion for Node.js / Express servers (e.g. server.ts).
- * Captures and enforces x-organization-id context across all Express routes.
+ * Express Middleware for Node.js / Express server.
+ * Captures and enforces x-organization-id and x-school-id context.
+ * Deny-by-default: does not inject arbitrary default tenant IDs into unauthorized requests.
  */
 export function expressOrganizationMiddleware(
-  req: Request & { organizationId?: string; user?: unknown; cookies?: Record<string, string> },
+  req: Request & { organizationId?: string; school_id?: string; user?: unknown; cookies?: Record<string, string> },
   res: Response,
   next: NextFunction
 ) {
-  // 1. Extract from headers, query, or cookies
-  const headerOrg =
+  const extracted =
     (req.headers['x-organization-id'] as string) ||
+    (req.headers['x-school-id'] as string) ||
     (req.headers['x-tenant-id'] as string) ||
     (req.query.organization_id as string) ||
+    (req.query.school_id as string) ||
     (req.query.org_id as string) ||
-    (req.cookies?.organization_id as string) ||
-    (req.user as { app_metadata?: { organization_id?: string } })?.app_metadata?.organization_id;
+    (req.body && typeof req.body === 'object' ? (req.body.organization_id || req.body.school_id) : undefined);
 
-  let validOrgId: string | null = null;
-  if (headerOrg && validateOrganizationId(headerOrg)) {
-    validOrgId = headerOrg.trim();
-  } else {
-    // Default primary organization ID
-    validOrgId = 'e0000000-0000-0000-0000-000000000001';
+  if (extracted && validateOrganizationId(extracted)) {
+    req.organizationId = extracted.trim();
+    req.school_id = extracted.trim();
+    res.setHeader('x-organization-id', extracted.trim());
   }
-
-  req.organizationId = validOrgId;
-  res.setHeader('x-organization-id', validOrgId);
 
   next();
 }
