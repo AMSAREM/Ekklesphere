@@ -61,6 +61,13 @@ export const AppHeader: React.FC = () => {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifMenuRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isMobileSearchOpen) {
+      setTimeout(() => mobileSearchInputRef.current?.focus(), 50);
+    }
+  }, [isMobileSearchOpen]);
 
   const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
 
@@ -301,11 +308,25 @@ export const AppHeader: React.FC = () => {
 
         {/* Right: Controls & Actions */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-          {/* Mobile/Tablet Search Toggle */}
+          {/* Search Toggle Button */}
           <button
-            onClick={() => setIsMobileSearchOpen(!isMobileSearchOpen)}
-            className="lg:hidden w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+            onClick={() => {
+              if (window.innerWidth >= 1024 && searchInputRef.current) {
+                searchInputRef.current.focus();
+                setIsSearchFocused(true);
+                showToast('Search active (⌘K)');
+              } else {
+                setIsMobileSearchOpen((prev) => !prev);
+              }
+            }}
+            aria-expanded={isMobileSearchOpen}
             aria-label="Toggle search input"
+            title="Search members or commands (⌘K)"
+            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+              isMobileSearchOpen
+                ? 'bg-[#6D5CF2] text-white shadow-xs'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
           >
             <Search className="w-4 h-4" />
           </button>
@@ -508,28 +529,73 @@ export const AppHeader: React.FC = () => {
         </div>
       </div>
 
-      {/* Expandable Mobile Search Bar (Appears on mobile when search icon is clicked) */}
+      {/* Expandable Search Bar (Appears on mobile/tablet when search icon is clicked) */}
       {isMobileSearchOpen && (
-        <div className="md:hidden px-3 py-2 bg-white dark:bg-[#1D1D3D] border-t border-[#E9EBF5] dark:border-[#2D2D55] animate-in slide-in-from-top-2">
-          <div className="relative">
+        <div className="lg:hidden px-3 sm:px-6 py-2.5 bg-white dark:bg-[#1D1D3D] border-t border-[#E9EBF5] dark:border-[#2D2D55] shadow-md animate-in slide-in-from-top-2">
+          <div className="relative max-w-xl mx-auto">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
             <input
+              ref={mobileSearchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search members, phone, groups..."
-              className="w-full pl-9 pr-8 py-2 bg-slate-100 dark:bg-black/20 rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
+              className="w-full pl-9 pr-9 py-2 bg-slate-100 dark:bg-black/20 rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]/30 border border-transparent focus:border-[#6D5CF2]"
               autoFocus
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 p-1"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 cursor-pointer"
+                aria-label="Clear search"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
+
+          {/* Live Matching Results Dropdown for Mobile/Tablet */}
+          {searchQuery.trim().length > 0 && (
+            <div className="mt-2 max-w-xl mx-auto max-h-60 overflow-y-auto space-y-1">
+              {matchingMembers.length === 0 ? (
+                <p className="text-center text-xs text-[#666A86] dark:text-[#A9ACC8] py-3">
+                  No members found matching "{searchQuery}"
+                </p>
+              ) : (
+                matchingMembers.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-[#6D5CF2]/15 text-[#6D5CF2] text-xs font-bold flex items-center justify-center">
+                        {m.avatarInitials}
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          {m.firstName} {m.lastName}
+                        </p>
+                        <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
+                          {m.phoneE164} · {m.groupName}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        checkInPerson(m.id, 'manual', 95, 'Header quick check-in');
+                        setIsMobileSearchOpen(false);
+                        setSearchQuery('');
+                        showToast(`Checked in ${m.firstName} ${m.lastName}`);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-[#6D5CF2] text-white text-[11px] font-bold shadow-xs cursor-pointer hover:bg-[#5b4be0]"
+                    >
+                      Check In
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
 

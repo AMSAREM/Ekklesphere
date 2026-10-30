@@ -1,7 +1,8 @@
 // server.ts - Full-Stack Express Server with Geofence Attendance API & Vite Middleware
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import { createServer as createViteServer } from 'vite';
 import rateLimit from 'express-rate-limit';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -629,7 +630,6 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

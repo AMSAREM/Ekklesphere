@@ -514,25 +514,25 @@ insert into public.members (
   id, organization_id, user_id, first_name, last_name, phone_e164, email, role, status
 ) values
 (
-  'm0000000-0000-0000-0000-000000000001',
+  'b0000000-0000-0000-0000-000000000001',
   'e0000000-0000-0000-0000-000000000001',
   '00000000-0000-0000-0000-000000000001',
   'Ama', 'Owusu', '+233241234567', 'ama.owusu@accracentral.org', 'admin', 'active'
 ),
 (
-  'm0000000-0000-0000-0000-000000000002',
+  'b0000000-0000-0000-0000-000000000002',
   'e0000000-0000-0000-0000-000000000001',
   null,
   'Kofi', 'Mensah', '+233249876543', 'kofi.mensah@gmail.com', 'member', 'active'
 ),
 (
-  'm0000000-0000-0000-0000-000000000003',
+  'b0000000-0000-0000-0000-000000000003',
   'e0000000-0000-0000-0000-000000000001',
   null,
   'Kwame', 'Boateng', '+233205551234', 'kwame.boateng@gmail.com', 'usher', 'active'
 ),
 (
-  'm0000000-0000-0000-0000-000000000004',
+  'b0000000-0000-0000-0000-000000000004',
   'e0000000-0000-0000-0000-000000000001',
   null,
   'Abena', 'Antwi', '+233267778899', 'abena.antwi@gmail.com', 'pastor', 'active'
@@ -545,7 +545,7 @@ insert into public.events (
   radius_m, inner_radius_m, outer_radius_m,
   start_time, end_time, checkin_window_start, checkin_window_end, dwell_min, status
 ) values (
-  'ev000000-0000-0000-0000-000000000001',
+  'ee000000-0000-0000-0000-000000000001',
   'e0000000-0000-0000-0000-000000000001',
   'Sunday Morning Celebration Service',
   'Weekly Sunday Main Service at Accra Central Sanctuary',
@@ -564,10 +564,10 @@ insert into public.events (
 insert into public.attendance (
   id, organization_id, event_id, member_id, user_id, checked_in_at, method, status, confidence_score, distance_m, accuracy_m
 ) values (
-  'at000000-0000-0000-0000-000000000001',
+  'aa000000-0000-0000-0000-000000000001',
   'e0000000-0000-0000-0000-000000000001',
-  'ev000000-0000-0000-0000-000000000001',
-  'm0000000-0000-0000-0000-000000000001',
+  'ee000000-0000-0000-0000-000000000001',
+  'b0000000-0000-0000-0000-000000000001',
   '00000000-0000-0000-0000-000000000001',
   now() - interval '45 minutes',
   'geofence',
