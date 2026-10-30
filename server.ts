@@ -7,12 +7,13 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { expressOrganizationMiddleware } from './src/middleware/organizationMiddleware.ts';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = 3000;
 
 // Initialize Supabase client if keys exist
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -32,6 +33,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 // In-memory store for fallback/dev demo and audit trail when Supabase is connecting
 interface StoredEvent {
   id: string;
+  organization_id: string;
   client_event_id: string;
   user_id: string;
   site_id: string;
@@ -71,6 +73,7 @@ const registeredSites = [
 
 const app = express();
 app.use(express.json({ limit: '50kb' }));
+app.use(expressOrganizationMiddleware);
 
 // Rate limit: 30 requests per minute per IP for attendance events
 const attendanceLimiter = rateLimit({
@@ -122,6 +125,7 @@ const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const EventSchema = z.object({
   clientEventId: z.string().regex(uuidRegex, 'Invalid UUID'),
   siteId: z.string().regex(uuidRegex, 'Invalid UUID'),
+  organizationId: z.string().regex(uuidRegex, 'Invalid UUID').optional(),
   type: z.enum(['enter', 'exit', 'manual_in', 'manual_out']),
   source: z.enum(['geofence', 'manual', 'web']),
   platform: z.enum(['android', 'web']).default('android'),
@@ -231,9 +235,11 @@ async function handleAttendanceEvent(req: Request, res: Response) {
   // 4. Construct event row with server timestamp
   const serverTime = new Date().toISOString();
   const eventId = `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const orgId = e.organizationId || (req as any).organizationId || 'e0000000-0000-0000-0000-000000000001';
 
   const row: StoredEvent = {
     id: eventId,
+    organization_id: orgId,
     client_event_id: e.clientEventId,
     user_id: userId,
     site_id: e.siteId,
@@ -388,6 +394,7 @@ app.post(['/attendance/auto-close', '/api/attendance/auto-close'], (req: Request
     const autoExitTime = new Date(new Date(openIn.server_time).getTime() + maxHours * 3600 * 1000).toISOString();
     inMemoryEvents.unshift({
       id: `evt-autoclose-${Date.now()}`,
+      organization_id: openIn.organization_id,
       client_event_id: `auto-${Date.now()}`,
       user_id: openIn.user_id,
       site_id: openIn.site_id,
@@ -424,9 +431,129 @@ app.get(['/api/health', '/api/db/status'], (_req: Request, res: Response) => {
   });
 });
 
+// Multi-tenant API routes for organizations, members, events, and attendance
+const demoOrganizations = [
+  {
+    id: 'e0000000-0000-0000-0000-000000000001',
+    name: 'Accra Central Church',
+    slug: 'accra-central',
+    timezone: 'Africa/Accra',
+    settings: {
+      currency: 'GHS',
+      absence_threshold_leader: 2,
+      absence_threshold_pastor: 3,
+      dwell_min_default: 5,
+    },
+  },
+];
+
+const demoMembers = [
+  {
+    id: 'm0000000-0000-0000-0000-000000000001',
+    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    user_id: '00000000-0000-0000-0000-000000000001',
+    first_name: 'Ama',
+    last_name: 'Owusu',
+    role: 'admin',
+    status: 'active',
+    phone_e164: '+233241234567',
+    email: 'ama.owusu@accracentral.org',
+  },
+  {
+    id: 'm0000000-0000-0000-0000-000000000002',
+    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    first_name: 'Kofi',
+    last_name: 'Mensah',
+    role: 'member',
+    status: 'active',
+    phone_e164: '+233249876543',
+    email: 'kofi.mensah@gmail.com',
+  },
+  {
+    id: 'm0000000-0000-0000-0000-000000000003',
+    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    first_name: 'Kwame',
+    last_name: 'Boateng',
+    role: 'usher',
+    status: 'active',
+    phone_e164: '+233205551234',
+    email: 'kwame.boateng@gmail.com',
+  },
+  {
+    id: 'm0000000-0000-0000-0000-000000000004',
+    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    first_name: 'Abena',
+    last_name: 'Antwi',
+    role: 'pastor',
+    status: 'active',
+    phone_e164: '+233267778899',
+    email: 'abena.antwi@gmail.com',
+  },
+];
+
+const demoEvents = [
+  {
+    id: 'ev000000-0000-0000-0000-000000000001',
+    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    name: 'Sunday Morning Celebration Service',
+    description: 'Weekly Sunday Main Service at Accra Central Sanctuary',
+    location: 'Accra Central Sanctuary, Ring Road Central, Accra',
+    start_time: new Date(Date.now() - 60 * 60000).toISOString(),
+    end_time: new Date(Date.now() + 120 * 60000).toISOString(),
+    status: 'active',
+    dwell_min: 5,
+  },
+];
+
+app.get(['/api/v1/organizations', '/api/organizations'], async (req: Request, res: Response) => {
+  if (supabase) {
+    const { data, error } = await supabase.from('organizations').select('*');
+    if (!error && data && data.length > 0) return res.json(data);
+  }
+  res.json(demoOrganizations);
+});
+
+app.get(['/api/v1/members', '/api/members'], async (req: Request, res: Response) => {
+  const orgId = (req as any).organizationId || 'e0000000-0000-0000-0000-000000000001';
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('members')
+      .select('*')
+      .eq('organization_id', orgId);
+    if (!error && data && data.length > 0) return res.json(data);
+  }
+  res.json(demoMembers.filter((m) => m.organization_id === orgId));
+});
+
+app.get(['/api/v1/events', '/api/events'], async (req: Request, res: Response) => {
+  const orgId = (req as any).organizationId || 'e0000000-0000-0000-0000-000000000001';
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .eq('organization_id', orgId);
+    if (!error && data && data.length > 0) return res.json(data);
+  }
+  res.json(demoEvents.filter((ev) => ev.organization_id === orgId));
+});
+
+app.get(['/api/v1/attendance', '/api/attendance'], async (req: Request, res: Response) => {
+  const orgId = (req as any).organizationId || 'e0000000-0000-0000-0000-000000000001';
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('attendance')
+      .select('*, members(first_name, last_name, phone_e164, role), events(name)')
+      .eq('organization_id', orgId);
+    if (!error && data && data.length > 0) return res.json(data);
+  }
+  const filteredEvents = inMemoryEvents.filter((ev) => ev.organization_id === orgId);
+  res.json(filteredEvents);
+});
+
 // Seed an initial demo event for Accra Central so the dashboard starts with realistic data
 inMemoryEvents.push({
   id: 'evt-init-001',
+  organization_id: 'e0000000-0000-0000-0000-000000000001',
   client_event_id: 'c0000000-0000-0000-0000-000000000001',
   user_id: '00000000-0000-0000-0000-000000000001',
   site_id: 'a0000000-0000-0000-0000-000000000001',

@@ -646,3 +646,226 @@ begin
     (v_tenant_id, v_person_2, 'push', true, 'v1.0-act843', 'app')
   on conflict do nothing;
 end $$;
+
+-- ----------------------------------------------------------------------------
+-- 12. MULTI-TENANT SCHEMA (organizations, members, events, attendance)
+--     WITH SIMPLIFIED RLS UTILITY FUNCTION: has_organization_access
+-- ----------------------------------------------------------------------------
+
+create table if not exists public.organizations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  slug citext unique not null,
+  timezone text not null default 'Africa/Accra',
+  logo_url text,
+  website text,
+  phone text,
+  email citext,
+  settings jsonb not null default '{
+    "currency": "GHS",
+    "absence_threshold_leader": 2,
+    "absence_threshold_pastor": 3,
+    "dwell_min_default": 5,
+    "geofence_inner_radius_m": 100,
+    "geofence_outer_radius_m": 300
+  }'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.members (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete set null,
+  first_name text not null,
+  last_name text not null,
+  preferred_name text,
+  phone_e164 text,
+  email citext,
+  role text not null default 'member' 
+    check (role in ('owner', 'admin', 'pastor', 'usher', 'leader', 'member', 'guest')),
+  status text not null default 'active' 
+    check (status in ('active', 'inactive', 'archived', 'pending')),
+  gender text check (gender in ('male', 'female', 'other')),
+  date_of_birth date,
+  joined_at timestamptz default now(),
+  photo_url text,
+  custom_attributes jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint members_org_user_uq unique (organization_id, user_id)
+);
+
+-- RLS Utility Function: has_organization_access
+create or replace function public.has_organization_access(
+  target_org_id uuid,
+  required_role text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth
+stable
+as $$
+declare
+  v_user_id uuid;
+  v_member_role text;
+  v_member_status text;
+  v_is_super boolean;
+begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    return false;
+  end if;
+
+  v_is_super := coalesce((auth.jwt() -> 'app_metadata' ->> 'is_super_admin')::boolean, false);
+  if v_is_super then
+    return true;
+  end if;
+
+  select role, status into v_member_role, v_member_status
+  from public.members
+  where organization_id = target_org_id
+    and user_id = v_user_id
+    and status = 'active'
+  limit 1;
+
+  if v_member_role is null then
+    return false;
+  end if;
+
+  if required_role is null or required_role = '' then
+    return true;
+  end if;
+
+  if v_member_role = 'owner' then
+    return true;
+  end if;
+
+  if required_role = 'admin' then
+    return v_member_role in ('owner', 'admin');
+  end if;
+
+  if required_role = 'pastor' then
+    return v_member_role in ('owner', 'admin', 'pastor');
+  end if;
+
+  if required_role = 'usher' then
+    return v_member_role in ('owner', 'admin', 'pastor', 'usher');
+  end if;
+
+  if required_role = 'leader' then
+    return v_member_role in ('owner', 'admin', 'pastor', 'leader');
+  end if;
+
+  if required_role = 'member' then
+    return true;
+  end if;
+
+  return v_member_role = required_role;
+end;
+$$;
+
+create table if not exists public.events (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  name text not null,
+  description text,
+  location text,
+  geo_center geography(Point, 4326),
+  radius_m int not null default 150,
+  inner_radius_m int not null default 100,
+  outer_radius_m int not null default 300,
+  start_time timestamptz not null,
+  end_time timestamptz not null,
+  checkin_window_start timestamptz,
+  checkin_window_end timestamptz,
+  dwell_min int not null default 5,
+  status text not null default 'scheduled' 
+    check (status in ('scheduled', 'active', 'completed', 'cancelled')),
+  qr_secret text not null default encode(gen_random_bytes(24), 'hex'),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.attendance (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  event_id uuid not null references public.events(id) on delete cascade,
+  member_id uuid not null references public.members(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete set null,
+  client_event_id uuid,
+  checked_in_at timestamptz not null default now(),
+  method text not null default 'manual' 
+    check (method in ('geofence', 'beacon', 'usher', 'qr_scan', 'manual', 'web_link')),
+  status text not null default 'accepted' 
+    check (status in ('accepted', 'flagged', 'rejected', 'pending_review')),
+  confidence_score smallint not null default 100 
+    check (confidence_score between 0 and 100),
+  distance_m real,
+  accuracy_m real,
+  is_mock boolean not null default false,
+  flag_reasons text[] not null default '{}'::text[],
+  checked_in_by uuid references auth.users(id) on delete set null,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint attendance_org_event_member_uq unique (organization_id, event_id, member_id)
+);
+
+-- RLS Enforcement
+alter table public.organizations enable row level security;
+alter table public.members enable row level security;
+alter table public.events enable row level security;
+alter table public.attendance enable row level security;
+
+-- Policies using has_organization_access
+create policy "org_select_members" on public.organizations
+  for select using (public.has_organization_access(id));
+
+create policy "org_insert_authenticated" on public.organizations
+  for insert with check (auth.role() = 'authenticated');
+
+create policy "org_update_admins" on public.organizations
+  for update using (public.has_organization_access(id, 'admin'));
+
+create policy "members_select_policy" on public.members
+  for select using (public.has_organization_access(organization_id));
+
+create policy "members_insert_policy" on public.members
+  for insert with check (
+    public.has_organization_access(organization_id, 'admin')
+    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+  );
+
+create policy "members_update_policy" on public.members
+  for update using (
+    public.has_organization_access(organization_id, 'admin')
+    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+  );
+
+create policy "members_delete_policy" on public.members
+  for delete using (public.has_organization_access(organization_id, 'admin'));
+
+create policy "events_select_policy" on public.events
+  for select using (public.has_organization_access(organization_id));
+
+create policy "events_insert_policy" on public.events
+  for insert with check (public.has_organization_access(organization_id, 'admin'));
+
+create policy "events_update_policy" on public.events
+  for update using (public.has_organization_access(organization_id, 'admin'));
+
+create policy "attendance_select_policy" on public.attendance
+  for select using (public.has_organization_access(organization_id));
+
+create policy "attendance_insert_policy" on public.attendance
+  for insert with check (
+    public.has_organization_access(organization_id)
+    and (auth.uid() = user_id or public.has_organization_access(organization_id, 'usher'))
+  );
+
+create policy "attendance_update_policy" on public.attendance
+  for update using (public.has_organization_access(organization_id, 'usher'));
+
