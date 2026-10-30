@@ -86,64 +86,6 @@ export const AdminDashboard: React.FC = () => {
 
   const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
 
-  // Header Interactive Dropdowns & Global Search state
-  const [selectedCampus, setSelectedCampus] = useState('Accra Central Sanctuary');
-  const [isCampusDropdownOpen, setIsCampusDropdownOpen] = useState(false);
-  const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false);
-  const [isNotificationDropdownOpen, setIsNotificationDropdownOpen] = useState(false);
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [headerSearchQuery, setHeaderSearchQuery] = useState('');
-
-  const campusRef = useRef<HTMLDivElement>(null);
-  const profileRef = useRef<HTMLDivElement>(null);
-  const notifRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // Keyboard shortcut (Cmd+K / Ctrl+K) and outside-click listeners for header
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        setIsSearchFocused(true);
-      }
-      if (e.key === 'Escape') {
-        setIsSearchFocused(false);
-        setIsCampusDropdownOpen(false);
-        setIsProfileDropdownOpen(false);
-        setIsNotificationDropdownOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (campusRef.current && !campusRef.current.contains(target)) {
-        setIsCampusDropdownOpen(false);
-      }
-      if (profileRef.current && !profileRef.current.contains(target)) {
-        setIsProfileDropdownOpen(false);
-      }
-      if (notifRef.current && !notifRef.current.contains(target)) {
-        setIsNotificationDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Quick matches for header search
-  const matchingHeaderMembers = headerSearchQuery.trim()
-    ? members.filter(
-        (m) =>
-          `${m.firstName} ${m.lastName}`.toLowerCase().includes(headerSearchQuery.toLowerCase()) ||
-          m.phoneE164.includes(headerSearchQuery) ||
-          m.groupName.toLowerCase().includes(headerSearchQuery.toLowerCase())
-      ).slice(0, 5)
-    : [];
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -433,533 +375,138 @@ export const AdminDashboard: React.FC = () => {
       {/* Main Content & Active Views */}
       <div className="flex-1 min-w-0 w-full">
 
-        {/* Proper Executive Dashboard Header */}
-        <header className="bg-white/95 dark:bg-[#1D1D3D]/95 backdrop-blur-md rounded-2xl sm:rounded-3xl p-3 sm:p-4 mb-3 sm:mb-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-[0_4px_24px_rgba(60,50,140,0.08)] transition-all duration-200">
-          {/* Top Bar: Identity & Campus + Global Search + Live Tally + Theme/Profile Actions */}
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 pb-3 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
-            
-            {/* Left: Brand Identity & Campus Switcher */}
-            <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
-              {/* Brand Logo & Name */}
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#6D5CF2] to-[#8C7DFF] text-white flex items-center justify-center shadow-md shadow-[#6D5CF2]/25">
-                  <Radio className="w-5 h-5 animate-pulse" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-extrabold text-base tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      Ekklesphere
-                    </span>
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]">
-                      Admin
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] font-medium leading-none">
-                    Sanctuary & Radar Ops
-                  </p>
-                </div>
-              </div>
-
-              {/* Campus Selector with Geofence Status */}
-              <div className="relative" ref={campusRef}>
-                <button
-                  onClick={() => setIsCampusDropdownOpen(!isCampusDropdownOpen)}
-                  aria-expanded={isCampusDropdownOpen}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
-                  title="Switch Active Campus"
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="max-w-[140px] sm:max-w-[200px] truncate">{selectedCampus}</span>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
-                </button>
-
-                {isCampusDropdownOpen && (
-                  <div className="absolute left-0 mt-2 w-72 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-2 z-50 animate-in fade-in slide-in-from-top-2">
-                    <div className="px-3 py-2 border-b border-[#E9EBF5] dark:border-[#2D2D55] mb-1">
-                      <p className="text-[10px] uppercase font-bold tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
-                        Active Tenancy Campuses
-                      </p>
-                      <p className="text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5">
-                        Accra Central Church (Org)
-                      </p>
-                    </div>
-
-                    {[
-                      {
-                        name: 'Accra Central Sanctuary',
-                        sub: 'Ring Road Central (100m Geofence)',
-                        active: true,
-                      },
-                      {
-                        name: 'East Legon Fellowship Campus',
-                        sub: 'Boundary Road (Beacon Scanned)',
-                        active: false,
-                      },
-                      {
-                        name: 'Tema Satellite Sanctuary',
-                        sub: 'Community 6 Sanctuary (Scheduled)',
-                        active: false,
-                      },
-                      {
-                        name: 'Virtual Livestream Sanctuary',
-                        sub: 'Global Online Assembly',
-                        active: false,
-                      },
-                    ].map((campus) => (
-                      <button
-                        key={campus.name}
-                        onClick={() => {
-                          setSelectedCampus(campus.name);
-                          setIsCampusDropdownOpen(false);
-                          showToast(`Switched campus to ${campus.name}`);
-                        }}
-                        className={`w-full text-left p-2 rounded-xl text-xs transition-colors flex items-start justify-between cursor-pointer ${
-                          selectedCampus === campus.name
-                            ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold'
-                            : 'hover:bg-slate-50 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            <span>{campus.name}</span>
-                          </div>
-                          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] ml-3 block">
-                            {campus.sub}
-                          </span>
-                        </div>
-                        {selectedCampus === campus.name && <Check className="w-3.5 h-3.5 shrink-0" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Center: Global Search Input with Shortcut and Popover */}
-            <div className="flex-1 max-w-lg relative">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={headerSearchQuery}
-                  onChange={(e) => {
-                    setHeaderSearchQuery(e.target.value);
-                    setSearchQuery(e.target.value);
-                  }}
-                  onFocus={() => setIsSearchFocused(true)}
-                  placeholder="Search 520 members, phone, groups..."
-                  className="w-full pl-9 pr-14 py-2 bg-slate-100 dark:bg-black/20 hover:bg-slate-200/70 focus:bg-white dark:focus:bg-[#14142E] rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] border border-transparent focus:border-[#6D5CF2] outline-none transition-all"
-                />
-                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                  {headerSearchQuery ? (
-                    <button
-                      onClick={() => {
-                        setHeaderSearchQuery('');
-                        setSearchQuery('');
-                      }}
-                      className="p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono text-[#666A86] dark:text-[#A9ACC8] bg-white dark:bg-white/10 rounded border border-[#E9EBF5] dark:border-[#2D2D55] shadow-2xs">
-                      ⌘K
-                    </kbd>
-                  )}
-                </div>
-              </div>
-
-              {/* Instant Search Results Dropdown */}
-              {isSearchFocused && headerSearchQuery.trim().length > 0 && (
-                <div className="absolute left-0 right-0 mt-2 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-2 z-50 animate-in fade-in slide-in-from-top-2 max-h-72 overflow-y-auto">
-                  <div className="flex items-center justify-between px-2 py-1 text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] border-b border-[#E9EBF5] dark:border-[#2D2D55] mb-1">
-                    <span>Matches ({matchingHeaderMembers.length})</span>
-                    <button
-                      onClick={() => setIsSearchFocused(false)}
-                      className="text-slate-400 hover:text-slate-600"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  {matchingHeaderMembers.length === 0 ? (
-                    <p className="text-center text-xs text-[#666A86] dark:text-[#A9ACC8] py-4">
-                      No members found matching "{headerSearchQuery}"
-                    </p>
-                  ) : (
-                    matchingHeaderMembers.map((m) => (
-                      <div
-                        key={m.id}
-                        className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-[#6D5CF2]/15 text-[#6D5CF2] text-xs font-bold flex items-center justify-center">
-                            {m.avatarInitials}
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                              {m.firstName} {m.lastName}
-                            </p>
-                            <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
-                              {m.phoneE164} · {m.groupName}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            checkInPerson(m.id, 'manual', 95, 'Quick search check-in');
-                            setIsSearchFocused(false);
-                            setHeaderSearchQuery('');
-                          }}
-                          className="px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white text-[11px] font-bold transition-all cursor-pointer"
-                        >
-                          Check In
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Right: Live Gathering Stats + Theme + Bell + User Profile */}
-            <div className="flex items-center gap-1.5 sm:gap-2 justify-end">
-              {/* Live Attendance Counter */}
-              <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/5 text-xs border border-[#E9EBF5] dark:border-[#2D2D55]">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[#666A86] dark:text-[#A9ACC8]">Live:</span>
-                <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums">
-                  {totalCheckedInCount}/{expectedAttendance}
-                </span>
-                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded-md">
-                  {attendancePercentage}%
-                </span>
-              </div>
-
-              {/* Theme Toggle Button */}
-              <button
-                onClick={toggleTheme}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
-                title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
-              >
-                {theme === 'dark' ? (
-                  <>
-                    <Sun className="w-3.5 h-3.5 text-amber-400" />
-                    <span className="hidden sm:inline text-[11px] text-amber-300">Light</span>
-                  </>
-                ) : (
-                  <>
-                    <Moon className="w-3.5 h-3.5 text-indigo-600" />
-                    <span className="hidden sm:inline text-[11px] text-[#666A86]">Dark</span>
-                  </>
-                )}
-              </button>
-
-              {/* Notifications Bell with Popover */}
-              <div className="relative" ref={notifRef}>
-                <button
-                  onClick={() => setIsNotificationDropdownOpen(!isNotificationDropdownOpen)}
-                  className="relative w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
-                  title="Notifications & Arrival Signals"
-                >
-                  <Bell className="w-4 h-4 text-[#6D5CF2]" />
-                  {openFollowupCount > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-extrabold flex items-center justify-center animate-pulse">
-                      {openFollowupCount}
-                    </span>
-                  )}
-                </button>
-
-                {isNotificationDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-3 z-50 animate-in fade-in slide-in-from-top-2">
-                    <div className="flex items-center justify-between pb-2 border-b border-[#E9EBF5] dark:border-[#2D2D55] mb-2">
-                      <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live Sanctuary Alerts</span>
-                      <span className="text-[10px] font-semibold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                        Radar Online
-                      </span>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-white/5 flex items-start gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1 shrink-0" />
-                        <div>
-                          <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Geofence Auto Check-ins</p>
-                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                            85 members auto-verified at entrance within 5m dwell.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 flex items-start gap-2">
-                        <span className="w-2 h-2 rounded-full bg-rose-500 mt-1 shrink-0" />
-                        <div>
-                          <p className="font-bold text-rose-700 dark:text-rose-300">
-                            {openFollowupCount} Pastoral Follow-ups
-                          </p>
-                          <p className="text-[11px] text-rose-600 dark:text-rose-400">
-                            Members absent for 2-3 consecutive weeks require phone contact.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setIsNotificationDropdownOpen(false);
-                        setIsFollowupModalOpen(true);
-                      }}
-                      className="w-full mt-2.5 py-1.5 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] transition-colors"
-                    >
-                      View Follow-up Tasks
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Help Guide Button */}
-              <button
-                onClick={() => setIsHelpModalOpen(true)}
-                className="w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
-                title="Documentation & Ghana Act 843 Guides"
-              >
-                <HelpCircle className="w-4 h-4" />
-              </button>
-
-              {/* User Profile Pill & Dropdown */}
-              <div className="relative" ref={profileRef}>
-                <button
-                  onClick={() => setIsProfileDropdownOpen(!isProfileDropdownOpen)}
-                  aria-expanded={isProfileDropdownOpen}
-                  className="flex items-center gap-2 p-1 sm:pl-1.5 sm:pr-2.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-[#6D5CF2] text-white text-xs font-bold flex items-center justify-center shadow-xs">
-                    {currentUser?.initials || 'AO'}
-                  </div>
-                  <div className="hidden sm:block text-left">
-                    <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">
-                      {currentUser?.name ? currentUser.name.split(' ')[0] : 'Ama'}
-                    </p>
-                    <p className="text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF] font-semibold leading-none">
-                      Administrator
-                    </p>
-                  </div>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
-                </button>
-
-                {isProfileDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-2 z-50 animate-in fade-in slide-in-from-top-2">
-                    <div className="px-3 py-2 border-b border-[#E9EBF5] dark:border-[#2D2D55] mb-1">
-                      <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{currentUser?.name}</p>
-                      <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">{currentUser?.email}</p>
-                    </div>
-
-                    <div className="py-1">
-                      <p className="px-3 py-1 text-[10px] uppercase font-bold tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
-                        Switch View
-                      </p>
-                      <button
-                        onClick={() => {
-                          switchUserRole('usher');
-                          setIsProfileDropdownOpen(false);
-                          showToast('Switched to Usher Station');
-                        }}
-                        className="w-full text-left px-3 py-1.5 rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA] font-medium flex items-center gap-2 cursor-pointer"
-                      >
-                        <QrCode className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                        <span>Usher Station Portal</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          switchUserRole('member');
-                          setIsProfileDropdownOpen(false);
-                          showToast('Switched to Member Mobile View');
-                        }}
-                        className="w-full text-left px-3 py-1.5 rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA] font-medium flex items-center gap-2 cursor-pointer"
-                      >
-                        <Smartphone className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                        <span>Member Mobile App</span>
-                      </button>
-                    </div>
-
-                    <div className="border-t border-[#E9EBF5] dark:border-[#2D2D55] pt-1 mt-1">
-                      <button
-                        onClick={() => {
-                          setActiveTab('settings');
-                          setActiveModule('settings');
-                          setIsProfileDropdownOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-1.5 rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA] font-medium flex items-center gap-2 cursor-pointer"
-                      >
-                        <Settings className="w-3.5 h-3.5" />
-                        <span>Church Settings</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setIsProfileDropdownOpen(false);
-                          logout();
-                        }}
-                        className="w-full text-left px-3 py-1.5 rounded-xl text-xs hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 dark:text-rose-400 font-bold flex items-center gap-2 cursor-pointer"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>Sign Out</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+        {/* Top Header Row following template (ekklesphere-dashboard-v2.html / 1001403593.jpg) */}
+        <header className="flex flex-wrap items-center justify-between gap-3.5 sm:gap-5 mb-5 sm:mb-8 text-[#1D1B3A] dark:text-[#F2F2FA]">
+          {/* Tabs: Dashboard, Workflows, Integrations */}
+          <div className="flex items-center gap-4 sm:gap-6 font-semibold text-sm">
+            <button
+              onClick={() => {
+                setActiveTab('dashboard');
+                setActiveModule('dashboard');
+              }}
+              className={`flex items-center gap-2 cursor-pointer transition-colors ${
+                activeTab === 'dashboard' && activeModule === 'dashboard'
+                  ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold'
+                  : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+              }`}
+            >
+              <Grid className="w-4 h-4 text-[#6D5CF2]" />
+              <span>Dashboard</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('workflows');
+                setActiveModule('members');
+              }}
+              className={`flex items-center gap-2 cursor-pointer transition-colors ${
+                activeTab === 'workflows'
+                  ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold'
+                  : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+              }`}
+            >
+              <CheckSquare className="w-4 h-4 text-[#6D5CF2]" />
+              <span>Workflows</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('integrations')}
+              className={`flex items-center gap-2 cursor-pointer transition-colors ${
+                activeTab === 'integrations'
+                  ? 'text-[#1D1B3A] dark:text-[#F2F2FA] font-bold'
+                  : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+              }`}
+            >
+              <Plus className="w-4 h-4 text-[#6D5CF2]" />
+              <span>Integrations</span>
+            </button>
           </div>
 
-          {/* Bottom Bar: Module Navigation Switcher + Quick Actions Toolbar */}
-          <div className="pt-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-            {/* Module Switcher Tabs */}
-            <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-              <button
-                onClick={() => {
-                  setActiveTab('dashboard');
-                  setActiveModule('dashboard');
-                }}
-                className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === 'dashboard'
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
-                }`}
-              >
-                <Grid className="w-3.5 h-3.5" />
-                <span>Overview</span>
-              </button>
+          {/* Search Bar */}
+          <div className="flex items-center gap-2 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl px-3.5 py-2 w-full sm:w-64 text-xs text-[#666A86] dark:text-[#A9ACC8] shadow-xs">
+            <Search className="w-4 h-4 shrink-0 text-[#666A86] dark:text-[#A9ACC8]" />
+            <input
+              type="text"
+              placeholder="Search or type command"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="bg-transparent border-none outline-none w-full text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] text-xs"
+            />
+          </div>
 
-              <button
-                onClick={() => {
-                  setActiveTab('workflows');
-                  setActiveModule('members');
-                }}
-                className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === 'workflows'
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Members & Care</span>
-                <span
-                  className={`text-[10px] ml-1 px-2 py-0.5 rounded-full font-bold ${
-                    activeTab === 'workflows'
-                      ? 'bg-white/20 text-white'
-                      : 'bg-slate-200 dark:bg-white/10 text-[#666A86] dark:text-[#A9ACC8]'
-                  }`}
-                >
-                  {members.length}
-                </span>
-              </button>
+          <div className="flex-1 hidden md:block"></div>
 
+          {/* Actions: Segmented Theme Toggle, Notifications, Settings, Export CSV, Add new service */}
+          <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
+            {/* Segmented Light / Dark Toggle */}
+            <div className="flex items-center bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl p-1 shadow-xs">
               <button
-                onClick={() => setActiveTab('proximity')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === 'proximity'
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
+                onClick={() => setTheme('light')}
+                aria-pressed={theme === 'light'}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+                  theme === 'light'
+                    ? 'bg-[#EFEDFF] text-[#6D5CF2] font-bold'
+                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
                 }`}
               >
-                <Radio className="w-3.5 h-3.5" />
-                <span>Proximity Radar</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <Sun className="w-3.5 h-3.5" />
+                <span>Light</span>
               </button>
-
               <button
-                onClick={() => setActiveTab('integrations')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === 'integrations'
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
+                onClick={() => setTheme('dark')}
+                aria-pressed={theme === 'dark'}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+                  theme === 'dark'
+                    ? 'bg-[#2A2A55] text-[#8C7DFF] font-bold'
+                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-white'
                 }`}
               >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Integrations</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setActiveTab('settings');
-                  setActiveModule('settings');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === 'settings'
-                    ? 'bg-[#6D5CF2] text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
-                }`}
-              >
-                <Settings className="w-3.5 h-3.5" />
-                <span>Settings</span>
+                <Moon className="w-3.5 h-3.5" />
+                <span>Dark</span>
               </button>
             </div>
 
-            {/* Quick Actions Toolbar */}
-            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap md:flex-nowrap border-t md:border-t-0 pt-2 md:pt-0 border-[#E9EBF5] dark:border-[#2D2D55]">
-              <span className="hidden xl:inline text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8] mr-0.5">
-                Quick:
+            {/* Notifications Bell */}
+            <button
+              onClick={() => setIsFollowupModalOpen(true)}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-white dark:hover:bg-[#1D1D3D] transition-colors relative cursor-pointer"
+              title="Notifications & Follow-up Tasks"
+            >
+              <Bell className="w-4 h-4" />
+              {openFollowupCount > 0 && (
+                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#EF5A6F]" />
+              )}
+            </button>
+
+            {/* Settings Button */}
+            <button
+              onClick={() => {
+                setActiveTab('settings');
+                setActiveModule('settings');
+              }}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-white dark:hover:bg-[#1D1D3D] transition-colors cursor-pointer"
+              title="Church & System Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
+            {/* Export data CSV Button */}
+            <button
+              onClick={handleExportCSV}
+              className="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
+            >
+              <span>Export data</span>
+              <span className="px-1.5 py-0.5 rounded-md bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-[10px] font-extrabold">
+                CSV
               </span>
+            </button>
 
-              <button
-                onClick={() => {
-                  setEditingMember(null);
-                  setIsAddMemberOpen(true);
-                }}
-                className="bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Add New Member to Directory"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Add Member</span>
-              </button>
-
-              <button
-                onClick={() => setIsImportModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Import Church Members from CSV or Excel"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Import</span>
-              </button>
-
-              <button
-                onClick={handleQuickArrivalCheckin}
-                className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Quick Arrival Auto Check-In"
-              >
-                <CheckSquare className="w-3.5 h-3.5" />
-                <span>Check-in</span>
-              </button>
-
-              <button
-                onClick={() => setIsFollowupModalOpen(true)}
-                className="relative bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Pastoral Care Follow-ups"
-              >
-                <PhoneCall className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                <span>Follow-ups</span>
-                {openFollowupCount > 0 && (
-                  <span className="px-1.5 py-0.2 bg-rose-500 text-white text-[10px] rounded-full font-extrabold animate-pulse">
-                    {openFollowupCount}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setIsMessageModalOpen(true)}
-                className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Broadcast SMS / Push Notice"
-              >
-                <Send className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                <span className="hidden sm:inline">Broadcast</span>
-              </button>
-
-              <button
-                onClick={() => setIsExportModalOpen(true)}
-                className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                title="Export Attendance Reports"
-              >
-                <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                <span className="hidden sm:inline">Export</span>
-              </button>
-            </div>
+            {/* Add new service Dark Navy Button */}
+            <button
+              onClick={() => setIsAddServiceOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1D1B3A] dark:bg-white text-white dark:text-[#1D1B3A] text-xs font-bold hover:opacity-90 transition-all shadow-xs cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add new service</span>
+            </button>
           </div>
         </header>
 
