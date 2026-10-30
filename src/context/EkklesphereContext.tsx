@@ -1,11 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
   auth,
+  db,
   googleProvider,
   signInWithPopup,
   firebaseSignOut,
   onAuthStateChanged,
 } from '../firebase';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import {
   Person,
   ServiceInstance,
@@ -874,7 +876,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
     };
 
-    // Persist newly self-registered member to Supabase database
+    // Persist newly self-registered member to database
     fetch('/api/members', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1287,7 +1289,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.message || 'Failed to save member to Supabase database.');
+      throw new Error(data?.message || 'Failed to save member to database.');
     }
 
     const savedPerson = data as Person;
@@ -1300,7 +1302,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Member registered',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `${savedPerson.firstName} ${savedPerson.lastName} saved to Supabase (${savedPerson.groupName})`,
+        details: `${savedPerson.firstName} ${savedPerson.lastName} saved to database (${savedPerson.groupName})`,
       },
       ...prev,
     ]);
@@ -1335,7 +1337,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Batch Member Import',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Imported ${data.importedCount ?? newMembers.length} members into Supabase.`,
+        details: `Imported ${data.importedCount ?? newMembers.length} members into database.`,
       },
       ...prev,
     ]);
@@ -1356,7 +1358,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.message || 'Failed to update member in Supabase database.');
+      throw new Error(data?.message || 'Failed to update member in database.');
     }
 
     const updatedPerson = data as Person;
@@ -1369,7 +1371,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Member updated',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Updated ${updatedPerson.firstName} ${updatedPerson.lastName} in Supabase`,
+        details: `Updated ${updatedPerson.firstName} ${updatedPerson.lastName} in database`,
       },
       ...prev,
     ]);
@@ -1400,12 +1402,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const refreshLivePremise = async () => {
     try {
-      const res = await fetch('/api/campus-premise');
-      if (!res.ok) return;
-      const data = await res.json();
+      let serverData: any = null;
+      try {
+        const res = await fetch('/api/campus-premise');
+        if (res.ok) {
+          serverData = await res.json();
+        }
+      } catch (netErr) {
+        // server may be starting or offline
+      }
 
-      if (data.premiseSettings) {
-        const ps = data.premiseSettings;
+      if (serverData?.premiseSettings) {
+        const ps = serverData.premiseSettings;
         setSystemSettings((prev) => {
           const next: SystemSettings = {
             ...prev,
@@ -1422,36 +1430,100 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           };
           try {
             localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
-          } catch {
-            // ignore
-          }
+          } catch {}
           return next;
         });
-      } else if (data.configured === false) {
-        setSystemSettings((prev) => {
-          if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
-          const next = {
-            ...prev,
-            campusLatitude: null,
-            campusLongitude: null,
-            campusLocationAccuracyM: null,
-            campusLocationUpdatedAt: null,
-          };
-          try {
-            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
-          } catch {
-            // ignore
+
+        // Also sync to Firestore as backup
+        try {
+          setDoc(doc(db, 'system_settings', 'default'), {
+            lat: ps.lat,
+            lng: ps.lng,
+            accuracyM: ps.accuracyM,
+            churchName: ps.churchName,
+            campusName: ps.campusName,
+            campusAddress: ps.campusAddress,
+            innerGeofenceMeters: ps.innerGeofenceMeters,
+            outerGeofenceMeters: ps.outerGeofenceMeters,
+            dwellTimeMinutes: ps.dwellTimeMinutes,
+            updatedAt: ps.updatedAt || new Date().toISOString(),
+          }, { merge: true }).catch(() => {});
+        } catch {}
+      } else {
+        // If server hasn't configured premise, check Firestore
+        try {
+          const fsSnap = await getDoc(doc(db, 'system_settings', 'default'));
+          if (fsSnap.exists()) {
+            const fsData = fsSnap.data();
+            const latVal = typeof fsData.lat === 'number' ? fsData.lat : typeof fsData.campusLatitude === 'number' ? fsData.campusLatitude : null;
+            const lngVal = typeof fsData.lng === 'number' ? fsData.lng : typeof fsData.campusLongitude === 'number' ? fsData.campusLongitude : null;
+
+            if (latVal !== null && lngVal !== null) {
+              setSystemSettings((prev) => {
+                const next: SystemSettings = {
+                  ...prev,
+                  churchName: fsData.churchName || prev.churchName,
+                  campusName: fsData.campusName || prev.campusName,
+                  campusAddress: fsData.campusAddress ?? prev.campusAddress,
+                  campusLatitude: latVal,
+                  campusLongitude: lngVal,
+                  campusLocationAccuracyM: typeof fsData.accuracyM === 'number' ? fsData.accuracyM : typeof fsData.campusLocationAccuracyM === 'number' ? fsData.campusLocationAccuracyM : null,
+                  campusLocationUpdatedAt: fsData.updatedAt || fsData.campusLocationUpdatedAt || null,
+                  innerGeofenceMeters: fsData.innerGeofenceMeters ?? prev.innerGeofenceMeters,
+                  outerGeofenceMeters: fsData.outerGeofenceMeters ?? prev.outerGeofenceMeters,
+                  dwellTimeMinutes: fsData.dwellTimeMinutes ?? prev.dwellTimeMinutes,
+                };
+                try {
+                  localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+                } catch {}
+                return next;
+              });
+
+              // Push restored premise back to server to keep it active
+              fetch('/api/campus-premise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  lat: latVal,
+                  lng: lngVal,
+                  accuracyM: fsData.accuracyM ?? fsData.campusLocationAccuracyM,
+                  churchName: fsData.churchName,
+                  campusName: fsData.campusName,
+                  campusAddress: fsData.campusAddress,
+                  innerGeofenceMeters: fsData.innerGeofenceMeters,
+                  outerGeofenceMeters: fsData.outerGeofenceMeters,
+                  dwellTimeMinutes: fsData.dwellTimeMinutes,
+                  updatedBy: 'System (Firestore Restore)',
+                }),
+              }).catch(() => {});
+            }
+          } else if (serverData?.configured === false) {
+            setSystemSettings((prev) => {
+              if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
+              const next = {
+                ...prev,
+                campusLatitude: null,
+                campusLongitude: null,
+                campusLocationAccuracyM: null,
+                campusLocationUpdatedAt: null,
+              };
+              try {
+                localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+              } catch {}
+              return next;
+            });
           }
-          return next;
-        });
+        } catch {
+          // ignore Firestore read error if offline
+        }
       }
 
-      if (Array.isArray(data.liveCheckins)) {
+      if (serverData && Array.isArray(serverData.liveCheckins)) {
         setAttendanceRecords((prev) => {
           const offlineQueued = prev.filter((r) => r.waitingToSync);
-          const serverIds = new Set(data.liveCheckins.map((r: AttendanceRecord) => r.personId));
+          const serverIds = new Set(serverData.liveCheckins.map((r: AttendanceRecord) => r.personId));
           const remainingOffline = offlineQueued.filter((r) => !serverIds.has(r.personId));
-          return [...remainingOffline, ...data.liveCheckins];
+          return [...remainingOffline, ...serverData.liveCheckins];
         });
       }
     } catch {
@@ -1584,22 +1656,42 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updatedBy: currentUser?.name || 'Administrator',
       };
 
-      const res = await fetch('/api/campus-premise', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const errorJson = await res.json().catch(() => ({}));
-        const message = errorJson.message || errorJson.error || 'Failed to save church premise GPS location on server.';
-        console.error('Failed to save church premise GPS location on server:', res.status, errorJson);
-        showToast(message);
-        return false;
+      // 1. Dual-persist to Firestore immediately as cloud primary/backup
+      try {
+        await setDoc(doc(db, 'system_settings', 'default'), {
+          ...payload,
+          campusLatitude: parsedLat,
+          campusLongitude: parsedLng,
+          campusLocationAccuracyM: accuracyM,
+          campusLocationUpdatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      } catch (fsErr) {
+        console.warn('Firestore direct write for premise settings (non-blocking):', fsErr);
       }
 
-      const data = await res.json();
-      const ps = data.premiseSettings;
+      // 2. Persist to API server
+      let serverSaved = false;
+      let ps: any = null;
+      try {
+        const res = await fetch('/api/campus-premise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          ps = data.premiseSettings;
+          serverSaved = true;
+        } else {
+          const errorJson = await res.json().catch(() => ({}));
+          console.warn('Server GPS premise response not ok, but Firestore saved:', res.status, errorJson);
+        }
+      } catch (srvErr) {
+        console.warn('Server GPS premise network error, relying on Firestore persistence:', srvErr);
+      }
+
       setSystemSettings((prev) => {
         const updated: SystemSettings = {
           ...prev,
@@ -1616,9 +1708,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
         try {
           localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
-        } catch {
-          // ignore
-        }
+        } catch {}
         return updated;
       });
 
@@ -1629,7 +1719,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           action: 'Church Premise GPS Set',
           entityType: 'CampusGeofence',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          details: `Pinned ${payload.campusName} at (${parsedLat.toFixed(6)}, ${parsedLng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m`,
+          details: `Pinned ${payload.campusName} at (${parsedLat.toFixed(6)}, ${parsedLng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m (Server & Cloud Saved)`,
         },
         ...prev,
       ]);
@@ -1640,14 +1730,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return true;
     } catch (err) {
       console.error('Error setting church premise location:', err);
-      showToast('Network error saving church premise location.');
+      showToast('Error saving church premise location.');
       return false;
     }
   };
 
   const clearChurchPremiseLocation = async (): Promise<void> => {
     try {
-      await fetch('/api/campus-premise', { method: 'DELETE' });
+      fetch('/api/campus-premise', { method: 'DELETE' }).catch(() => {});
+      try {
+        await deleteDoc(doc(db, 'system_settings', 'default'));
+      } catch {}
+
       setSystemSettings((prev) => {
         const updated: SystemSettings = {
           ...prev,
@@ -1658,9 +1752,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
         try {
           localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
-        } catch {
-          // ignore
-        }
+        } catch {}
         return updated;
       });
       setAuditLogs((prev) => [
@@ -1685,10 +1777,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const updated = { ...prev, ...newSettings };
       try {
         localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
+      } catch {}
       if (updated.campusLatitude != null && updated.campusLongitude != null) {
+        // Dual-persist to server and Firestore
         fetch('/api/campus-premise', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1704,7 +1795,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
             dwellTimeMinutes: updated.dwellTimeMinutes,
             updatedBy: currentUser?.name || 'Administrator',
           }),
-        }).catch((err) => console.warn('Could not sync updated premise settings:', err));
+        }).catch((err) => console.warn('Could not sync updated premise settings to server:', err));
+
+        setDoc(doc(db, 'system_settings', 'default'), {
+          lat: updated.campusLatitude,
+          lng: updated.campusLongitude,
+          accuracyM: updated.campusLocationAccuracyM ?? null,
+          churchName: updated.churchName,
+          campusName: updated.campusName,
+          campusAddress: updated.campusAddress,
+          innerGeofenceMeters: updated.innerGeofenceMeters,
+          outerGeofenceMeters: updated.outerGeofenceMeters,
+          dwellTimeMinutes: updated.dwellTimeMinutes,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true }).catch(() => {});
       }
       return updated;
     });

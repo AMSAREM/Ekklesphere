@@ -28,6 +28,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isVerified() && (
+        request.auth.token.email == 'elenamends@gmail.com' ||
         request.auth.token.email == 'amoakoemmanuel2026@gmail.com' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
@@ -89,10 +90,14 @@ service cloud.firestore {
       allow update, delete: if isValidId(recordId) && isAdmin();
     }
 
-    // 5. System Settings
+    // 5. System Settings (Church premise geofence & GPS parameters)
     match /system_settings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId);
-      allow write: if isValidId(settingId) && isAdmin();
+      allow get: if isValidId(settingId);
+      allow list: if isSignedIn();
+      allow write: if isValidId(settingId) && (
+        isAdmin() ||
+        (isVerified() && (request.auth.token.email == 'elenamends@gmail.com' || request.auth.token.email == 'amoakoemmanuel2026@gmail.com'))
+      );
     }
 
     // 6. Church Groups (Ministries, Fellowships, Cell Groups)

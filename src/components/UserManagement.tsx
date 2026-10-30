@@ -1,26 +1,24 @@
-// src/components/UserManagement.tsx - Enterprise RBAC User Management Component
+// src/components/UserManagement.tsx - Church RBAC User Management Component
 import React, { useState } from 'react';
 import { useEkklesphere } from '../context/EkklesphereContext';
-import { Shield, UserPlus, Key, Trash2, CheckCircle2 } from 'lucide-react';
+import { Shield, UserPlus } from 'lucide-react';
+import { ChurchRole } from '../../lib/auth';
 
 export interface ManagedUser {
   id: string;
   email: string;
-  role: 'super_admin' | 'creator' | 'admin' | 'teacher' | 'accountant' | 'student';
-  school_id: string;
+  role: ChurchRole;
+  campus_id: string;
   name: string;
   status: 'active' | 'suspended';
 }
 
 export const UserManagement: React.FC = () => {
   const { currentUser, showToast } = useEkklesphere();
-  const [selectedRole, setSelectedRole] = useState<string>('teacher');
+  const [selectedRole, setSelectedRole] = useState<ChurchRole>('pastor');
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
 
-  // CRITICAL SECURITY ENFORCEMENT (Step 2):
-  // Admin permissions are strictly derived from the verified database role ('super_admin' or 'creator' or 'admin'),
-  // NEVER from username matching. Backdoors have been permanently purged.
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
   const canManageUsers = isSuperAdmin || currentUser?.role === 'admin';
 
@@ -38,7 +36,7 @@ export const UserManagement: React.FC = () => {
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
-    showToast(`User account created for ${newName} (${newEmail}) with role ${selectedRole}.`);
+    showToast(`Church staff account created for ${newName} (${newEmail}) with role ${selectedRole}.`);
     setNewEmail('');
     setNewName('');
   };
@@ -49,10 +47,10 @@ export const UserManagement: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <Shield className="w-5 h-5 text-indigo-400" />
-            User & Access Management
+            Church Staff & Access Management
           </h2>
           <p className="text-sm text-zinc-400 mt-0.5">
-            Role-based access control backed by Supabase Auth and Row Level Security.
+            Role-based access control for pastors, ushers, group leaders, finance, and administrators.
           </p>
         </div>
         {isSuperAdmin && (
@@ -65,7 +63,7 @@ export const UserManagement: React.FC = () => {
       <form onSubmit={handleCreateUser} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
           <UserPlus className="w-4 h-4 text-emerald-400" />
-          Provision New Account
+          Provision Church Staff Account
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <input
@@ -86,13 +84,15 @@ export const UserManagement: React.FC = () => {
           />
           <select
             value={selectedRole}
-            onChange={(e) => setSelectedRole(e.target.value)}
+            onChange={(e) => setSelectedRole(e.target.value as ChurchRole)}
             className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
           >
-            <option value="teacher">Teacher</option>
-            <option value="accountant">Accountant</option>
-            <option value="admin">School Admin</option>
-            {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+            <option value="pastor">Pastor / Ministry Lead</option>
+            <option value="usher">Door Usher / Greeter</option>
+            <option value="group_leader">Cell / Fellowship Leader</option>
+            <option value="finance">Finance Officer</option>
+            <option value="admin">Church Administrator</option>
+            {isSuperAdmin && <option value="super_admin">Platform Super Admin</option>}
           </select>
         </div>
         <button
@@ -100,7 +100,7 @@ export const UserManagement: React.FC = () => {
           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
         >
           <UserPlus className="w-4 h-4" />
-          Create User
+          Create Staff User
         </button>
       </form>
     </div>

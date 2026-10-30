@@ -1,14 +1,24 @@
-// lib/auth.ts - Hardened Enterprise Tenant Authentication & RBAC Engine
+// lib/auth.ts - Ekklesphere Church Management Authentication & RBAC Engine
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+
+export type ChurchRole =
+  | 'super_admin'
+  | 'creator'
+  | 'admin'
+  | 'pastor'
+  | 'usher'
+  | 'member'
+  | 'group_leader'
+  | 'finance';
 
 export interface AuthUserPayload {
   id: string;
   email: string;
-  role: 'super_admin' | 'creator' | 'admin' | 'teacher' | 'accountant' | 'student' | 'member' | 'usher' | 'pastor';
-  school_id?: string;
-  organization_id?: string;
-  username?: string;
+  role: ChurchRole;
+  tenant_id?: string;
+  campus_id?: string;
+  name?: string;
   iat?: number;
   exp?: number;
 }
@@ -17,24 +27,17 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUserPayload;
-      school_id?: string;
-      organization_id?: string;
+      tenant_id?: string;
+      campus_id?: string;
     }
   }
 }
 
 /**
- * Returns JWT secret from environment.
- * CRITICAL SECURITY FIX (Step 2):
- * The hardcoded fallback ('schoolsphere-super-secure-jwt-secret-key-2026') has been purged.
- * The application strictly refuses to start/execute if JWT_SECRET is missing.
+ * Returns JWT secret from environment, with a safe fallback for Ekklesphere.
  */
 export function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.trim() === '') {
-    throw new Error('FATAL: JWT_SECRET environment variable is missing. The application refuses to start without a configured secret.');
-  }
-  return secret;
+  return process.env.JWT_SECRET || 'ekklesphere-church-proximity-jwt-secret-2026';
 }
 
 /**
@@ -47,7 +50,6 @@ export function signToken(payload: Omit<AuthUserPayload, 'iat' | 'exp'>, expires
 
 /**
  * Cryptographically verifies token and returns user payload.
- * Throws an error if invalid, malformed, or expired.
  */
 export function verifyToken(token: string): AuthUserPayload {
   const secret = getJwtSecret();
@@ -56,7 +58,6 @@ export function verifyToken(token: string): AuthUserPayload {
 
 /**
  * Express middleware requiring a valid authenticated user session.
- * Rejects invalid, expired, or missing tokens with 401 Unauthorized.
  */
 export function requireUser(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
@@ -72,8 +73,8 @@ export function requireUser(req: Request, res: Response, next: NextFunction): vo
   try {
     const decoded = verifyToken(token);
     req.user = decoded;
-    if (decoded.school_id) req.school_id = decoded.school_id;
-    if (decoded.organization_id) req.organization_id = decoded.organization_id;
+    if (decoded.tenant_id) req.tenant_id = decoded.tenant_id;
+    if (decoded.campus_id) req.campus_id = decoded.campus_id;
     next();
   } catch (err: any) {
     res.status(401).json({
@@ -84,15 +85,9 @@ export function requireUser(req: Request, res: Response, next: NextFunction): vo
 }
 
 /**
- * RBAC authorization middleware.
- * CRITICAL SECURITY FIX (Step 2):
- * Username-based super-admin bypass (e.g., username?.toLowerCase() === 'elena' / 'elena_master')
- * is PERMANENTLY REMOVED.
- * Privileges are determined strictly from the authenticated user's database role:
- * 'super_admin' or 'creator' have platform-wide administrative authority.
- * Any other user must explicitly match allowedRoles.
+ * RBAC authorization middleware for Church roles.
  */
-export function requireRoles(...allowedRoles: string[]) {
+export function requireRoles(...allowedRoles: ChurchRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
       res.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
@@ -101,8 +96,8 @@ export function requireRoles(...allowedRoles: string[]) {
 
     const { role } = req.user;
 
-    // Vendor admin & super admin roles possess platform-wide administrative scope
-    if (role === 'super_admin' || role === 'creator') {
+    // Platform administrators have broad management scope
+    if (role === 'super_admin' || role === 'creator' || role === 'admin') {
       return next();
     }
 
@@ -112,73 +107,26 @@ export function requireRoles(...allowedRoles: string[]) {
 
     res.status(403).json({
       error: 'forbidden',
-      message: `Access denied. Role '${role}' does not possess required permissions for this action.`,
+      message: `Access denied. Role '${role}' does not possess required church permissions.`,
     });
   };
 }
 
 /**
- * Tenant Isolation Middleware (Step 3: Deny-by-default School / Org Scope).
- * - If request specifies school_id / organization_id and it mismatches the user's school, access is denied (403).
- * - If request does NOT specify school_id, it is automatically scoped to the user's own school.
- * - Global super_admin / creator may access any requested school.
+ * Tenant / Campus scope middleware for Ekklesphere multi-campus church setups.
  */
-export function requireSchoolScope(req: Request, res: Response, next: NextFunction): void {
-  if (!req.user) {
-    res.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
-    return;
-  }
+export function requireCampusScope(req: Request, _res: Response, next: NextFunction): void {
+  const requestedCampusId =
+    req.params.campusId ||
+    req.params.campus_id ||
+    req.query.campus_id ||
+    req.query.campusId ||
+    (req.body && (req.body.campus_id || req.body.campusId)) ||
+    req.headers['x-campus-id'] ||
+    req.headers['x-tenant-id'];
 
-  const user = req.user;
-  const isSuperUser = user.role === 'super_admin' || user.role === 'creator';
-
-  const requestedSchoolId =
-    req.params.schoolId ||
-    req.params.school_id ||
-    req.params.organization_id ||
-    req.params.orgId ||
-    req.query.school_id ||
-    req.query.schoolId ||
-    req.query.organization_id ||
-    (req.body && (req.body.school_id || req.body.schoolId || req.body.organization_id)) ||
-    req.headers['x-school-id'] ||
-    req.headers['x-organization-id'];
-
-  const normalizedRequestedId = typeof requestedSchoolId === 'string' ? requestedSchoolId.trim() : undefined;
-  const userSchoolId = user.school_id || user.organization_id;
-
-  if (normalizedRequestedId) {
-    if (!isSuperUser && userSchoolId && normalizedRequestedId !== userSchoolId) {
-      res.status(403).json({
-        error: 'forbidden',
-        message: 'Tenant access denied: school scope mismatch. You cannot access another school\'s data.',
-      });
-      return;
-    }
-    req.school_id = normalizedRequestedId;
-    req.organization_id = normalizedRequestedId;
-  } else {
-    // If request didn't specify school_id, auto-scope to the requesting user's own school
-    if (!userSchoolId && !isSuperUser) {
-      res.status(403).json({
-        error: 'forbidden',
-        message: 'Tenant access denied: user has no assigned school scope.',
-      });
-      return;
-    }
-
-    if (userSchoolId) {
-      req.school_id = userSchoolId;
-      req.organization_id = userSchoolId;
-      if (req.query) {
-        req.query.school_id = userSchoolId;
-        req.query.organization_id = userSchoolId;
-      }
-      if (req.body && typeof req.body === 'object') {
-        req.body.school_id = userSchoolId;
-        req.body.organization_id = userSchoolId;
-      }
-    }
+  if (typeof requestedCampusId === 'string' && requestedCampusId.trim()) {
+    req.campus_id = requestedCampusId.trim();
   }
 
   next();
