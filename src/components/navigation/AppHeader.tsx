@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { UserRole } from '../../types/ekklesphere';
 import {
   Radio,
   Sun,
@@ -8,13 +7,8 @@ import {
   HelpCircle,
   LogOut,
   ChevronDown,
-  LayoutDashboard,
-  Smartphone,
-  QrCode,
   ShieldCheck,
-  Menu,
   X,
-  Check,
   Grid,
   CheckSquare,
   Plus,
@@ -22,14 +16,11 @@ import {
   Bell,
   Settings,
   Download,
-  Send,
-  Calendar as CalendarIcon,
 } from 'lucide-react';
 
 export const AppHeader: React.FC = () => {
   const {
     currentUser,
-    switchUserRole,
     logout,
     theme,
     setTheme,
@@ -106,23 +97,6 @@ export const AppHeader: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const roles: Array<{ role: UserRole; label: string; icon: React.ReactNode }> = [
-    {
-      role: 'admin',
-      label: 'Admin',
-      icon: <LayoutDashboard className="w-3.5 h-3.5" />,
-    },
-    {
-      role: 'usher',
-      label: 'Usher',
-      icon: <QrCode className="w-3.5 h-3.5" />,
-    },
-    {
-      role: 'member',
-      label: 'Member',
-      icon: <Smartphone className="w-3.5 h-3.5" />,
-    },
-  ];
 
   const adminTabs: Array<{
     id: 'dashboard' | 'workflows' | 'proximity' | 'integrations';
@@ -458,33 +432,6 @@ export const AppHeader: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Switch Portal Quick Links */}
-                  <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
-                    <div className="text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] uppercase px-2 py-1 tracking-wider">
-                      Switch Active Portal
-                    </div>
-                    {roles.map((item) => (
-                      <button
-                        key={item.role}
-                        onClick={() => {
-                          switchUserRole(item.role);
-                          setIsUserMenuOpen(false);
-                          showToast(`Switched to ${item.label} portal`);
-                        }}
-                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                          currentUser.role === item.role
-                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-[#6D5CF2] dark:text-[#8C7DFF] font-bold'
-                            : 'text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          {item.icon}
-                          <span>{item.label} Portal</span>
-                        </div>
-                        {currentUser.role === item.role && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
-                      </button>
-                    ))}
-                  </div>
 
                   {/* System Settings & Help Links */}
                   <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
@@ -657,32 +604,6 @@ export const AppHeader: React.FC = () => {
                 </div>
               )}
 
-              {/* Switch Active Portal */}
-              <div>
-                <p className="text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] uppercase tracking-wider mb-2">
-                  Switch Active Portal
-                </p>
-                <div className="grid grid-cols-3 gap-2">
-                  {roles.map((item) => (
-                    <button
-                      key={item.role}
-                      onClick={() => {
-                        switchUserRole(item.role);
-                        setIsMobileMenuOpen(false);
-                        showToast(`Switched to ${item.label} portal`);
-                      }}
-                      className={`flex flex-col items-center gap-1.5 p-2.5 min-h-[48px] rounded-xl text-center text-xs font-bold border transition-all cursor-pointer ${
-                        currentUser.role === item.role
-                          ? 'bg-white dark:bg-[#6D5CF2] border-[#6D5CF2] text-[#6D5CF2] dark:text-white shadow-xs'
-                          : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
-                      }`}
-                    >
-                      {item.icon}
-                      <span className="text-[11px]">{item.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
 
               {/* Quick Actions in Drawer */}
               <div>

@@ -44,7 +44,6 @@ export const MemberApp: React.FC = () => {
     attendanceRecords,
     currentUser,
     logout,
-    switchUserRole,
     setIsSettingsModalOpen,
     isSettingsModalOpen,
   } = useEkklesphere();
@@ -817,32 +816,11 @@ export const MemberApp: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Role & Portal Switcher */}
-          <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">
-            <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Switch Testing Role</span>
-            </h2>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => switchUserRole('admin')}
-                className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <LayoutDashboard className="w-4 h-4 text-[#6D5CF2]" />
-                <span>Pastor Admin</span>
-              </button>
-              <button
-                onClick={() => switchUserRole('usher')}
-                className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <QrCode className="w-4 h-4 text-amber-500" />
-                <span>Door Usher</span>
-              </button>
-            </div>
-
+          {/* Sign Out Action */}
+          <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm">
             <button
               onClick={() => logout()}
-              className="w-full py-2.5 rounded-2xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 flex items-center justify-center gap-2 transition-colors"
+              className="w-full py-3 rounded-2xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
               <span>Sign Out from Ekklesphere</span>

@@ -74,7 +74,6 @@ export const AdminDashboard: React.FC = () => {
     activeServiceId,
     currentUser,
     logout,
-    switchUserRole,
     setIsHelpModalOpen,
     deleteMember,
     batchImportMembers,
