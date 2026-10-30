@@ -102,8 +102,14 @@ interface EkklesphereContextType {
   toggleSidebar: () => void;
   isMobileNavOpen: boolean;
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  adminSubTab: 'dashboard' | 'workflows' | 'integrations';
-  setAdminSubTab: (tab: 'dashboard' | 'workflows' | 'integrations') => void;
+  adminSubTab: 'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings';
+  setAdminSubTab: (tab: 'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  isAddServiceOpen: boolean;
+  setIsAddServiceOpen: (open: boolean) => void;
+  isFollowupModalOpen: boolean;
+  setIsFollowupModalOpen: (open: boolean) => void;
   isHelpModalOpen: boolean;
   setIsHelpModalOpen: (open: boolean) => void;
   isSettingsModalOpen: boolean;
@@ -846,7 +852,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return false;
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
-  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'workflows' | 'integrations'>('dashboard');
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isAddServiceOpen, setIsAddServiceOpen] = useState<boolean>(false);
+  const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
 
@@ -1806,6 +1815,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setIsMobileNavOpen,
         adminSubTab,
         setAdminSubTab,
+        searchQuery,
+        setSearchQuery,
+        isAddServiceOpen,
+        setIsAddServiceOpen,
+        isFollowupModalOpen,
+        setIsFollowupModalOpen,
         isHelpModalOpen,
         setIsHelpModalOpen,
         isSettingsModalOpen,

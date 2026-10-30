@@ -12,7 +12,7 @@ const EkklesphereMain: React.FC = () => {
   const { currentUser, toastMessage } = useEkklesphere();
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
       {/* Help Modal */}
       {currentUser && <HelpDocsModal />}
 
