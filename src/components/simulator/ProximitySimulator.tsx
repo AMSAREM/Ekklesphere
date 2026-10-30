@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { Radio, ShieldCheck, MapPin, CheckCircle2, RotateCcw, Clock, Lock, Sparkles } from 'lucide-react';
+import { Radio, ShieldCheck, MapPin, CheckCircle2, RotateCcw, Clock, Lock, Sparkles, Server, Radar } from 'lucide-react';
+import { GeofenceApiConsole } from './GeofenceApiConsole';
 
 export const ProximitySimulator: React.FC = () => {
+  const [viewMode, setViewMode] = useState<'radar' | 'apiConsole'>('apiConsole');
   const {
     proximityStage,
     advanceProximityStage,
@@ -39,30 +41,54 @@ export const ProximitySimulator: React.FC = () => {
   };
 
   return (
-    <div className="max-w-[1100px] mx-auto py-6 px-4">
-      {/* Title & Privacy Guarantee Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div className="max-w-[1100px] mx-auto py-6 px-4 space-y-6">
+      {/* Title & View Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
-              Proximity & Geofencing Radar
+              Geofence & Attendance Verification
             </h1>
             <span className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
               <Sparkles className="w-3.5 h-3.5" />
-              Signature Feature
+              Full-Stack Architecture
             </span>
           </div>
           <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] max-w-[65ch] mt-1 leading-relaxed">
-            Simulates the on-device approach pipeline for Accra Central Church. Raw GPS coordinates are never uploaded;
-            only signed arrival events inside active service windows trigger check-in.
+            Android (background geofence) + Web (manual high-accuracy fix) + Node API validation + Supabase/PostGIS shifts view.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 bg-[#DDF5EC] dark:bg-[#16382F] text-[#1E7A5F] dark:text-[#5FD3AB] px-3.5 py-2 rounded-2xl text-xs font-bold border border-[#7AD3B6]/30">
-          <ShieldCheck className="w-4 h-4 shrink-0" />
-          <span>Ghana Data Protection Act (Act 843) Compliant</span>
+        {/* View Toggle */}
+        <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs font-bold">
+          <button
+            onClick={() => setViewMode('apiConsole')}
+            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              viewMode === 'apiConsole'
+                ? 'bg-[#6D5CF2] text-white shadow-sm'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5" />
+            <span>PostGIS API & Shifts</span>
+          </button>
+          <button
+            onClick={() => setViewMode('radar')}
+            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              viewMode === 'radar'
+                ? 'bg-[#6D5CF2] text-white shadow-sm'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
+            }`}
+          >
+            <Radar className="w-3.5 h-3.5" />
+            <span>2D Approach Radar</span>
+          </button>
         </div>
       </div>
+
+      {viewMode === 'apiConsole' ? (
+        <GeofenceApiConsole />
+      ) : (
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: 2D Radar Canvas (Span 7) */}
@@ -281,6 +307,7 @@ export const ProximitySimulator: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };

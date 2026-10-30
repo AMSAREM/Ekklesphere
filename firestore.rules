@@ -24,6 +24,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
+        request.auth.token.email == 'akokosolutions24@gmail.com' ||
         request.auth.token.email == 'amoakoemmanuel2020@gmail.com' ||
         request.auth.token.email == 'elenamends@gmail.com' ||
         request.auth.token.email == 'pastor.david@ekklesphere.org' ||

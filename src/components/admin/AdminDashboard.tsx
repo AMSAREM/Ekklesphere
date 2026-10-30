@@ -181,11 +181,11 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-28 sm:pb-32 lg:pb-8 px-3 sm:px-6 lg:pr-8 lg:pl-0 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] lg:flex lg:items-start transition-all duration-200">
-      {/* Signature Purple Curved Navigation Bar - Desktop Side Dock & Mobile/Tablet Centered Floating Rail */}
+    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] transition-all duration-200">
+      {/* Signature Purple Navigation Bar - Fixed to Left Screen Edge on Desktop & Centered Floating Pill on Mobile */}
       <aside
         aria-label="Admin Module Navigation"
-        className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-4 lg:translate-x-0 lg:inset-x-auto lg:static lg:sticky lg:top-[84px] lg:self-start lg:w-[62px] lg:shrink-0 bg-[#6D5CF2] rounded-2xl sm:rounded-full lg:rounded-r-[32px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1.5 sm:gap-3 p-2 lg:py-5 lg:px-0 z-30 side-curved-tab shadow-xl lg:shadow-[0_12px_32px_rgba(40,30,120,0.22)] border border-white/20 lg:border-none backdrop-blur-md lg:backdrop-blur-none max-w-[420px] sm:max-w-none mx-auto sm:mx-0"
+        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-32px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-3 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none backdrop-blur-md transition-all duration-200"
       >
         {/* 1. Dashboard */}
         <div className="relative group">
@@ -196,15 +196,15 @@ export const AdminDashboard: React.FC = () => {
             }}
             aria-label="Dashboard Overview"
             aria-current={activeTab === 'dashboard' && activeModule === 'dashboard' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'dashboard' && activeModule === 'dashboard'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Grid className="w-5 h-5" />
+            <Grid className="w-5 h-5 shrink-0" />
           </button>
-          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Dashboard</span>
           </span>
         </div>
@@ -216,18 +216,21 @@ export const AdminDashboard: React.FC = () => {
               setActiveTab('workflows');
               setActiveModule('members');
             }}
-            aria-label="Members & Households"
+            aria-label="Members Directory"
             aria-current={activeTab === 'workflows' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'workflows'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Users className="w-5 h-5" />
+            <Users className="w-5 h-5 shrink-0" />
           </button>
-          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Members & Roster</span>
+            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold">
+              {members.length}
+            </span>
           </span>
         </div>
 
@@ -239,46 +242,98 @@ export const AdminDashboard: React.FC = () => {
               setActiveModule('attendance');
               showToast(`Attendance: ${totalCheckedInCount} / ${expectedAttendance} (${attendancePercentage}%)`);
             }}
-            aria-label="Live Attendance Signals"
+            aria-label="Live Attendance"
             aria-current={activeModule === 'attendance' ? 'page' : undefined}
-            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeModule === 'attendance'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <PieChart className="w-5 h-5" />
+            <PieChart className="w-5 h-5 shrink-0" />
             <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2] animate-pulse" />
           </button>
-          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Live Attendance</span>
-            <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 dark:text-emerald-600 text-[10px] rounded-full font-extrabold">Active</span>
+            <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 dark:text-emerald-600 text-[10px] rounded-full font-extrabold">
+              {attendancePercentage}%
+            </span>
           </span>
         </div>
 
-        {/* 4. Proximity Radar */}
+        {/* 4. Schedule & Services */}
+        <div className="relative group">
+          <button
+            onClick={() => setIsAddServiceOpen(true)}
+            aria-label="Schedule Service"
+            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <CalendarIcon className="w-5 h-5 shrink-0" />
+          </button>
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Schedule Service</span>
+          </span>
+        </div>
+
+        {/* 5. Care Follow-up */}
+        <div className="relative group">
+          <button
+            onClick={() => setIsFollowupModalOpen(true)}
+            aria-label="Care Follow-up Queue"
+            className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <CheckSquare className="w-5 h-5 shrink-0" />
+            {followupTasks.filter((t) => t.status === 'open').length > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#EF5A6F] border-2 border-[#6D5CF2]" />
+            )}
+          </button>
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Care Follow-up</span>
+            {followupTasks.filter((t) => t.status === 'open').length > 0 && (
+              <span className="px-1.5 py-0.2 bg-rose-500/20 text-rose-300 text-[10px] rounded-full font-bold">
+                {followupTasks.filter((t) => t.status === 'open').length}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {/* 6. Broadcast Comms */}
+        <div className="relative group">
+          <button
+            onClick={() => setIsMessageModalOpen(true)}
+            aria-label="Broadcast Messages"
+            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+          >
+            <Mail className="w-5 h-5 shrink-0" />
+          </button>
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+            <span>Broadcast Comms</span>
+          </span>
+        </div>
+
+        {/* 7. Proximity Radar */}
         <div className="relative group">
           <button
             onClick={() => {
               setActiveTab('proximity');
               showToast('Proximity & Geofencing Radar Suite active');
             }}
-            aria-label="Proximity & Geofencing Radar Suite"
+            aria-label="Proximity Radar"
             aria-current={activeTab === 'proximity' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'proximity'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Radio className="w-5 h-5" />
+            <Radio className="w-5 h-5 shrink-0" />
           </button>
-          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Proximity Radar</span>
           </span>
         </div>
 
-        {/* 5. System Settings */}
+        {/* 8. Settings */}
         <div className="relative group">
           <button
             onClick={() => {
@@ -286,24 +341,24 @@ export const AdminDashboard: React.FC = () => {
               setActiveModule('settings');
               showToast('System & Campus Settings');
             }}
-            aria-label="System Settings & Configuration"
+            aria-label="System Settings"
             aria-current={activeTab === 'settings' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'settings'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_16px_rgba(30,20,90,0.28)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Settings className="w-5 h-5" />
+            <Settings className="w-5 h-5 shrink-0" />
           </button>
-          <span className="hidden lg:group-hover:flex lg:group-focus-within:flex items-center gap-1.5 absolute left-[68px] top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>System Settings</span>
           </span>
         </div>
       </aside>
 
-      {/* Main Content & Bottom Nav Container */}
-      <div className="flex-1 min-w-0 lg:pl-6">
+      {/* Main Content & Active Views */}
+      <main className="flex-1 min-w-0 w-full" role="main">
 
         {/* Admin Master Tab Bar Navigation & Quick Actions Toolbar */}
         <nav
@@ -311,14 +366,14 @@ export const AdminDashboard: React.FC = () => {
           className="bg-white/90 dark:bg-[#1D1D3D]/90 backdrop-blur-md rounded-2xl p-2 sm:p-2.5 mb-3 sm:mb-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-[0_4px_20px_rgba(60,50,140,0.06)] flex flex-col md:flex-row md:items-center justify-between gap-2.5"
         >
           {/* Module Switcher Tabs */}
-          <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
             {/* Tab 1: Dashboard Overview */}
             <button
               onClick={() => {
                 setActiveTab('dashboard');
                 setActiveModule('dashboard');
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'dashboard'
                   ? 'bg-[#6D5CF2] text-white shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
@@ -334,7 +389,7 @@ export const AdminDashboard: React.FC = () => {
                 setActiveTab('workflows');
                 setActiveModule('members');
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'workflows'
                   ? 'bg-[#6D5CF2] text-white shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
@@ -343,7 +398,7 @@ export const AdminDashboard: React.FC = () => {
               <Users className="w-3.5 h-3.5" />
               <span>Members & Care</span>
               <span
-                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                className={`text-[10px] ml-1 px-2 py-0.5 rounded-full font-bold ${
                   activeTab === 'workflows'
                     ? 'bg-white/20 text-white'
                     : 'bg-slate-200 dark:bg-white/10 text-[#666A86] dark:text-[#A9ACC8]'
@@ -356,7 +411,7 @@ export const AdminDashboard: React.FC = () => {
             {/* Tab 3: Proximity Radar */}
             <button
               onClick={() => setActiveTab('proximity')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'proximity'
                   ? 'bg-[#6D5CF2] text-white shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-slate-100 dark:hover:bg-white/5'
@@ -1349,7 +1404,7 @@ export const AdminDashboard: React.FC = () => {
           <SystemSettingsPanel />
         </div>
       )}
-      </div>
+      </main>
 
       {/* MODAL 1: Add New Service */}
       {isAddServiceOpen && (
