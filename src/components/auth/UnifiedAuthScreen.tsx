@@ -171,7 +171,7 @@ export const UnifiedAuthScreen: React.FC = () => {
               <h3 className="font-bold text-xs sm:text-sm text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
                 Sign in with Google
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-                  Firebase Auth
+                  Supabase Auth
                 </span>
               </h3>
               <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">

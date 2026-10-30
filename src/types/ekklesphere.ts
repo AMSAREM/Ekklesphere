@@ -12,6 +12,10 @@ export interface AuthUser {
   title: string;
   campusName: string;
   memberId?: string;
+  /** Set for users resolved from Supabase `members`; absent for demo roles */
+  organizationId?: string;
+  /** True for the built-in demo roles (no Supabase session, no live API access) */
+  isDemo?: boolean;
   permissions: string[];
 }
 

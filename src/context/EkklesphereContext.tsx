@@ -1,11 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import {
-  auth,
-  googleProvider,
-  signInWithPopup,
-  firebaseSignOut,
-  onAuthStateChanged,
-} from '../firebase';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
 import {
   Person,
   ServiceInstance,
@@ -385,14 +380,18 @@ const EkklesphereContext = createContext<EkklesphereContextType | undefined>(und
 export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
+      // Only demo roles are persisted locally. Real users come from the
+      // Supabase session and are never trusted from localStorage.
       const saved = localStorage.getItem('ekklesphere_user');
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved) as AuthUser;
+        if (parsed?.isDemo) return parsed;
+        localStorage.removeItem('ekklesphere_user');
       }
     } catch {
       // fallback
     }
-    return DEMO_USERS.admin;
+    return null;
   });
 
   const [activePortalState, setActivePortalState] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
@@ -457,64 +456,109 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
 
+  // Resolve the signed-in Supabase user into an app user using the `members` table.
+  // Roles are NEVER derived from the email address or from localStorage.
+  const hydrateFromSession = async (session: Session | null) => {
+    if (!session?.user) return;
+    const sbUser = session.user;
+    try {
+      // Link any pre-registered member rows that match this verified email
+      await supabase.rpc('claim_my_member_rows');
+
+      const { data: rows, error } = await supabase
+        .from('members')
+        .select('id, organization_id, role, status, first_name, last_name, photo_url')
+        .eq('user_id', sbUser.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      if (!rows || rows.length === 0) {
+        showToast('Your email is not registered with a church yet. Ask your church admin to add you.');
+        await supabase.auth.signOut();
+        setCurrentUser(null);
+        return;
+      }
+
+      const m = rows[0];
+      const role: UserRole =
+        m.role === 'owner' || m.role === 'admin' || m.role === 'pastor'
+          ? 'admin'
+          : m.role === 'usher'
+          ? 'usher'
+          : 'member';
+
+      const email = sbUser.email || '';
+      const name =
+        `${m.first_name ?? ''} ${m.last_name ?? ''}`.trim() ||
+        (sbUser.user_metadata?.full_name as string | undefined) ||
+        email.split('@')[0] ||
+        'Church Member';
+      const initials =
+        name
+          .split(' ')
+          .map((n) => n[0])
+          .slice(0, 2)
+          .join('')
+          .toUpperCase() || 'EM';
+
+      const appUser: AuthUser = {
+        id: sbUser.id,
+        name,
+        email,
+        role,
+        avatar: m.photo_url || (sbUser.user_metadata?.avatar_url as string | undefined) || undefined,
+        initials,
+        title:
+          role === 'admin'
+            ? 'Administrator / Pastor'
+            : role === 'usher'
+            ? 'Door Steward / Usher'
+            : 'Congregation Member',
+        campusName: 'Accra Central Campus',
+        memberId: m.id,
+        organizationId: m.organization_id,
+        permissions:
+          role === 'admin'
+            ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+            : role === 'usher'
+            ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+            : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+      };
+
+      setCurrentUser(appUser);
+      try {
+        localStorage.removeItem('ekklesphere_user');
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      console.error('Could not load member profile:', err);
+      showToast('Signed in, but your member profile could not be loaded.');
+    }
+  };
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
-        const email = fbUser.email || '';
-        const name = fbUser.displayName || email.split('@')[0] || 'Church Member';
-        const initials =
-          name
-            .split(' ')
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase() || 'EM';
+    supabase.auth.getSession().then(({ data }) => hydrateFromSession(data.session));
 
-        const role: UserRole =
-          email.toLowerCase() === 'elenamends@gmail.com' ||
-          email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-          email.toLowerCase().includes('pastor') ||
-          email.toLowerCase().includes('admin')
-            ? 'admin'
-            : email.toLowerCase().includes('usher')
-            ? 'usher'
-            : 'member';
-
-        const gUser: AuthUser = {
-          id: fbUser.uid,
-          name,
-          email,
-          role,
-          avatar: fbUser.photoURL || undefined,
-          initials,
-          title:
-            role === 'admin'
-              ? 'Administrator / Executive Pastor'
-              : role === 'usher'
-              ? 'Door Steward / Usher'
-              : 'Congregation Member',
-          campusName: 'Accra Central Campus',
-          permissions:
-            role === 'admin'
-              ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-              : role === 'usher'
-              ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-              : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-        };
-
-        setCurrentUser(gUser);
-        try {
-          localStorage.setItem('ekklesphere_user', JSON.stringify(gUser));
-        } catch {
-          // ignore
-        }
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setCurrentUser((prev) => (prev?.isDemo ? prev : null));
+        return;
+      }
+      if (session) {
+        // Defer: do not call Supabase from inside the auth callback
+        setTimeout(() => hydrateFromSession(session), 0);
       }
     });
 
-    return () => unsubscribe();
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  const login = (user: AuthUser) => {
+  // login() is the demo-role path only; real users come from hydrateFromSession
+  const login = (rawUser: AuthUser) => {
+    const user: AuthUser = { ...rawUser, isDemo: true };
     setCurrentUser(user);
     try {
       localStorage.setItem('ekklesphere_user', JSON.stringify(user));
@@ -530,61 +574,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const signInWithGoogle = async () => {
     setIsGoogleAuthLoading(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const fbUser = result.user;
-      const email = fbUser.email || '';
-      const name = fbUser.displayName || 'Google Member';
-      const initials =
-        name
-          .split(' ')
-          .map((n) => n[0])
-          .slice(0, 2)
-          .join('')
-          .toUpperCase() || 'GM';
-
-      const role: UserRole =
-        email.toLowerCase() === 'elenamends@gmail.com' ||
-        email.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-        email.toLowerCase().includes('pastor') ||
-        email.toLowerCase().includes('admin')
-          ? 'admin'
-          : email.toLowerCase().includes('usher')
-          ? 'usher'
-          : 'member';
-
-      const gUser: AuthUser = {
-        id: fbUser.uid,
-        name,
-        email,
-        role,
-        avatar: fbUser.photoURL || undefined,
-        initials,
-        title:
-          role === 'admin'
-            ? 'Administrator / Executive Pastor'
-            : role === 'usher'
-            ? 'Door Steward / Usher'
-            : 'Congregation Member',
-        campusName: 'Accra Central Campus',
-        permissions:
-          role === 'admin'
-            ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-            : role === 'usher'
-            ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-            : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-      };
-
-      login(gUser);
-      showToast(`Authenticated with Google as ${name}`);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+      // The browser now redirects to Google; the session is picked up on return.
     } catch (err: unknown) {
       console.error('Google Sign-in error:', err);
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('popup-closed-by-user')) {
-        showToast('Google sign-in was closed before completion');
-      } else {
-        showToast('Google sign-in encountered an issue. You can also sign in via Demo Roles.');
-      }
-    } finally {
+      showToast('Google sign-in encountered an issue. You can also sign in via Demo Roles.');
       setIsGoogleAuthLoading(false);
     }
   };
@@ -592,7 +590,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const logout = () => {
     setCurrentUser(null);
     try {
-      firebaseSignOut(auth).catch(() => {});
+      supabase.auth.signOut().catch(() => {});
       localStorage.removeItem('ekklesphere_user');
     } catch {
       // ignore
