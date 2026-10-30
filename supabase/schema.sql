@@ -85,12 +85,36 @@ create table if not exists persons (
   tenant_id uuid not null references tenants(id) on delete cascade,
   household_id uuid references households(id) on delete set null,
   first_name text not null,
+  middle_name text,
   last_name text not null,
   preferred_name text,
+  specific_location text,
+  remarks text,
+  member_id text,
+  squads text,
+  department text,
+  member_officer_name text,
   date_of_birth date,
   gender text check (gender in ('male', 'female', 'other')),
   phone_e164 text,
+  phone_number text,
   email citext,
+  place_of_residence text,
+  residential_digital_address text,
+  hometown text,
+  occupation text,
+  home_cell_group text,
+  month_of_birth text,
+  marital_status text,
+  spouse_name text,
+  number_of_children int default 0,
+  emergency_contact_person text,
+  emergency_phone text,
+  image_url text,
+  date_of_baptism date,
+  date_of_marriage date,
+  date_of_salvation date,
+  date_of_membership date default current_date,
   status text not null default 'visitor'
     check (status in ('visitor','member','inactive','transferred','deceased')),
   household_role text check (household_role in ('head','spouse','child','other')),
@@ -106,6 +130,8 @@ create unique index if not exists persons_phone_uq
   on persons (tenant_id, phone_e164) where deleted_at is null and phone_e164 is not null;
 create index if not exists persons_tenant_idx on persons (tenant_id);
 create index if not exists persons_status_idx on persons (tenant_id, status);
+create index if not exists persons_member_id_idx on persons (member_id);
+create index if not exists persons_home_cell_group_idx on persons (tenant_id, home_cell_group);
 
 -- ----------------------------------------------------------------------------
 -- 4. ACCESS, DEVICES & CONSENT (Ghana Act 843 Sensitive Data Protection)
@@ -868,4 +894,64 @@ create policy "attendance_insert_policy" on public.attendance
 
 create policy "attendance_update_policy" on public.attendance
   for update using (public.has_organization_access(organization_id, 'usher'));
+
+-- ----------------------------------------------------------------------------
+-- 13. SECURITY ADVISOR REMEDIATIONS & COVERING INDEXES
+-- ----------------------------------------------------------------------------
+alter table if exists public.spatial_ref_sys enable row level security;
+drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
+create policy "allow_read_spatial_ref_sys" on public.spatial_ref_sys for select using (true);
+
+-- Revoke execute on sensitive internal RPCs
+do $$
+begin
+  if exists (select 1 from pg_proc where proname = 'auto_close_open_shifts') then
+    revoke execute on function public.auto_close_open_shifts from public, anon, authenticated;
+    grant execute on function public.auto_close_open_shifts to service_role;
+  end if;
+  if exists (select 1 from pg_proc where proname = 'rls_auto_enable') then
+    revoke execute on function public.rls_auto_enable from public, anon, authenticated;
+    grant execute on function public.rls_auto_enable to service_role;
+  end if;
+end $$;
+
+-- Covering indexes for all foreign key relationships
+create index if not exists idx_fk_campuses_tenant on public.campuses (tenant_id);
+create index if not exists idx_fk_beacons_tenant on public.beacons (tenant_id);
+create index if not exists idx_fk_beacons_campus on public.beacons (campus_id);
+create index if not exists idx_fk_households_tenant on public.households (tenant_id);
+create index if not exists idx_fk_persons_tenant on public.persons (tenant_id);
+create index if not exists idx_fk_persons_household on public.persons (household_id);
+create index if not exists idx_fk_users_tenant on public.users (tenant_id);
+create index if not exists idx_fk_users_person on public.users (person_id);
+create index if not exists idx_fk_user_roles_user on public.user_roles (user_id);
+create index if not exists idx_fk_devices_tenant on public.devices (tenant_id);
+create index if not exists idx_fk_devices_person on public.devices (person_id);
+create index if not exists idx_fk_consents_tenant on public.consents (tenant_id);
+create index if not exists idx_fk_consents_person on public.consents (person_id);
+create index if not exists idx_fk_services_tenant on public.services (tenant_id);
+create index if not exists idx_fk_services_campus on public.services (campus_id);
+create index if not exists idx_fk_service_instances_tenant on public.service_instances (tenant_id);
+create index if not exists idx_fk_service_instances_service on public.service_instances (service_id);
+create index if not exists idx_fk_service_instances_campus on public.service_instances (campus_id);
+create index if not exists idx_fk_attendance_signals_tenant on public.attendance_signals (tenant_id);
+create index if not exists idx_fk_attendance_signals_person on public.attendance_signals (person_id);
+create index if not exists idx_fk_attendance_signals_campus on public.attendance_signals (campus_id);
+create index if not exists idx_fk_attendance_signals_instance on public.attendance_signals (service_instance_id);
+create index if not exists idx_fk_attendance_signals_device on public.attendance_signals (device_id);
+create index if not exists idx_fk_attendance_records_tenant on public.attendance_records (tenant_id);
+create index if not exists idx_fk_attendance_records_instance on public.attendance_records (service_instance_id);
+create index if not exists idx_fk_attendance_records_person on public.attendance_records (person_id);
+create index if not exists idx_fk_attendance_records_user on public.attendance_records (user_id);
+create index if not exists idx_fk_followup_tasks_tenant on public.followup_tasks (tenant_id);
+create index if not exists idx_fk_followup_tasks_person on public.followup_tasks (person_id);
+create index if not exists idx_fk_followup_tasks_assigned_user on public.followup_tasks (assigned_to_user_id);
+create index if not exists idx_fk_pastoral_notes_tenant on public.pastoral_notes (tenant_id);
+create index if not exists idx_fk_pastoral_notes_person on public.pastoral_notes (person_id);
+create index if not exists idx_fk_pastoral_notes_author on public.pastoral_notes (author_user_id);
+create index if not exists idx_fk_funds_tenant on public.funds (tenant_id);
+create index if not exists idx_fk_donations_tenant on public.donations (tenant_id);
+create index if not exists idx_fk_donations_person on public.donations (person_id);
+create index if not exists idx_fk_donations_fund on public.donations (fund_id);
+
 

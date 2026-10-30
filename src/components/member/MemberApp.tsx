@@ -26,7 +26,9 @@ import {
   MapPin,
   Flame,
   Settings,
+  Scan,
 } from 'lucide-react';
+import { MemberQrScannerModal } from './MemberQrScannerModal';
 
 export const MemberApp: React.FC = () => {
   const {
@@ -136,7 +138,7 @@ export const MemberApp: React.FC = () => {
             className="flex-1 sm:flex-none px-4 py-2.5 rounded-2xl bg-[#EEEBFF] hover:bg-[#E0DCFF] dark:bg-[#2A2A55] dark:hover:bg-[#343468] text-[#6C5CE7] dark:text-[#8C7DFF] text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-sm"
           >
             <QrCode className="w-4 h-4" />
-            <span>Show QR Pass</span>
+            <span>Check-in Scanner</span>
           </button>
         </div>
       </div>
@@ -919,17 +921,17 @@ export const MemberApp: React.FC = () => {
           </span>
         </div>
 
-        {/* 4. Pass */}
+        {/* 4. Scanner & Pass */}
         <div className="relative group">
           <button
             onClick={() => setIsQrSheetOpen(true)}
-            aria-label="Show Digital Pass"
+            aria-label="Check-in Scanner & Pass"
             className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
           >
             <QrCode className="w-5 h-5 shrink-0" />
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Pass Code</span>
+            <span>Scan & Pass</span>
           </span>
         </div>
 
@@ -966,76 +968,11 @@ export const MemberApp: React.FC = () => {
         </div>
       </div>
 
-      {/* MODAL: QR Code Sheet (Works across both views) */}
-      {isQrSheetOpen && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="w-full max-w-sm bg-white dark:bg-[#1C1C3C] rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Your Personal Entry Code</h2>
-                <p className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">Ama Owusu · Accra Central Church</p>
-              </div>
-              <button
-                onClick={() => setIsQrSheetOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1"
-                aria-label="Close code dialog"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
-              Present this high-contrast code to an usher door steward or at a check-in kiosk.
-            </p>
-
-            {/* High-contrast SVG QR */}
-            <div className="bg-white p-4 rounded-2xl w-52 h-52 mx-auto flex items-center justify-center border border-slate-200 shadow-inner">
-              <svg className="w-full h-full" viewBox="0 0 100 100">
-                <rect x="5" y="5" width="28" height="28" fill="#000" rx="3" />
-                <rect x="9" y="9" width="20" height="20" fill="#fff" rx="2" />
-                <rect x="13" y="13" width="12" height="12" fill="#000" rx="1" />
-
-                <rect x="67" y="5" width="28" height="28" fill="#000" rx="3" />
-                <rect x="71" y="9" width="20" height="20" fill="#fff" rx="2" />
-                <rect x="75" y="13" width="12" height="12" fill="#000" rx="1" />
-
-                <rect x="5" y="67" width="28" height="28" fill="#000" rx="3" />
-                <rect x="9" y="71" width="20" height="20" fill="#fff" rx="2" />
-                <rect x="13" y="75" width="12" height="12" fill="#000" rx="1" />
-
-                <rect x="40" y="8" width="6" height="6" fill="#000" />
-                <rect x="52" y="8" width="6" height="6" fill="#000" />
-                <rect x="40" y="20" width="6" height="6" fill="#000" />
-                <rect x="46" y="26" width="6" height="6" fill="#000" />
-                <rect x="40" y="40" width="12" height="12" fill="#6C5CE7" rx="2" />
-                <rect x="10" y="44" width="6" height="6" fill="#000" />
-                <rect x="22" y="44" width="6" height="6" fill="#000" />
-                <rect x="68" y="44" width="6" height="6" fill="#000" />
-                <rect x="80" y="44" width="6" height="6" fill="#000" />
-                <rect x="44" y="60" width="6" height="6" fill="#000" />
-                <rect x="56" y="60" width="6" height="6" fill="#000" />
-                <rect x="68" y="72" width="6" height="6" fill="#000" />
-                <rect x="80" y="80" width="12" height="12" fill="#000" />
-              </svg>
-            </div>
-
-            <div className="text-center">
-              <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
-                AMA-OWUSU-ACCRA-2026
-              </span>
-              <span className="block text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5">
-                Rotating dynamic token · Refreshes every 45s
-              </span>
-            </div>
-
-            <button
-              onClick={() => setIsQrSheetOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-[#1D1B3A] dark:bg-[#6C5CE7] text-white text-xs font-bold hover:opacity-90"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Check-in Scanner Modal: Simulates camera access to scan other member QR codes or show entry code */}
+      <MemberQrScannerModal
+        isOpen={isQrSheetOpen}
+        onClose={() => setIsQrSheetOpen(false)}
+      />
     </main>
   );
 };

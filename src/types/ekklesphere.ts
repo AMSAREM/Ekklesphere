@@ -64,13 +64,42 @@ export interface Beacon {
 export interface Person {
   id: string;
   tenantId: string;
-  firstName: string;
-  lastName: string;
-  preferredName?: string;
-  phoneE164: string;
+  // All 28 Church Membership Fields
+  firstName: string; // FIRST NAME
+  middleName?: string; // MIDDLE NAME
+  lastName: string; // LASTNAME
+  specificLocation?: string; // SPECIFIC LOCATION (landmark/area)
+  remarks?: string; // REMARKS
+  memberId?: string; // ID (membership ID or card number)
+  squads?: string; // SQUADS
+  department?: string; // DEPARTMENT (e.g. Ushering, Choir, Media)
+  officerName?: string; // MEMBERS/OFFICERS NAME (Designation/Role)
+  gender?: 'male' | 'female' | 'other' | string; // GENDER
+  dateOfBirth?: string; // DATE OF BIRTH (YYYY-MM-DD)
+  phoneE164: string; // PHONE NUMBER (E.164 format)
+  phoneNumber?: string; // raw phone
+  placeOfResidence?: string; // PLACE OF RESIDENCE (e.g. Osu, East Legon)
+  residentialDigitalAddress?: string; // RESIDENTIAL/DIGITAL ADDRESS (e.g. GA-183-9022)
+  hometown?: string; // HOMETOWN
+  occupation?: string; // OCCUPATION
+  homeCellGroup?: string; // HOME CELL GROUP
+  groupName: string; // Cell group / Fellowship group
+  monthOfBirth?: string; // MONTH OF BIRTH
+  maritalStatus?: 'Single' | 'Married' | 'Widowed' | 'Divorced' | string; // MARITAL STATUS
+  spouseName?: string; // NAME OF SPOUSE
+  numberOfChildren?: number; // NUMBER OF CHILDREN
+  emergencyContactPerson?: string; // NAME OF PERSON TO CONTACT IN CASE OF EMERGENCY
+  emergencyContactPhone?: string; // EMERGENCY (Phone / Contact)
+  imageUrl?: string; // IMAGE
+  dateOfBaptism?: string; // date of baptism
+  dateOfMarriage?: string; // date of marriage
+  dateOfSalvation?: string; // date of salvation
+  dateOfMembership?: string; // date of membership
+
+  // System & Engagement fields
   email?: string;
+  preferredName?: string;
   status: MemberStatus;
-  groupName: string; // e.g. "Osu North cell", "Choir", "Youth"
   householdRole?: 'head' | 'spouse' | 'child' | 'other';
   autoCheckinOptedIn: boolean;
   avatarInitials: string;
@@ -78,6 +107,46 @@ export interface Person {
   consecutiveAbsences: number;
   notes?: string;
 }
+
+export interface MembershipColumnDef {
+  key: keyof Person | string;
+  header: string;
+  required?: boolean;
+  type?: 'text' | 'date' | 'phone' | 'number' | 'image' | 'select';
+  width?: string;
+  category: 'identity' | 'location' | 'church' | 'personal' | 'emergency' | 'spiritual';
+}
+
+export const MEMBERSHIP_TABLE_HEADERS: { header: string; key: keyof Person; label: string }[] = [
+  { header: 'FIRST NAME', key: 'firstName', label: 'First Name' },
+  { header: 'MIDDLE NAME', key: 'middleName', label: 'Middle Name' },
+  { header: 'LASTNAME', key: 'lastName', label: 'Last Name' },
+  { header: 'SPECIFIC LOCATION', key: 'specificLocation', label: 'Specific Location' },
+  { header: 'REMARKS', key: 'remarks', label: 'Remarks' },
+  { header: 'ID', key: 'memberId', label: 'Member ID' },
+  { header: 'SQUADS', key: 'squads', label: 'Squads' },
+  { header: 'DEPARTMENT', key: 'department', label: 'Department' },
+  { header: 'MEMBERS/OFFICERS NAME', key: 'officerName', label: 'Members/Officers Name' },
+  { header: 'GENDER', key: 'gender', label: 'Gender' },
+  { header: 'DATE OF BIRTH', key: 'dateOfBirth', label: 'Date of Birth' },
+  { header: 'PHONE NUMBER', key: 'phoneE164', label: 'Phone Number' },
+  { header: 'PLACE OF RESIDENCE', key: 'placeOfResidence', label: 'Place of Residence' },
+  { header: 'RESIDENTIAL/DIGITAL ADDRESS', key: 'residentialDigitalAddress', label: 'Residential/Digital Address' },
+  { header: 'HOMETOWN', key: 'hometown', label: 'Hometown' },
+  { header: 'OCCUPATION', key: 'occupation', label: 'Occupation' },
+  { header: 'HOME CELL GROUP', key: 'homeCellGroup', label: 'Home Cell Group' },
+  { header: 'MONTH OF BIRTH', key: 'monthOfBirth', label: 'Month of Birth' },
+  { header: 'MARITAL STATUS', key: 'maritalStatus', label: 'Marital Status' },
+  { header: 'NAME OF SPOUSE', key: 'spouseName', label: 'Name of Spouse' },
+  { header: 'NUMBER OF CHILDREN', key: 'numberOfChildren', label: 'Number of Children' },
+  { header: 'NAME OF PERSON TO CONTACT IN CASE OF EMERGENCY', key: 'emergencyContactPerson', label: 'Emergency Contact Person' },
+  { header: 'EMERGENCY', key: 'emergencyContactPhone', label: 'Emergency Contact Phone' },
+  { header: 'IMAGE', key: 'imageUrl', label: 'Image' },
+  { header: 'date of baptism', key: 'dateOfBaptism', label: 'Date of Baptism' },
+  { header: 'date of marriage', key: 'dateOfMarriage', label: 'Date of Marriage' },
+  { header: 'date of salvation', key: 'dateOfSalvation', label: 'Date of Salvation' },
+  { header: 'date of membership', key: 'dateOfMembership', label: 'Date of Membership' },
+];
 
 export interface ServiceDefinition {
   id: string;

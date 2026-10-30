@@ -26,16 +26,31 @@ try {
         app,
         {
           experimentalForceLongPolling: true,
+          experimentalAutoDetectLongPolling: true,
         },
         firebaseConfig.firestoreDatabaseId
       )
     : initializeFirestore(app, {
         experimentalForceLongPolling: true,
+        experimentalAutoDetectLongPolling: true,
       });
 } catch {
   firestoreDb = firebaseConfig.firestoreDatabaseId
     ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
     : getFirestore(app);
+}
+
+// Ensure offline fallback messages do not fail the app in preview environments
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    if (
+      event.reason &&
+      (String(event.reason?.message || event.reason).includes('Could not reach Cloud Firestore backend') ||
+       String(event.reason?.code || '').includes('unavailable'))
+    ) {
+      event.preventDefault();
+    }
+  });
 }
 
 export const db = firestoreDb;
