@@ -86,6 +86,29 @@
         "enablePushNotifications": { "type": "boolean" }
       },
       "required": ["churchName", "campusName", "outerGeofenceMeters", "innerGeofenceMeters", "dwellTimeMinutes"]
+    },
+    "ChurchGroup": {
+      "title": "ChurchGroup",
+      "description": "Church ministry department, demographic fellowship, or neighborhood cell group",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["ministry", "fellowship", "cell_group"] },
+        "leaderName": { "type": "string" },
+        "leaderPhone": { "type": "string" },
+        "leaderEmail": { "type": "string" },
+        "assistantLeader": { "type": "string" },
+        "meetingDay": { "type": "string" },
+        "meetingTime": { "type": "string" },
+        "meetingLocation": { "type": "string" },
+        "targetDemographic": { "type": "string" },
+        "description": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "category", "leaderName", "active"]
     }
   },
   "firestore": {
@@ -104,6 +127,10 @@
     "/system_settings/{settingId}": {
       "schema": "SystemSettings",
       "description": "Campus proximity parameters and automated thresholds"
+    },
+    "/church_groups/{groupId}": {
+      "schema": "ChurchGroup",
+      "description": "Ministries, demographic fellowships, and neighborhood home cell small groups"
     }
   }
 }

@@ -17,6 +17,8 @@ import {
   UserRole,
   AuthUser,
   SystemSettings,
+  ChurchGroup,
+  ChurchGroupCategory,
 } from '../types/ekklesphere';
 
 
@@ -131,6 +133,15 @@ interface EkklesphereContextType {
   updateSystemSettings: (newSettings: Partial<SystemSettings>) => void;
   resetSystemSettings: () => void;
 
+  // Ministries, Fellowships & Cell Groups Management
+  churchGroups: ChurchGroup[];
+  addChurchGroup: (group: Omit<ChurchGroup, 'id' | 'createdAt'>) => ChurchGroup;
+  updateChurchGroup: (id: string, updates: Partial<ChurchGroup>) => void;
+  deleteChurchGroup: (id: string) => void;
+  toggleChurchGroupStatus: (id: string) => void;
+  getGroupMembers: (groupName: string) => Person[];
+
+
 
   // Attendance Records & Metrics
   attendanceRecords: AttendanceRecord[];
@@ -214,6 +225,302 @@ const INITIAL_SERVICES: ServiceInstance[] = [
     endsAt: '20:00',
     status: 'scheduled',
     expectedAttendance: 210,
+  },
+];
+
+export const INITIAL_CHURCH_GROUPS: ChurchGroup[] = [
+  // --- MINISTRIES ---
+  {
+    id: 'grp-min-1',
+    name: 'Choir & Music Ministry',
+    category: 'ministry',
+    leaderName: 'Elder Samuel Darko',
+    leaderPhone: '+233 24 111 2233',
+    leaderEmail: 'samuel.darko@accracentral.org',
+    assistantLeader: 'Sister Joyce Mensah',
+    meetingDay: 'Thursdays & Saturdays',
+    meetingTime: '18:00 - 20:00',
+    meetingLocation: 'Main Sanctuary Choir Loft',
+    targetDemographic: 'Vocalists, Instrumentalists & Sound Engineers',
+    description: 'Leading praise and worship, anthems, hymnody, and musical spiritual preparation for Sunday and midweek services.',
+    active: true,
+    createdAt: '2023-01-10',
+  },
+  {
+    id: 'grp-min-2',
+    name: 'Ushers & Greeters Ministry',
+    category: 'ministry',
+    leaderName: 'Samuel Tetteh',
+    leaderPhone: '+233 24 555 6677',
+    leaderEmail: 'samuel.usher@accracentral.org',
+    assistantLeader: 'Brother Joseph Abbey',
+    meetingDay: 'Saturdays',
+    meetingTime: '16:00 - 17:30',
+    meetingLocation: 'Sanctuary Foyer & Reception Hall',
+    targetDemographic: 'Door Stewards, Welcomers, Protocol team',
+    description: 'Welcoming visitors, door scanning and assistance, distributing church bulletins, and maintaining reverence and order in the sanctuary.',
+    active: true,
+    createdAt: '2023-01-15',
+  },
+  {
+    id: 'grp-min-3',
+    name: 'Media & Tech Broadcast',
+    category: 'ministry',
+    leaderName: 'Emmanuel Osei',
+    leaderPhone: '+233 55 999 8811',
+    leaderEmail: 'media@accracentral.org',
+    assistantLeader: 'Sister Clara Ansah',
+    meetingDay: 'Fridays',
+    meetingTime: '17:30 - 19:30',
+    meetingLocation: 'Production Control Booth & Stage',
+    targetDemographic: 'Audio, Camera, Projection & Social Media Team',
+    description: 'Sanctuary acoustics, video livestreaming, multi-camera mixing, screen visual projection, and podcast broadcasting.',
+    active: true,
+    createdAt: '2023-02-01',
+  },
+  {
+    id: 'grp-min-4',
+    name: 'Children’s Ministry Workers',
+    category: 'ministry',
+    leaderName: 'Deaconess Comfort Mensah',
+    leaderPhone: '+233 20 777 4433',
+    leaderEmail: 'children@accracentral.org',
+    assistantLeader: 'Sister Naa Korkoi',
+    meetingDay: 'Saturdays',
+    meetingTime: '15:00 - 16:30',
+    meetingLocation: 'Children’s Chapel, Block B',
+    targetDemographic: 'Sunday School Teachers and Toddler Caregivers',
+    description: 'Age-graded biblical curriculum, Scripture memory recitation, Christian activities, and safety monitoring for ages 2 through 12.',
+    active: true,
+    createdAt: '2023-03-01',
+  },
+  {
+    id: 'grp-min-5',
+    name: 'Intercessory Prayer Band',
+    category: 'ministry',
+    leaderName: 'Pastor Ruth Larbi',
+    leaderPhone: '+233 24 333 9922',
+    leaderEmail: 'ruth.larbi@accracentral.org',
+    assistantLeader: 'Elder Daniel Kpodo',
+    meetingDay: 'Tuesdays & Fridays',
+    meetingTime: '05:30 - 06:45',
+    meetingLocation: 'Prayer Grotto & Online Dial-in',
+    targetDemographic: 'Congregational Prayer Intercessors',
+    description: 'Spiritual warfare, revival intercession, personal petition prayer, and 24/7 vigil coverage for the church and nation.',
+    active: true,
+    createdAt: '2023-01-20',
+  },
+  {
+    id: 'grp-min-6',
+    name: 'Health & Welfare Outreach',
+    category: 'ministry',
+    leaderName: 'Dr. Kwabena Boateng',
+    leaderPhone: '+233 27 888 1234',
+    leaderEmail: 'welfare@accracentral.org',
+    assistantLeader: 'Nurse Beatrice Addo',
+    meetingDay: '1st Saturday of Month',
+    meetingTime: '10:00 - 12:00',
+    meetingLocation: 'Campus Medical Post',
+    targetDemographic: 'Doctors, Nurses, Pharmacists & Welfare Officers',
+    description: 'First aid response during services, elderly and bereaved home visitations, hospital benevolence, and campus health screenings.',
+    active: true,
+    createdAt: '2023-04-12',
+  },
+
+  // --- FELLOWSHIPS ---
+  {
+    id: 'grp-fel-1',
+    name: 'Men’s Fellowship',
+    category: 'fellowship',
+    leaderName: 'Elder Kofi Mensah',
+    leaderPhone: '+233 24 667 7889',
+    leaderEmail: 'mensfellowship@accracentral.org',
+    assistantLeader: 'Brother Patrick Ofori',
+    meetingDay: '2nd & 4th Saturdays',
+    meetingTime: '07:00 - 08:30',
+    meetingLocation: 'Sanctuary Annex Conference Room',
+    targetDemographic: 'All Men & Fathers (18+)',
+    description: 'Christian manhood, integrity, biblical fatherhood, financial stewardship, vocational growth, and brotherhood support.',
+    active: true,
+    createdAt: '2023-01-18',
+  },
+  {
+    id: 'grp-fel-2',
+    name: 'Women of Faith (Virtuous Women)',
+    category: 'fellowship',
+    leaderName: 'Deaconess Grace Appiah',
+    leaderPhone: '+233 54 112 2334',
+    leaderEmail: 'women@accracentral.org',
+    assistantLeader: 'Sister Martha Boakye',
+    meetingDay: '3rd Saturday of Month',
+    meetingTime: '09:00 - 11:00',
+    meetingLocation: 'Main Hall Conference Room 1',
+    targetDemographic: 'All Women & Mothers (18+)',
+    description: 'Proverbs 31 spiritual enrichment, godly home builders, widow and orphan care, and mentorship for young wives and ladies.',
+    active: true,
+    createdAt: '2023-01-18',
+  },
+  {
+    id: 'grp-fel-3',
+    name: 'Youth & Young Adults (Ignite)',
+    category: 'fellowship',
+    leaderName: 'Pastor David Annan',
+    leaderPhone: '+233 50 123 9900',
+    leaderEmail: 'youth@accracentral.org',
+    assistantLeader: 'Brother Felix Quarshie',
+    meetingDay: 'Saturdays',
+    meetingTime: '16:00 - 18:00',
+    meetingLocation: 'Youth Auditorium & Creative Hub',
+    targetDemographic: 'High School Grads, University Students & Young Professionals (18-35)',
+    description: 'Dynamic worship, biblical worldview, career navigation, Christian relationship mentoring, and urban campus evangelism.',
+    active: true,
+    createdAt: '2023-02-14',
+  },
+  {
+    id: 'grp-fel-4',
+    name: 'Teens Fellowship (Crown of Glory)',
+    category: 'fellowship',
+    leaderName: 'Sister Efua Asante',
+    leaderPhone: '+233 55 123 4567',
+    leaderEmail: 'teens@accracentral.org',
+    assistantLeader: 'Brother Kelvin Tawiah',
+    meetingDay: 'Sundays',
+    meetingTime: '09:30 - 10:45',
+    meetingLocation: 'Teens Auditorium (Annex 2nd Floor)',
+    targetDemographic: 'Teenagers aged 13 - 17',
+    description: 'Empowering teens to stand for Christ, resist peer pressure, navigate academic choices, and develop daily devotion habits.',
+    active: true,
+    createdAt: '2023-02-20',
+  },
+  {
+    id: 'grp-fel-5',
+    name: 'Couples & Family Life Fellowship',
+    category: 'fellowship',
+    leaderName: 'Elder & Mrs. Darko',
+    leaderPhone: '+233 24 444 8822',
+    leaderEmail: 'familylife@accracentral.org',
+    assistantLeader: 'Deacon & Mrs. Boateng',
+    meetingDay: '2nd Friday of Month',
+    meetingTime: '18:30 - 20:30',
+    meetingLocation: 'Sanctuary Garden Terrace',
+    targetDemographic: 'Married Couples & Engaged Partners',
+    description: 'Marriage strengthening, healthy communication, parenting workshops, pre-marital counseling, and conflict resolution.',
+    active: true,
+    createdAt: '2023-03-10',
+  },
+
+  // --- CELL GROUPS (SMALL GROUPS) ---
+  {
+    id: 'grp-cell-1',
+    name: 'Osu North cell',
+    category: 'cell_group',
+    leaderName: 'Leader Yaw Boateng',
+    leaderPhone: '+233 24 455 6677',
+    leaderEmail: 'yaw.boateng@accracentral.org',
+    assistantLeader: 'Brother Kofi Mensah',
+    meetingDay: 'Wednesdays',
+    meetingTime: '18:30 - 19:45',
+    meetingLocation: 'Elder Mensah’s Residence, Osu RE (Near Danquah Circle)',
+    targetDemographic: 'Members living in Osu, Ringway Estates, and Lokko Road',
+    description: 'Midweek home cell fellowship, sermon reflection, intercession for families, and neighbor care.',
+    active: true,
+    createdAt: '2023-01-05',
+  },
+  {
+    id: 'grp-cell-2',
+    name: 'Ridge Fellowship',
+    category: 'cell_group',
+    leaderName: 'Leader Adwoa Sarpong',
+    leaderPhone: '+233 54 888 3322',
+    leaderEmail: 'adwoa.sarpong@accracentral.org',
+    assistantLeader: 'Elder David Kpodo',
+    meetingDay: 'Wednesdays',
+    meetingTime: '18:30 - 19:45',
+    meetingLocation: 'Independence Avenue Church Boardroom',
+    targetDemographic: 'Ridge, North Ridge, and Ministries enclave residents',
+    description: 'Midweek discipleship and interactive Bible study centered on Sunday sermon application.',
+    active: true,
+    createdAt: '2023-01-08',
+  },
+  {
+    id: 'grp-cell-3',
+    name: 'Cantonments Cell',
+    category: 'cell_group',
+    leaderName: 'Leader Kojo Appiah',
+    leaderPhone: '+233 26 998 8776',
+    leaderEmail: 'kojo.appiah@accracentral.org',
+    assistantLeader: 'Sister Abigail Oduro',
+    meetingDay: 'Wednesdays',
+    meetingTime: '19:00 - 20:15',
+    meetingLocation: 'Embassy Gardens / 4th Circular Road, Cantonments',
+    targetDemographic: 'Cantonments, Labone, and Burma Camp families',
+    description: 'Home fellowship providing mutual encouragement, scripture study, and pastoral accountability.',
+    active: true,
+    createdAt: '2023-01-12',
+  },
+  {
+    id: 'grp-cell-4',
+    name: 'Airport Residential Cell',
+    category: 'cell_group',
+    leaderName: 'Elder Kwame Ansah',
+    leaderPhone: '+233 20 555 4321',
+    leaderEmail: 'kwame.ansah@accracentral.org',
+    assistantLeader: 'Sister Georgina Mensah',
+    meetingDay: 'Thursdays',
+    meetingTime: '18:30 - 19:45',
+    meetingLocation: 'Airport Residential Area (Near Kotoka Int. Airport)',
+    targetDemographic: 'Airport Residential, Roman Ridge, and Dzorwulu zone',
+    description: 'Small group gathering for prayer, worship, practical spiritual support, and cell evangelism.',
+    active: true,
+    createdAt: '2023-02-15',
+  },
+  {
+    id: 'grp-cell-5',
+    name: 'East Legon Cell',
+    category: 'cell_group',
+    leaderName: 'Deacon Prince Quaye',
+    leaderPhone: '+233 24 777 6655',
+    leaderEmail: 'prince.quaye@accracentral.org',
+    assistantLeader: 'Brother Mark Baah',
+    meetingDay: 'Wednesdays',
+    meetingTime: '19:00 - 20:15',
+    meetingLocation: 'Lagos Avenue, East Legon',
+    targetDemographic: 'East Legon, Shiashie, and Bawaleshie neighborhood',
+    description: 'Home fellowship for families and students living in East Legon and surrounding areas.',
+    active: true,
+    createdAt: '2023-03-05',
+  },
+  {
+    id: 'grp-cell-6',
+    name: 'Labone Shalom Cell',
+    category: 'cell_group',
+    leaderName: 'Sister Akosua Darko',
+    leaderPhone: '+233 27 334 4556',
+    leaderEmail: 'akosua.darko@accracentral.org',
+    assistantLeader: 'Sister Joyce Acheampong',
+    meetingDay: 'Wednesdays',
+    meetingTime: '18:30 - 19:45',
+    meetingLocation: 'Labone Junction, Near Coffee Shop',
+    targetDemographic: 'Labone, South La, and Nyaniba Estate families',
+    description: 'Warm community fellowship, visiting sick brethren, and studying Sunday preaching points.',
+    active: true,
+    createdAt: '2023-03-20',
+  },
+  {
+    id: 'grp-cell-7',
+    name: 'Kaneshie - Odorkor Cell',
+    category: 'cell_group',
+    leaderName: 'Sister Abigail Tetteh',
+    leaderPhone: '+233 50 444 3322',
+    leaderEmail: 'abigail.tetteh@accracentral.org',
+    assistantLeader: 'Brother Joseph Sowah',
+    meetingDay: 'Wednesdays',
+    meetingTime: '18:30 - 19:45',
+    meetingLocation: 'Kaneshie Market Road / Annex 3',
+    targetDemographic: 'Kaneshie, Odorkor, Bubuashie, and Darkuman residents',
+    description: 'West Accra home fellowship and mutual pastoral care anchor.',
+    active: true,
+    createdAt: '2023-04-10',
   },
 ];
 
@@ -809,6 +1116,21 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     return DEFAULT_SYSTEM_SETTINGS;
   });
+
+  const [churchGroups, setChurchGroups] = useState<ChurchGroup[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekklesphere_church_groups');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return INITIAL_CHURCH_GROUPS;
+  });
   const [visitorsCount, setVisitorsCount] = useState<number>(3);
   const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>(INITIAL_FOLLOWUPS);
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
@@ -1237,6 +1559,109 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast('System settings restored to campus defaults');
   };
 
+  const addChurchGroup = (groupData: Omit<ChurchGroup, 'id' | 'createdAt'>): ChurchGroup => {
+    const newGroup: ChurchGroup = {
+      ...groupData,
+      id: `grp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      createdAt: new Date().toISOString().split('T')[0],
+    };
+    setChurchGroups((prev) => {
+      const updated = [newGroup, ...prev];
+      try {
+        localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'Church Group Created',
+        entityType: 'ChurchGroup',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: `Created ${newGroup.category.replace('_', ' ')}: "${newGroup.name}" led by ${newGroup.leaderName}`,
+      },
+      ...prev,
+    ]);
+    showToast(`${newGroup.name} created successfully`);
+    return newGroup;
+  };
+
+  const updateChurchGroup = (id: string, updates: Partial<ChurchGroup>) => {
+    let groupName = '';
+    setChurchGroups((prev) => {
+      const updated = prev.map((g) => {
+        if (g.id === id) {
+          groupName = updates.name || g.name;
+          return { ...g, ...updates, updatedAt: new Date().toISOString().split('T')[0] };
+        }
+        return g;
+      });
+      try {
+        localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'Church Group Updated',
+        entityType: 'ChurchGroup',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: `Updated parameters for group "${groupName}"`,
+      },
+      ...prev,
+    ]);
+    showToast(`${groupName || 'Group'} updated successfully`);
+  };
+
+  const deleteChurchGroup = (id: string) => {
+    const groupToDelete = churchGroups.find((g) => g.id === id);
+    setChurchGroups((prev) => {
+      const updated = prev.filter((g) => g.id !== id);
+      try {
+        localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: currentUser?.name || 'Administrator',
+        action: 'Church Group Deleted',
+        entityType: 'ChurchGroup',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: `Deleted group "${groupToDelete?.name}"`,
+      },
+      ...prev,
+    ]);
+    showToast(`Removed "${groupToDelete?.name || 'Group'}"`);
+  };
+
+  const toggleChurchGroupStatus = (id: string) => {
+    const group = churchGroups.find((g) => g.id === id);
+    if (!group) return;
+    const newStatus = !group.active;
+    updateChurchGroup(id, { active: newStatus });
+  };
+
+  const getGroupMembers = (groupName: string): Person[] => {
+    if (!groupName) return [];
+    const q = groupName.trim().toLowerCase();
+    return members.filter((m) => {
+      const mg = (m.groupName || '').trim().toLowerCase();
+      return mg === q || mg.includes(q) || q.includes(mg);
+    });
+  };
+
+
 
   const syncUsherCheckins = (): number => {
     if (!isUsherOnline) {
@@ -1403,6 +1828,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         systemSettings,
         updateSystemSettings,
         resetSystemSettings,
+        churchGroups,
+        addChurchGroup,
+        updateChurchGroup,
+        deleteChurchGroup,
+        toggleChurchGroupStatus,
+        getGroupMembers,
         attendanceRecords,
         totalCheckedInCount,
         expectedAttendance,

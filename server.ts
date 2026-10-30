@@ -53,8 +53,16 @@ interface StoredEvent {
 
 const inMemoryEvents: StoredEvent[] = [];
 
-// Default sites
-const registeredSites = [
+// Default sites (mutable for live GPS calibration testing)
+interface RegisteredSite {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  radius_m: number;
+}
+
+const DEFAULT_SITES: RegisteredSite[] = [
   {
     id: 'a0000000-0000-0000-0000-000000000001',
     name: 'Accra Central Church Sanctuary',
@@ -70,6 +78,8 @@ const registeredSites = [
     radius_m: 120,
   },
 ];
+
+let registeredSites: RegisteredSite[] = [...DEFAULT_SITES];
 
 const app = express();
 app.use(express.json({ limit: '50kb' }));
@@ -303,6 +313,50 @@ app.post('/api/attendance/events', attendanceLimiter, requireUser, handleAttenda
 // Fetch registered sites
 app.get(['/attendance/sites', '/api/attendance/sites'], (_req: Request, res: Response) => {
   res.status(200).json(registeredSites);
+});
+
+// Calibrate or register a site dynamically (e.g. user's current live GPS location)
+app.post(['/attendance/calibrate-site', '/api/attendance/calibrate-site'], (req: Request, res: Response) => {
+  const { siteId, name, lat, lng, radius_m } = req.body;
+  if (lat == null || lng == null || typeof lat !== 'number' || typeof lng !== 'number') {
+    return res.status(400).json({ error: 'invalid_coordinates', message: 'lat and lng must be valid numbers' });
+  }
+
+  const radius = Number(radius_m) || 150;
+  const siteName = name || 'Live Calibrated Sanctuary (Browser GPS Target)';
+  const targetId = siteId || 'c0000000-0000-0000-0000-000000000003';
+
+  const existingIdx = registeredSites.findIndex((s) => s.id === targetId);
+  const updatedSite: RegisteredSite = {
+    id: targetId,
+    name: siteName,
+    lat,
+    lng,
+    radius_m: radius,
+  };
+
+  if (existingIdx >= 0) {
+    registeredSites[existingIdx] = updatedSite;
+  } else {
+    registeredSites.push(updatedSite);
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Site successfully calibrated to live GPS (${lat.toFixed(6)}, ${lng.toFixed(6)}) with radius ${radius}m`,
+    calibratedSite: updatedSite,
+    sites: registeredSites,
+  });
+});
+
+// Reset sites back to Accra Central defaults
+app.post(['/attendance/reset-sites', '/api/attendance/reset-sites'], (_req: Request, res: Response) => {
+  registeredSites = [...DEFAULT_SITES];
+  res.status(200).json({
+    success: true,
+    message: 'Registered sites restored to default campuses.',
+    sites: registeredSites,
+  });
 });
 
 // Fetch raw audit events

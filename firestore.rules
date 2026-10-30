@@ -75,7 +75,13 @@ service cloud.firestore {
       allow write: if isSignedIn() && isAdmin();
     }
 
-    // 6. Test connection probe
+    // 6. Church Groups (Ministries, Fellowships, Cell Groups)
+    match /church_groups/{groupId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isAdmin();
+    }
+
+    // 7. Test connection probe
     match /test/{docId} {
       allow read: if true;
     }

@@ -1,6 +1,7 @@
 // src/components/simulator/GeofenceApiConsole.tsx
 // Comprehensive Live Console for Geofence Attendance Tracking (Android + Web + Node + Supabase)
 import React, { useState, useEffect } from 'react';
+import { useEkklesphere } from '../../context/EkklesphereContext';
 import {
   ShieldCheck,
   MapPin,
@@ -22,6 +23,18 @@ import {
   Copy,
   Check,
   Download,
+  Navigation,
+  Radio,
+  Crosshair,
+  Activity,
+  Target,
+  Satellite,
+  Play,
+  Square,
+  Sliders,
+  RotateCcw,
+  Sparkles,
+  ChevronRight,
 } from 'lucide-react';
 
 interface AttendanceEventResponse {
@@ -55,7 +68,16 @@ interface ShiftRecord {
   is_open: boolean;
 }
 
+export interface RegisteredSite {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  radius_m: number;
+}
+
 export const GeofenceApiConsole: React.FC = () => {
+  const { checkInPerson, showToast } = useEkklesphere();
   const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'shifts' | 'schema' | 'checklist'>('console');
   const [loading, setLoading] = useState<boolean>(false);
   const [webLocationLoading, setWebLocationLoading] = useState<boolean>(false);
@@ -64,6 +86,7 @@ export const GeofenceApiConsole: React.FC = () => {
   // Live data from backend
   const [events, setEvents] = useState<AttendanceEventResponse[]>([]);
   const [shifts, setShifts] = useState<ShiftRecord[]>([]);
+  const [sites, setSites] = useState<RegisteredSite[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [serverStatus, setServerStatus] = useState<any>(null);
   const [selectedSchemaType, setSelectedSchemaType] = useState<'master' | 'geofence'>('master');
@@ -76,13 +99,73 @@ export const GeofenceApiConsole: React.FC = () => {
   const [clockSkewToggle, setClockSkewToggle] = useState<boolean>(false);
   const [impossibleTravelToggle, setImpossibleTravelToggle] = useState<boolean>(false);
 
-  // Fetch status and shifts
+  // LIVE GPS STREAM & TELEMETRY ENGINE
+  const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(false);
+  const [watchId, setWatchId] = useState<number | null>(null);
+  const [gpsState, setGpsState] = useState<'idle' | 'acquiring' | 'active' | 'denied' | 'error'>('idle');
+  const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
+  const [liveCoords, setLiveCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracy: number;
+    altitude: number | null;
+    speed: number | null;
+    heading: number | null;
+    timestamp: number;
+  } | null>(null);
+  const [virtualOffset, setVirtualOffset] = useState<'none' | 'boundary' | 'outside' | 'remote'>('none');
+  const [calibratedRadius, setCalibratedRadius] = useState<number>(150);
+  const [platformMode, setPlatformMode] = useState<'android' | 'web'>('android');
+  const [lastServerVerdict, setLastServerVerdict] = useState<AttendanceEventResponse | null>(null);
+
+  // Haversine formula for client distance verification
+  function computeClientDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371e3;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c * 10) / 10;
+  }
+
+  // Calculate effective coordinates including displacement offset
+  const getEffectiveCoords = () => {
+    if (!liveCoords) return null;
+    if (virtualOffset === 'boundary') {
+      // Offset ~135m north-east
+      return {
+        lat: liveCoords.lat + 0.00095,
+        lng: liveCoords.lng + 0.00095,
+      };
+    }
+    if (virtualOffset === 'outside') {
+      // Offset ~220m north
+      return {
+        lat: liveCoords.lat + 0.00198,
+        lng: liveCoords.lng,
+      };
+    }
+    if (virtualOffset === 'remote') {
+      // Offset ~5km
+      return {
+        lat: liveCoords.lat + 0.045,
+        lng: liveCoords.lng + 0.045,
+      };
+    }
+    return { lat: liveCoords.lat, lng: liveCoords.lng };
+  };
+
+  // Fetch status, events, shifts, and sites
   const fetchData = async () => {
     try {
-      const [resHealth, resEvents, resShifts] = await Promise.all([
+      const [resHealth, resEvents, resShifts, resSites] = await Promise.all([
         fetch('/api/health').catch(() => null),
         fetch('/api/attendance/raw-events').catch(() => null),
         fetch('/api/attendance/shifts').catch(() => null),
+        fetch('/api/attendance/sites').catch(() => null),
       ]);
 
       if (resHealth?.ok) {
@@ -94,6 +177,13 @@ export const GeofenceApiConsole: React.FC = () => {
       if (resShifts?.ok) {
         setShifts(await resShifts.json());
       }
+      if (resSites?.ok) {
+        const sitesData = await resSites.json();
+        setSites(sitesData);
+        if (sitesData.length > 0 && !sitesData.some((s: RegisteredSite) => s.id === selectedSiteId)) {
+          setSelectedSiteId(sitesData[0].id);
+        }
+      }
     } catch (err) {
       console.warn('Could not refresh API console data:', err);
     }
@@ -104,6 +194,206 @@ export const GeofenceApiConsole: React.FC = () => {
     const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
   }, []);
+
+  // Cleanup watch on unmount
+  useEffect(() => {
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [watchId]);
+
+  // Start live GPS tracking stream
+  const startLiveGpsTracking = () => {
+    if (!navigator.geolocation) {
+      setGpsState('error');
+      setGpsErrorMsg('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setGpsState('acquiring');
+    setGpsErrorMsg(null);
+    setStatusFeedback('Acquiring high-accuracy live GPS satellite fix...');
+
+    // Immediate single position request
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLiveCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy * 10) / 10,
+          altitude: pos.coords.altitude ? Math.round(pos.coords.altitude * 10) / 10 : null,
+          speed: pos.coords.speed ? Math.round(pos.coords.speed * 3.6 * 10) / 10 : null,
+          heading: pos.coords.heading ? Math.round(pos.coords.heading) : null,
+          timestamp: pos.timestamp,
+        });
+        setGpsState('active');
+        setStatusFeedback(`Live GPS fix acquired (accuracy ±${Math.round(pos.coords.accuracy)}m)`);
+      },
+      (err) => {
+        console.warn('Initial GPS acquisition warning:', err);
+        if (err.code === err.PERMISSION_DENIED) {
+          setGpsState('denied');
+          setGpsErrorMsg('Location permission denied. Please allow location access in your browser settings.');
+        } else {
+          setGpsState('error');
+          setGpsErrorMsg(`GPS fix failed: ${err.message}`);
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+
+    // Continuous watchPosition
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        setLiveCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy * 10) / 10,
+          altitude: pos.coords.altitude ? Math.round(pos.coords.altitude * 10) / 10 : null,
+          speed: pos.coords.speed ? Math.round(pos.coords.speed * 3.6 * 10) / 10 : null,
+          heading: pos.coords.heading ? Math.round(pos.coords.heading) : null,
+          timestamp: pos.timestamp,
+        });
+        setGpsState('active');
+      },
+      (err) => {
+        console.warn('Continuous GPS stream error:', err);
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+
+    setWatchId(id);
+    setIsLiveStreaming(true);
+  };
+
+  // Stop live GPS tracking
+  const stopLiveGpsTracking = () => {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      setWatchId(null);
+    }
+    setIsLiveStreaming(false);
+    setGpsState('idle');
+    setStatusFeedback('Live GPS streaming stopped.');
+  };
+
+  // Calibrate active sanctuary site to user's real GPS position
+  const handleCalibrateToMyLocation = async () => {
+    if (!liveCoords) {
+      setStatusFeedback('Please start or acquire a live GPS fix first before calibrating.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/attendance/calibrate-site', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'My Calibrated Sanctuary (Live GPS Pin)',
+          lat: liveCoords.lat,
+          lng: liveCoords.lng,
+          radius_m: calibratedRadius,
+          siteId: 'c0000000-0000-0000-0000-000000000003',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSites(data.sites);
+        setSelectedSiteId('c0000000-0000-0000-0000-000000000003');
+        setStatusFeedback(
+          `🎯 Geofence calibrated to your current live location (${liveCoords.lat.toFixed(5)}, ${liveCoords.lng.toFixed(
+            5
+          )}) with ${calibratedRadius}m radius!`
+        );
+      } else {
+        setStatusFeedback(`Calibration error: ${data.message || data.error}`);
+      }
+    } catch (err: any) {
+      setStatusFeedback(`Calibration request failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reset sites back to Accra Central defaults
+  const handleResetToAccraDefaults = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/attendance/reset-sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSites(data.sites);
+        setSelectedSiteId('a0000000-0000-0000-0000-000000000001');
+        setStatusFeedback('Campus sites reset to Accra Central Sanctuary (lat: 5.5560, lng: -0.1969).');
+      }
+    } catch (err: any) {
+      setStatusFeedback(`Reset failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Send real live event to server
+  const handleSendLiveEvent = async (type: 'enter' | 'exit' | 'dwell') => {
+    if (!liveCoords) {
+      setStatusFeedback('No live GPS coordinates available. Start live tracking first.');
+      return;
+    }
+    const effective = getEffectiveCoords();
+    if (!effective) return;
+
+    setLoading(true);
+    const eventType = type === 'dwell' ? 'enter' : type;
+    const eventSource = platformMode === 'web' ? 'web' : 'geofence';
+
+    try {
+      const payload = {
+        clientEventId: crypto.randomUUID(),
+        siteId: selectedSiteId,
+        type: eventType,
+        source: eventSource,
+        platform: platformMode,
+        lat: effective.lat,
+        lng: effective.lng,
+        accuracyM: Math.round(liveCoords.accuracy),
+        isMock: isMockToggle,
+        deviceTime: new Date().toISOString(),
+      };
+
+      const res = await fetch('/api/attendance/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data: AttendanceEventResponse = await res.json();
+      setLastServerVerdict(data);
+
+      if (res.ok) {
+        setStatusFeedback(
+          `Live ${type.toUpperCase()} verified: Server Verdict [${data.status.toUpperCase()}]. Server Distance: ${
+            data.distance_m ?? 'N/A'
+          }m. Flags: ${data.flag_reasons.join(', ') || 'none'}`
+        );
+        if (data.status === 'accepted' || (data.status === 'flagged' && !data.flag_reasons.includes('outside_site'))) {
+          checkInPerson('m1', 'geofence', 0.98, 'Live GPS Geofence Verification');
+          showToast(`Attendance verified via Live GPS (${data.distance_m ?? 0}m)!`);
+        }
+      } else {
+        setStatusFeedback(`Server error: ${(data as any).error || 'Submission failed'}`);
+      }
+      await fetchData();
+    } catch (err: any) {
+      setStatusFeedback(`Live event dispatch error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Web Manual Check-in using Browser GPS
   const handleWebCheckIn = async (type: 'manual_in' | 'manual_out') => {
@@ -242,6 +532,29 @@ export const GeofenceApiConsole: React.FC = () => {
     }
   };
 
+  const activeSite =
+    sites.find((s) => s.id === selectedSiteId) ||
+    sites[0] || {
+      id: 'a0000000-0000-0000-0000-000000000001',
+      name: 'Accra Central Church Sanctuary',
+      lat: 5.556,
+      lng: -0.1969,
+      radius_m: 150,
+    };
+
+  const effectiveCoords = getEffectiveCoords();
+  const liveDistanceMeters =
+    effectiveCoords && activeSite
+      ? computeClientDistanceMeters(activeSite.lat, activeSite.lng, effectiveCoords.lat, effectiveCoords.lng)
+      : null;
+
+  const siteRadius = activeSite?.radius_m || 150;
+  const isInsideCore = liveDistanceMeters !== null && liveDistanceMeters <= 30;
+  const isInsidePerimeter = liveDistanceMeters !== null && liveDistanceMeters <= siteRadius;
+  const isInBufferSlack =
+    liveDistanceMeters !== null && liveDistanceMeters > siteRadius && liveDistanceMeters <= siteRadius + 50;
+  const isOutside = liveDistanceMeters !== null && liveDistanceMeters > siteRadius + 50;
+
   return (
     <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm space-y-6">
       {/* Header and Live Status Bar */}
@@ -327,105 +640,548 @@ export const GeofenceApiConsole: React.FC = () => {
       {/* TAB 1: LIVE TESTING CONSOLE */}
       {activeConsoleTab === 'console' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Box 1: Web App Manual Check-In (Real Browser GPS) */}
-            <div className="p-4 rounded-3xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-[#6D5CF2]" />
-                  <span>Web App Check-In (Manual Navigator GPS)</span>
-                </span>
-                <span className="text-[10px] bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded-md font-mono text-[#666A86]">
-                  source: 'web'
-                </span>
-              </div>
-              <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Web browsers cannot run background geofences. Uses{' '}
-                <code className="text-[#6D5CF2] font-mono">navigator.geolocation</code> and sends evidence to Node.
-              </p>
+            {/* Real-Time Live GPS Geofence Engine Card */}
+            <div className="p-5 rounded-3xl bg-gradient-to-br from-[#F8F9FE] via-[#FFFFFF] to-[#F1F3FB] dark:from-[#171738] dark:via-[#1D1D3D] dark:to-[#14142E] border-2 border-[#6D5CF2]/30 shadow-md space-y-5">
+              {/* Top Banner & Sensor Status */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center shadow-sm">
+                      <Satellite className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                        Live GPS Device Telemetry & Geofence Engine
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#6D5CF2]/10 text-[#6D5CF2] dark:text-[#8C7DFF] font-bold">
+                          Dual-Frequency L1/L5 + Wi-Fi
+                        </span>
+                      </h3>
+                      <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                        Continuously tracks this browser's real satellite coordinates and evaluates PostGIS geofence boundaries in real time.
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-              <div className="flex gap-2 pt-2">
-                <button
-                  onClick={() => handleWebCheckIn('manual_in')}
-                  disabled={webLocationLoading}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Web Clock In</span>
-                </button>
-                <button
-                  onClick={() => handleWebCheckIn('manual_out')}
-                  disabled={webLocationLoading}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#1D1B3A] hover:bg-[#2a2752] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Web Clock Out</span>
-                </button>
+                {/* Live Status Pill & Action Buttons */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {gpsState === 'active' ? (
+                    <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      Live Signal Active (±{liveCoords?.accuracy}m)
+                    </span>
+                  ) : gpsState === 'acquiring' ? (
+                    <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-xs font-bold flex items-center gap-1.5 animate-pulse">
+                      <Activity className="w-3.5 h-3.5 animate-spin" />
+                      Acquiring Satellite Lock...
+                    </span>
+                  ) : gpsState === 'denied' ? (
+                    <span className="px-3 py-1.5 rounded-full bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-xs font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      Permission Denied
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[#666A86] dark:text-[#A9ACC8] text-xs font-bold flex items-center gap-1.5">
+                      <Crosshair className="w-3.5 h-3.5" />
+                      GPS Standby
+                    </span>
+                  )}
+
+                  {!isLiveStreaming ? (
+                    <button
+                      onClick={startLiveGpsTracking}
+                      disabled={loading}
+                      className="px-3.5 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all active:scale-95"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      <span>Start Live GPS Stream</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopLiveGpsTracking}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all active:scale-95"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>Stop Stream</span>
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {gpsErrorMsg && (
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{gpsErrorMsg}</span>
+                </div>
+              )}
+
+              {/* 4 Real-Time Telemetry Stat Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* 1. Live Coordinates */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#161633] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                    <Navigation className="w-3 h-3 text-[#6D5CF2]" />
+                    Live Coordinates
+                  </span>
+                  <div className="font-mono text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    {liveCoords ? (
+                      <div>
+                        <div>{effectiveCoords?.lat.toFixed(6)}° N</div>
+                        <div>{effectiveCoords?.lng.toFixed(6)}° W</div>
+                      </div>
+                    ) : (
+                      <div className="text-[#666A86] py-1">Click "Start Live GPS"</div>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <span>Alt: {liveCoords?.altitude != null ? `${liveCoords.altitude}m` : '0m'}</span>
+                    <span>Speed: {liveCoords?.speed != null ? `${liveCoords.speed}km/h` : '0 km/h'}</span>
+                  </div>
+                </div>
+
+                {/* 2. GPS Accuracy & Fix Quality */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#161633] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                    <Target className="w-3 h-3 text-emerald-500" />
+                    Satellite Accuracy
+                  </span>
+                  <div className="text-xl font-black tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    {liveCoords ? `± ${liveCoords.accuracy} m` : '± -- m'}
+                  </div>
+                  <div className="pt-1">
+                    {liveCoords ? (
+                      liveCoords.accuracy <= 15 ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
+                          High Precision Dual-Freq
+                        </span>
+                      ) : liveCoords.accuracy <= 50 ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-bold">
+                          Standard Wi-Fi / Cell Fix
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-bold">
+                          Coarse Fix (&gt;50m)
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-[10px] text-[#666A86]">Awaiting fix</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* 3. Distance to Target Sanctuary */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#161633] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-[#6D5CF2]" />
+                    Distance to Center
+                  </span>
+                  <div className="text-xl font-black tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    {liveDistanceMeters !== null ? `${liveDistanceMeters.toLocaleString()} m` : '-- m'}
+                  </div>
+                  <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Site Radius: <span className="font-bold">{siteRadius}m</span> (+50m slack)
+                  </div>
+                </div>
+
+                {/* 4. Live Geofence Boundary Verdict */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#161633] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3 text-[#6D5CF2]" />
+                    Geofence Boundary
+                  </span>
+                  <div className="pt-0.5">
+                    {liveDistanceMeters === null ? (
+                      <span className="text-xs text-[#666A86] font-semibold">Start GPS to Evaluate</span>
+                    ) : isInsideCore ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Inside Core (≤30m)
+                      </span>
+                    ) : isInsidePerimeter ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Inside Campus (≤{siteRadius}m)
+                      </span>
+                    ) : isInBufferSlack ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 text-xs font-bold">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Boundary Slack Zone
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 text-xs font-bold">
+                        <XCircle className="w-3.5 h-3.5" />
+                        Outside Perimeter
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] pt-1">
+                    {isInsidePerimeter
+                      ? '✓ Eligible for Automatic Attendance'
+                      : isInBufferSlack
+                      ? '⚠ Near boundary limit'
+                      : '✕ Events rejected as outside_site'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Geofence Target Campus & Calibration Controls */}
+              <div className="p-4 rounded-2xl bg-white/80 dark:bg-[#161633]/80 border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Crosshair className="w-4 h-4 text-[#6D5CF2]" />
+                    <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      Geofence Campus Target & Calibration
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCalibrateToMyLocation}
+                      disabled={loading || !liveCoords}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                      title="Registers your actual current coordinates on the server as the church sanctuary geofence"
+                    >
+                      <Target className="w-3.5 h-3.5" />
+                      <span>🎯 Calibrate Geofence to My Location</span>
+                    </button>
+                    <button
+                      onClick={handleResetToAccraDefaults}
+                      disabled={loading}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#1D1B3A] dark:text-[#F2F2FA] text-xs font-bold transition-all active:scale-95"
+                      title="Reset site target to Accra Central Sanctuary (lat: 5.5560, lng: -0.1969)"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset to Accra Central</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                  {/* Site Selector */}
+                  <div>
+                    <label className="text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] block mb-1">
+                      Active Geofence Campus
+                    </label>
+                    <select
+                      value={selectedSiteId}
+                      onChange={(e) => setSelectedSiteId(e.target.value)}
+                      className="w-full text-xs font-medium bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl p-2 text-[#1D1B3A] dark:text-[#F2F2FA] focus:outline-[#6D5CF2]"
+                    >
+                      {sites.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.radius_m}m radius)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Geofence Radius Adjuster */}
+                  <div>
+                    <label className="text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] block mb-1">
+                      Sanctuary Radius: <span className="text-[#6D5CF2]">{calibratedRadius} meters</span>
+                    </label>
+                    <div className="flex items-center gap-1">
+                      {[50, 100, 150, 250].map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => setCalibratedRadius(r)}
+                          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                            calibratedRadius === r
+                              ? 'bg-[#6D5CF2] text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-[#666A86] dark:text-[#A9ACC8]'
+                          }`}
+                        >
+                          {r}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Platform Mode */}
+                  <div>
+                    <label className="text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] block mb-1">
+                      Event Platform Verification
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setPlatformMode('android')}
+                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                          platformMode === 'android'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-[#666A86] dark:text-[#A9ACC8]'
+                        }`}
+                      >
+                        <Smartphone className="w-3 h-3" />
+                        <span>Android</span>
+                      </button>
+                      <button
+                        onClick={() => setPlatformMode('web')}
+                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                          platformMode === 'web'
+                            ? 'bg-[#6D5CF2] text-white shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-[#666A86] dark:text-[#A9ACC8]'
+                        }`}
+                      >
+                        <Globe className="w-3 h-3" />
+                        <span>Web Browser</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Desk Virtual Displacement Step Mode */}
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                    <span className="text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                      <Sliders className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                      Desk Walk Offset (Test boundary crossing from your current seat)
+                    </span>
+                    {virtualOffset !== 'none' && (
+                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                        Displacement Active: {virtualOffset.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-bold">
+                    <button
+                      onClick={() => setVirtualOffset('none')}
+                      className={`p-2 rounded-xl text-left border transition-all ${
+                        virtualOffset === 'none'
+                          ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
+                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      🎯 Raw Live GPS (0m)
+                    </button>
+                    <button
+                      onClick={() => setVirtualOffset('boundary')}
+                      className={`p-2 rounded-xl text-left border transition-all ${
+                        virtualOffset === 'boundary'
+                          ? 'bg-[#FFEFD0] dark:bg-[#3D2E10] border-amber-400 text-amber-800 dark:text-amber-300'
+                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      🚶 Step to Boundary (+135m)
+                    </button>
+                    <button
+                      onClick={() => setVirtualOffset('outside')}
+                      className={`p-2 rounded-xl text-left border transition-all ${
+                        virtualOffset === 'outside'
+                          ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-400 text-rose-800 dark:text-rose-300'
+                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      🚗 Step Outside Fence (+220m)
+                    </button>
+                    <button
+                      onClick={() => setVirtualOffset('remote')}
+                      className={`p-2 rounded-xl text-left border transition-all ${
+                        virtualOffset === 'remote'
+                          ? 'bg-purple-100 dark:bg-purple-950 border-purple-400 text-purple-800 dark:text-purple-300'
+                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      ✈ Remote City (+5 km)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live Event Transmitter Actions */}
+              <div className="p-4 rounded-2xl bg-[#6D5CF2]/5 dark:bg-[#6D5CF2]/10 border border-[#6D5CF2]/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                    <Send className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                    Send Live Hardware Fix to Node Server (`/api/attendance/events`)
+                  </span>
+                  <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">
+                    Target: {activeSite.name}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    onClick={() => handleSendLiveEvent('enter')}
+                    disabled={loading || !liveCoords}
+                    className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Send Live ENTER Event</span>
+                  </button>
+                  <button
+                    onClick={() => handleSendLiveEvent('dwell')}
+                    disabled={loading || !liveCoords}
+                    className="py-3 px-4 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <Clock className="w-4 h-4" />
+                    <span>Send Live DWELL (Verify)</span>
+                  </button>
+                  <button
+                    onClick={() => handleSendLiveEvent('exit')}
+                    disabled={loading || !liveCoords}
+                    className="py-3 px-4 rounded-xl bg-[#1D1B3A] hover:bg-[#2b2754] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>Send Live EXIT Event</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Latest Server Verification Verdict Card */}
+              {lastServerVerdict && (
+                <div className="p-4 rounded-2xl bg-white dark:bg-[#161633] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-2 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                      <Database className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                      Server Decision Receipt (Event ID: {lastServerVerdict.id})
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-bold text-xs ${
+                        lastServerVerdict.status === 'accepted'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          : lastServerVerdict.status === 'flagged'
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                      }`}
+                    >
+                      {lastServerVerdict.status === 'accepted' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                      {lastServerVerdict.status === 'flagged' && <AlertTriangle className="w-3.5 h-3.5" />}
+                      {lastServerVerdict.status === 'rejected' && <XCircle className="w-3.5 h-3.5" />}
+                      <span>{lastServerVerdict.status.toUpperCase()}</span>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                    <div className="bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
+                      <span className="text-[10px] text-[#666A86] block">Server Distance</span>
+                      <span className="font-mono font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {lastServerVerdict.distance_m != null ? `${lastServerVerdict.distance_m}m` : 'N/A'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
+                      <span className="text-[10px] text-[#666A86] block">GPS Accuracy</span>
+                      <span className="font-mono font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        ±{lastServerVerdict.accuracy_m}m
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
+                      <span className="text-[10px] text-[#666A86] block">Platform / Source</span>
+                      <span className="font-mono font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {lastServerVerdict.platform} / {lastServerVerdict.source}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
+                      <span className="text-[10px] text-[#666A86] block">Flag Reasons</span>
+                      <span className="font-mono font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {lastServerVerdict.flag_reasons.length > 0
+                          ? lastServerVerdict.flag_reasons.join(', ')
+                          : 'none (verified)'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Box 2: Android Geofence Simulator (Expo Task Manager Simulation) */}
-            <div className="p-4 rounded-3xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-[#4FBF98]" />
-                  <span>Android Background Geofence Test Bed</span>
-                </span>
-                <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-md font-mono">
-                  platform: 'android'
-                </span>
-              </div>
-              <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Simulates OS geofence trigger + fresh high-accuracy GPS fix with various threat profiles.
-              </p>
+            {/* Quick Scenarios & Manual Fallback Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Box 1: Web App Manual Check-In (Real Browser GPS) */}
+              <div className="p-4 rounded-3xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-[#6D5CF2]" />
+                    <span>Web App Check-In (Manual Navigator GPS)</span>
+                  </span>
+                  <span className="text-[10px] bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded-md font-mono text-[#666A86]">
+                    source: 'web'
+                  </span>
+                </div>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Web browsers cannot run background geofences. Uses{' '}
+                  <code className="text-[#6D5CF2] font-mono">navigator.geolocation</code> and sends evidence to Node.
+                </p>
 
-              {/* Quick Scenarios */}
-              <div className="grid grid-cols-2 gap-2 pt-1 text-xs font-bold">
-                <button
-                  onClick={() => handleSimulatedEvent('enter', 'normal')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-[#DDF5EC] dark:bg-[#16382F] text-[#1E7A5F] dark:text-[#5FD3AB] hover:opacity-90 text-left"
-                >
-                  ✓ Enter Site (Accept)
-                </button>
-                <button
-                  onClick={() => handleSimulatedEvent('exit', 'normal')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:opacity-90 text-left"
-                >
-                  ↗ Exit Site (Accept)
-                </button>
-                <button
-                  onClick={() => handleSimulatedEvent('enter', 'mock')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-[#FFEFD0] dark:bg-[#3D2E10] text-[#8A5700] dark:text-[#F5B84A] hover:opacity-90 text-left"
-                >
-                  ⚠ Mock GPS (Flag)
-                </button>
-                <button
-                  onClick={() => handleSimulatedEvent('enter', 'outside')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:opacity-90 text-left"
-                >
-                  ✕ Far Outside (Reject)
-                </button>
-                <button
-                  onClick={() => handleSimulatedEvent('enter', 'impossible')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 hover:opacity-90 text-left"
-                >
-                  ⚡ Impossible Travel (&gt;150km/h)
-                </button>
-                <button
-                  onClick={() => handleSimulatedEvent('enter', 'skew')}
-                  disabled={loading}
-                  className="p-2 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 hover:opacity-90 text-left"
-                >
-                  🕒 Clock Skew (&gt;10 min)
-                </button>
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={() => handleWebCheckIn('manual_in')}
+                    disabled={webLocationLoading}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Web Clock In</span>
+                  </button>
+                  <button
+                    onClick={() => handleWebCheckIn('manual_out')}
+                    disabled={webLocationLoading}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-[#1D1B3A] hover:bg-[#2a2752] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Web Clock Out</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Box 2: Android Geofence Simulator (Expo Task Manager Simulation) */}
+              <div className="p-4 rounded-3xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                    <Smartphone className="w-4 h-4 text-[#4FBF98]" />
+                    <span>Android Background Geofence Test Bed</span>
+                  </span>
+                  <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-md font-mono">
+                    platform: 'android'
+                  </span>
+                </div>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Simulates OS geofence trigger + fresh high-accuracy GPS fix with various threat profiles.
+                </p>
+
+                {/* Quick Scenarios */}
+                <div className="grid grid-cols-2 gap-2 pt-1 text-xs font-bold">
+                  <button
+                    onClick={() => handleSimulatedEvent('enter', 'normal')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-[#DDF5EC] dark:bg-[#16382F] text-[#1E7A5F] dark:text-[#5FD3AB] hover:opacity-90 text-left"
+                  >
+                    ✓ Enter Site (Accept)
+                  </button>
+                  <button
+                    onClick={() => handleSimulatedEvent('exit', 'normal')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:opacity-90 text-left"
+                  >
+                    ↗ Exit Site (Accept)
+                  </button>
+                  <button
+                    onClick={() => handleSimulatedEvent('enter', 'mock')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-[#FFEFD0] dark:bg-[#3D2E10] text-[#8A5700] dark:text-[#F5B84A] hover:opacity-90 text-left"
+                  >
+                    ⚠ Mock GPS (Flag)
+                  </button>
+                  <button
+                    onClick={() => handleSimulatedEvent('enter', 'outside')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:opacity-90 text-left"
+                  >
+                    ✕ Far Outside (Reject)
+                  </button>
+                  <button
+                    onClick={() => handleSimulatedEvent('enter', 'impossible')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 hover:opacity-90 text-left"
+                  >
+                    ⚡ Impossible Travel (&gt;150km/h)
+                  </button>
+                  <button
+                    onClick={() => handleSimulatedEvent('enter', 'skew')}
+                    disabled={loading}
+                    className="p-2 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 hover:opacity-90 text-left"
+                  >
+                    🕒 Clock Skew (&gt;10 min)
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
           {/* Live Raw Events Audit Table */}
           <div className="space-y-3">

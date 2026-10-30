@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { SystemSettings } from '../../types/ekklesphere';
+import { SystemSettings, ChurchGroup, ChurchGroupCategory, Person } from '../../types/ekklesphere';
 import {
   Building2,
   Radio,
@@ -21,6 +21,22 @@ import {
   HelpCircle,
   Sparkles,
   X,
+  Users,
+  Plus,
+  Search,
+  Edit3,
+  Trash2,
+  Check,
+  Phone,
+  Mail,
+  Calendar,
+  Filter,
+  Eye,
+  UserCheck,
+  ChevronRight,
+  ExternalLink,
+  Layers,
+  MessageSquare,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -35,12 +51,124 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     resetSystemSettings,
     showToast,
     auditLogs,
+    churchGroups,
+    addChurchGroup,
+    updateChurchGroup,
+    deleteChurchGroup,
+    toggleChurchGroupStatus,
+    getGroupMembers,
+    members,
   } = useEkklesphere();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'proximity' | 'pastoral' | 'privacy' | 'gateways'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways'>('general');
   const [formData, setFormData] = useState<SystemSettings>({ ...systemSettings });
   const [hasChanges, setHasChanges] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState<string>('Just now');
+
+  // Groups Management Local States
+  const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | 'ministry' | 'fellowship' | 'cell_group'>('all');
+  const [groupFilterStatus, setGroupFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [viewingMembersGroup, setViewingMembersGroup] = useState<ChurchGroup | null>(null);
+
+  // Group Form State
+  const [groupName, setGroupName] = useState('');
+  const [groupCategory, setGroupCategory] = useState<ChurchGroupCategory>('cell_group');
+  const [groupLeader, setGroupLeader] = useState('');
+  const [groupLeaderPhone, setGroupLeaderPhone] = useState('');
+  const [groupLeaderEmail, setGroupLeaderEmail] = useState('');
+  const [groupAssistant, setGroupAssistant] = useState('');
+  const [groupDay, setGroupDay] = useState('Wednesdays');
+  const [groupTime, setGroupTime] = useState('18:30 - 19:45');
+  const [groupLocation, setGroupLocation] = useState('');
+  const [groupDemographic, setGroupDemographic] = useState('');
+  const [groupDescription, setGroupDescription] = useState('');
+  const [groupActive, setGroupActive] = useState(true);
+  const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
+
+  const openAddGroupModal = (category: ChurchGroupCategory = 'cell_group') => {
+    setEditingGroupId(null);
+    setGroupName('');
+    setGroupCategory(category);
+    setGroupLeader('');
+    setGroupLeaderPhone('+233 ');
+    setGroupLeaderEmail('');
+    setGroupAssistant('');
+    setGroupDay(category === 'cell_group' ? 'Wednesdays' : category === 'ministry' ? 'Saturdays' : 'Monthly 2nd Saturday');
+    setGroupTime(category === 'cell_group' ? '18:30 - 19:45' : '16:00 - 17:30');
+    setGroupLocation('');
+    setGroupDemographic('');
+    setGroupDescription('');
+    setGroupActive(true);
+    setGroupErrors({});
+    setIsGroupModalOpen(true);
+  };
+
+  const openEditGroupModal = (group: ChurchGroup) => {
+    setEditingGroupId(group.id);
+    setGroupName(group.name);
+    setGroupCategory(group.category);
+    setGroupLeader(group.leaderName);
+    setGroupLeaderPhone(group.leaderPhone || '');
+    setGroupLeaderEmail(group.leaderEmail || '');
+    setGroupAssistant(group.assistantLeader || '');
+    setGroupDay(group.meetingDay || '');
+    setGroupTime(group.meetingTime || '');
+    setGroupLocation(group.meetingLocation || '');
+    setGroupDemographic(group.targetDemographic || '');
+    setGroupDescription(group.description);
+    setGroupActive(group.active);
+    setGroupErrors({});
+    setIsGroupModalOpen(true);
+  };
+
+  const handleSaveGroup = (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors: Record<string, string> = {};
+    if (!groupName.trim()) errors.name = 'Group name is required';
+    if (!groupLeader.trim()) errors.leader = 'Primary leader name is required';
+
+    if (Object.keys(errors).length > 0) {
+      setGroupErrors(errors);
+      return;
+    }
+
+    if (editingGroupId) {
+      updateChurchGroup(editingGroupId, {
+        name: groupName.trim(),
+        category: groupCategory,
+        leaderName: groupLeader.trim(),
+        leaderPhone: groupLeaderPhone.trim() || undefined,
+        leaderEmail: groupLeaderEmail.trim() || undefined,
+        assistantLeader: groupAssistant.trim() || undefined,
+        meetingDay: groupDay.trim() || undefined,
+        meetingTime: groupTime.trim() || undefined,
+        meetingLocation: groupLocation.trim() || undefined,
+        targetDemographic: groupDemographic.trim() || undefined,
+        description: groupDescription.trim(),
+        active: groupActive,
+      });
+    } else {
+      addChurchGroup({
+        name: groupName.trim(),
+        category: groupCategory,
+        leaderName: groupLeader.trim(),
+        leaderPhone: groupLeaderPhone.trim() || undefined,
+        leaderEmail: groupLeaderEmail.trim() || undefined,
+        assistantLeader: groupAssistant.trim() || undefined,
+        meetingDay: groupDay.trim() || undefined,
+        meetingTime: groupTime.trim() || undefined,
+        meetingLocation: groupLocation.trim() || undefined,
+        targetDemographic: groupDemographic.trim() || undefined,
+        description: groupDescription.trim(),
+        active: groupActive,
+      });
+    }
+
+    setIsGroupModalOpen(false);
+  };
 
   const handleChange = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
     setFormData((prev) => {
@@ -155,6 +283,28 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         >
           <Building2 className="w-3.5 h-3.5" />
           <span>Campus Profile</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('groups')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'groups'
+              ? 'bg-[#6D5CF2] text-white shadow-xs'
+              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Ministries & Cell Groups</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+              activeTab === 'groups'
+                ? 'bg-white/20 text-white'
+                : 'bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]'
+            }`}
+          >
+            {churchGroups.length}
+          </span>
         </button>
 
         <button
@@ -333,6 +483,432 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             </div>
           </div>
         )}
+
+        {/* TAB 2: Ministries, Fellowships & Cell Groups Management */}
+        {activeTab === 'groups' && (
+          <div className="space-y-5 animate-in fade-in duration-200">
+            {/* Top Overview & Action Header Card */}
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#6D5CF2] animate-pulse" />
+                    <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                      Congregational Structure & Leadership
+                    </span>
+                    <span className="text-[#666A86] dark:text-[#A9ACC8]">·</span>
+                    <span className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                      Accra Central Campus
+                    </span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                    <Users className="w-5 h-5 text-[#6D5CF2]" />
+                    <span>Ministries, Fellowships & Cell Groups</span>
+                  </h3>
+                  <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-2xl leading-relaxed">
+                    Administrate church functional departments, demographic fellowships, and neighborhood home cell small groups. Assign pastoral leaders, set meeting times, configure venues, and track member allocations.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => openAddGroupModal('cell_group')}
+                    className="bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-95"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add New Group</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Group Metric KPI Cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5">
+                {/* 1. Total Groups */}
+                <div
+                  onClick={() => setGroupFilterCategory('all')}
+                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                    groupFilterCategory === 'all'
+                      ? 'bg-[#EFEDFF]/60 dark:bg-[#2A2A55]/40 border-[#6D5CF2]'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                    <span className="font-semibold">Total Groups</span>
+                    <Layers className="w-4 h-4 text-[#6D5CF2]" />
+                  </div>
+                  <div className="text-2xl font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] mt-1">
+                    {churchGroups.length}
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>{churchGroups.filter((g) => g.active).length} Active Across Campus</span>
+                  </div>
+                </div>
+
+                {/* 2. Ministries */}
+                <div
+                  onClick={() => setGroupFilterCategory('ministry')}
+                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                    groupFilterCategory === 'ministry'
+                      ? 'bg-[#EFEDFF]/60 dark:bg-[#2A2A55]/40 border-[#6D5CF2]'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                    <span className="font-semibold">Ministries</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]">
+                      Department
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-[#6D5CF2] dark:text-[#8C7DFF] mt-1">
+                    {churchGroups.filter((g) => g.category === 'ministry').length}
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Choir, Ushers, Media, Children, Prayer
+                  </div>
+                </div>
+
+                {/* 3. Fellowships */}
+                <div
+                  onClick={() => setGroupFilterCategory('fellowship')}
+                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                    groupFilterCategory === 'fellowship'
+                      ? 'bg-sky-50 dark:bg-sky-950/30 border-sky-400'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-sky-400/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                    <span className="font-semibold">Fellowships</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300">
+                      Demographic
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-sky-600 dark:text-sky-400 mt-1">
+                    {churchGroups.filter((g) => g.category === 'fellowship').length}
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Men, Women, Youth, Teens, Couples
+                  </div>
+                </div>
+
+                {/* 4. Cell Groups */}
+                <div
+                  onClick={() => setGroupFilterCategory('cell_group')}
+                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                    groupFilterCategory === 'cell_group'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-500'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-emerald-500/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                    <span className="font-semibold">Cell Groups</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
+                      Home Cells
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
+                    {churchGroups.filter((g) => g.category === 'cell_group').length}
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Osu, Ridge, Cantonments, Airport & more
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Filter, Search & Quick Category Selector Toolbar */}
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Category Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+                <button
+                  type="button"
+                  onClick={() => setGroupFilterCategory('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                    groupFilterCategory === 'all'
+                      ? 'bg-[#6D5CF2] text-white shadow-xs'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                  }`}
+                >
+                  All ({churchGroups.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilterCategory('ministry')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                    groupFilterCategory === 'ministry'
+                      ? 'bg-[#6D5CF2] text-white shadow-xs'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                  }`}
+                >
+                  Ministries ({churchGroups.filter((g) => g.category === 'ministry').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilterCategory('fellowship')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                    groupFilterCategory === 'fellowship'
+                      ? 'bg-[#6D5CF2] text-white shadow-xs'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                  }`}
+                >
+                  Fellowships ({churchGroups.filter((g) => g.category === 'fellowship').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilterCategory('cell_group')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                    groupFilterCategory === 'cell_group'
+                      ? 'bg-[#6D5CF2] text-white shadow-xs'
+                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                  }`}
+                >
+                  Cell Groups ({churchGroups.filter((g) => g.category === 'cell_group').length})
+                </button>
+              </div>
+
+              {/* Search & Status Filter */}
+              <div className="flex items-center gap-2 flex-1 md:flex-initial">
+                <div className="relative flex-1 sm:w-64">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
+                  <input
+                    type="text"
+                    placeholder="Search by name, leader, location..."
+                    value={groupSearchQuery}
+                    onChange={(e) => setGroupSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-8 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                  {groupSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setGroupSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                <select
+                  value={groupFilterStatus}
+                  onChange={(e) => setGroupFilterStatus(e.target.value as any)}
+                  className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-semibold"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active Only</option>
+                  <option value="inactive">Inactive Only</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Groups Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {churchGroups
+                .filter((group) => {
+                  if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
+                  if (groupFilterStatus === 'active' && !group.active) return false;
+                  if (groupFilterStatus === 'inactive' && group.active) return false;
+                  if (!groupSearchQuery.trim()) return true;
+                  const q = groupSearchQuery.toLowerCase();
+                  return (
+                    group.name.toLowerCase().includes(q) ||
+                    group.leaderName.toLowerCase().includes(q) ||
+                    (group.meetingLocation && group.meetingLocation.toLowerCase().includes(q)) ||
+                    (group.meetingDay && group.meetingDay.toLowerCase().includes(q)) ||
+                    (group.description && group.description.toLowerCase().includes(q))
+                  );
+                })
+                .map((group) => {
+                  const enrolledMembers = getGroupMembers(group.name);
+                  const isMinistry = group.category === 'ministry';
+                  const isFellowship = group.category === 'fellowship';
+                  const isCell = group.category === 'cell_group';
+
+                  return (
+                    <div
+                      key={group.id}
+                      className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col justify-between hover:shadow-md transition-all group"
+                    >
+                      <div>
+                        {/* Top Badges & Status Toggle */}
+                        <div className="flex items-center justify-between gap-2 mb-3">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${
+                              isMinistry
+                                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-[#2A2A55] dark:text-[#8C7DFF]'
+                                : isFellowship
+                                ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                                : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                            }`}
+                          >
+                            {isMinistry ? 'Ministry' : isFellowship ? 'Fellowship' : 'Cell Group'}
+                          </span>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleChurchGroupStatus(group.id)}
+                              className={`flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full transition-all cursor-pointer ${
+                                group.active
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                                  : 'bg-slate-200 dark:bg-white/10 text-slate-500 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-white/20'
+                              }`}
+                              title={group.active ? 'Click to deactivate' : 'Click to activate'}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  group.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                                }`}
+                              />
+                              <span>{group.active ? 'Active' : 'Inactive'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Title & Description */}
+                        <h4 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-1.5">
+                          {group.name}
+                        </h4>
+                        <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] line-clamp-2 leading-relaxed mb-3.5">
+                          {group.description}
+                        </p>
+
+                        {/* Leader & Assistant */}
+                        <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55] mb-3 space-y-1.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[#666A86] dark:text-[#A9ACC8] font-medium">Primary Leader</span>
+                            <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[9px] flex items-center justify-center shrink-0">
+                                {group.leaderName
+                                  .split(' ')
+                                  .map((n) => n[0])
+                                  .slice(0, 2)
+                                  .join('')}
+                              </span>
+                              <span>{group.leaderName}</span>
+                            </span>
+                          </div>
+
+                          {group.leaderPhone && (
+                            <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                              <span className="flex items-center gap-1">
+                                <Phone className="w-3 h-3 text-[#6D5CF2]" />
+                                <span>Phone</span>
+                              </span>
+                              <a
+                                href={`tel:${group.leaderPhone.replace(/\s+/g, '')}`}
+                                className="font-mono text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline"
+                              >
+                                {group.leaderPhone}
+                              </a>
+                            </div>
+                          )}
+
+                          {group.assistantLeader && (
+                            <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8] pt-1 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                              <span>Assistant / Co-Leader</span>
+                              <span className="font-medium text-[#1D1B3A] dark:text-[#F2F2FA]">
+                                {group.assistantLeader}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Schedule & Venue Information */}
+                        <div className="space-y-1.5 text-xs text-[#666A86] dark:text-[#A9ACC8] mb-4">
+                          {(group.meetingDay || group.meetingTime) && (
+                            <div className="flex items-center gap-1.5">
+                              <Calendar className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
+                              <span className="truncate">
+                                {group.meetingDay} {group.meetingTime ? `· ${group.meetingTime}` : ''}
+                              </span>
+                            </div>
+                          )}
+                          {group.meetingLocation && (
+                            <div className="flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                              <span className="truncate">{group.meetingLocation}</span>
+                            </div>
+                          )}
+                          {group.targetDemographic && (
+                            <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] italic">
+                              Focus: {group.targetDemographic}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Card Footer with Members Count & Actions */}
+                      <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewingMembersGroup(group)}
+                          className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1"
+                        >
+                          <Users className="w-3.5 h-3.5" />
+                          <span>{enrolledMembers.length} enrolled</span>
+                        </button>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditGroupModal(group)}
+                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors"
+                            title="Edit Group"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to remove the group "${group.name}"?`)) {
+                                deleteChurchGroup(group.id);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                            title="Delete Group"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Empty Search State */}
+            {churchGroups.filter((group) => {
+              if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
+              if (groupFilterStatus === 'active' && !group.active) return false;
+              if (groupFilterStatus === 'inactive' && group.active) return false;
+              if (!groupSearchQuery.trim()) return true;
+              const q = groupSearchQuery.toLowerCase();
+              return (
+                group.name.toLowerCase().includes(q) ||
+                group.leaderName.toLowerCase().includes(q) ||
+                (group.meetingLocation && group.meetingLocation.toLowerCase().includes(q))
+              );
+            }).length === 0 && (
+              <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-10 text-center border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                <h4 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">No matching groups found</h4>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-sm mx-auto">
+                  Try adjusting your search query or category filters, or click "Add New Group" to create one.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openAddGroupModal('cell_group')}
+                  className="mt-4 bg-[#6D5CF2] text-white rounded-xl px-4 py-2 text-xs font-bold inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create Group</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
 
         {/* TAB 2: Proximity & Geofencing Automation */}
         {activeTab === 'proximity' && (
@@ -814,30 +1390,430 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           </div>
         )}
 
-        {/* Save Bar Footer */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-4">
-          <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-            Last saved: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{lastSavedTime}</span>
-          </div>
+        {/* Save Bar Footer (for system parameters) */}
+        {activeTab !== 'groups' && (
+          <div className="p-4 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-4">
+            <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+              Last saved: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{lastSavedTime}</span>
+            </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-            >
-              <Save className="w-3.5 h-3.5" />
-              <span>Save System Settings</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save System Settings</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </form>
+
+      {/* MODAL 1: Add / Edit Church Group */}
+      {isGroupModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div
+            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] animate-in zoom-in-95 duration-150 my-auto max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  {editingGroupId ? 'Edit Congregational Group' : 'Add New Congregational Group'}
+                </h3>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Set leadership, schedule, meeting venue, and group classification.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsGroupModalOpen(false)}
+                className="p-1.5 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveGroup} className="space-y-4 text-xs">
+              {/* Category Selection Cards */}
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  Group Category <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGroupCategory('cell_group')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      groupCategory === 'cell_group'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-900 dark:text-emerald-200'
+                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center justify-between">
+                      <span>Cell Group</span>
+                      {groupCategory === 'cell_group' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                    </div>
+                    <div className="text-[10px] mt-0.5 opacity-80">Home Small Group</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setGroupCategory('ministry')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      groupCategory === 'ministry'
+                        ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
+                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center justify-between">
+                      <span>Ministry</span>
+                      {groupCategory === 'ministry' && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
+                    </div>
+                    <div className="text-[10px] mt-0.5 opacity-80">Department Unit</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setGroupCategory('fellowship')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      groupCategory === 'fellowship'
+                        ? 'bg-sky-50 dark:bg-sky-950/40 border-sky-400 text-sky-900 dark:text-sky-200'
+                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center justify-between">
+                      <span>Fellowship</span>
+                      {groupCategory === 'fellowship' && <Check className="w-3.5 h-3.5 text-sky-600" />}
+                    </div>
+                    <div className="text-[10px] mt-0.5 opacity-80">Demographic Wing</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Group Name */}
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Group / Ministry Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Cantonments Cell, Choir & Music Ministry, Men’s Fellowship"
+                  value={groupName}
+                  onChange={(e) => setGroupName(e.target.value)}
+                  className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
+                    groupErrors.name ? 'border-rose-500' : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                  } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]`}
+                />
+                {groupErrors.name && <p className="text-[10px] text-rose-500 mt-1">{groupErrors.name}</p>}
+              </div>
+
+              {/* Leaders Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Primary Leader Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Elder Samuel Darko"
+                    value={groupLeader}
+                    onChange={(e) => setGroupLeader(e.target.value)}
+                    className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
+                      groupErrors.leader ? 'border-rose-500' : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]`}
+                  />
+                  {groupErrors.leader && <p className="text-[10px] text-rose-500 mt-1">{groupErrors.leader}</p>}
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Leader Phone (Ghana / International)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+233 24 111 2233"
+                    value={groupLeaderPhone}
+                    onChange={(e) => setGroupLeaderPhone(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Leader Email (Optional)
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="leader@accracentral.org"
+                    value={groupLeaderEmail}
+                    onChange={(e) => setGroupLeaderEmail(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Assistant / Co-Leader
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Sister Joyce Mensah"
+                    value={groupAssistant}
+                    onChange={(e) => setGroupAssistant(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+              </div>
+
+              {/* Schedule Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Meeting Day / Frequency
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Wednesdays, Every 2nd Saturday"
+                    value={groupDay}
+                    onChange={(e) => setGroupDay(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Meeting Time Window
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 18:30 - 19:45, 08:00 - 10:00"
+                    value={groupTime}
+                    onChange={(e) => setGroupTime(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+              </div>
+
+              {/* Meeting Location */}
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Meeting Location / Venue Address
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Main Sanctuary Loft, Elder Mensah’s Residence, Osu RE, Zoom / Hybrid"
+                  value={groupLocation}
+                  onChange={(e) => setGroupLocation(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+              </div>
+
+              {/* Demographic / Target focus */}
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Target Audience / Demographics Focus
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Members in Osu zone, Vocalists, Married couples, Ages 18-35"
+                  value={groupDemographic}
+                  onChange={(e) => setGroupDemographic(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Purpose & Description
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Describe the mission, objectives, or activities of this group..."
+                  value={groupDescription}
+                  onChange={(e) => setGroupDescription(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+              </div>
+
+              {/* Active Toggle */}
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="groupActiveToggle"
+                  checked={groupActive}
+                  onChange={(e) => setGroupActive(e.target.checked)}
+                  className="w-4 h-4 rounded text-[#6D5CF2] focus:ring-[#6D5CF2] cursor-pointer"
+                />
+                <label htmlFor="groupActiveToggle" className="text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] cursor-pointer">
+                  Group is actively meeting and available in roster selectors
+                </label>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                <button
+                  type="button"
+                  onClick={() => setIsGroupModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{editingGroupId ? 'Update Group' : 'Save Group'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </form>
+      )}
+
+      {/* MODAL 2: View Enrolled Members in Group */}
+      {viewingMembersGroup && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div
+            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] animate-in zoom-in-95 duration-150 my-auto max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                      viewingMembersGroup.category === 'ministry'
+                        ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-[#2A2A55] dark:text-[#8C7DFF]'
+                        : viewingMembersGroup.category === 'fellowship'
+                        ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    }`}
+                  >
+                    {viewingMembersGroup.category.replace('_', ' ')}
+                  </span>
+                  <span className="text-xs text-[#666A86] dark:text-[#A9ACC8]">·</span>
+                  <span className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                    Leader: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{viewingMembersGroup.leaderName}</strong>
+                  </span>
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  {viewingMembersGroup.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingMembersGroup(null)}
+                className="p-1.5 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body / Members List */}
+            <div className="flex-1 overflow-y-auto py-4 space-y-2.5">
+              <div className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] flex items-center justify-between">
+                <span>Enrolled Congregation Members</span>
+                <span className="font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                  {getGroupMembers(viewingMembersGroup.name).length} members
+                </span>
+              </div>
+
+              {getGroupMembers(viewingMembersGroup.name).length > 0 ? (
+                <div className="space-y-2">
+                  {getGroupMembers(viewingMembersGroup.name).map((m) => (
+                    <div
+                      key={m.id}
+                      className="p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-8 h-8 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-xs flex items-center justify-center shrink-0">
+                          {m.avatarInitials}
+                        </span>
+                        <div className="min-w-0 truncate">
+                          <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                            {m.firstName} {m.lastName} {m.preferredName ? `(${m.preferredName})` : ''}
+                          </div>
+                          <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] font-mono">
+                            {m.phoneE164}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 text-right">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                            m.status === 'member'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                          }`}
+                        >
+                          {m.status}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold ${
+                            m.autoCheckinOptedIn
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {m.autoCheckinOptedIn ? 'Auto In' : 'Manual'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-8 text-center bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-6 border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <Users className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                  <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    No members currently assigned to {viewingMembersGroup.name}
+                  </p>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-xs mx-auto">
+                    You can assign members to this group when registering new members or editing existing members in the Roster.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between">
+              <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                Meeting Day: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{viewingMembersGroup.meetingDay || 'Not set'}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setViewingMembersGroup(null)}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

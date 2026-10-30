@@ -270,3 +270,24 @@ export interface SystemSettings {
   enablePushNotifications: boolean;
 }
 
+export type ChurchGroupCategory = 'ministry' | 'fellowship' | 'cell_group';
+
+export interface ChurchGroup {
+  id: string;
+  name: string;
+  category: ChurchGroupCategory;
+  leaderName: string;
+  leaderPhone?: string;
+  leaderEmail?: string;
+  assistantLeader?: string;
+  meetingDay?: string;
+  meetingTime?: string;
+  meetingLocation?: string;
+  targetDemographic?: string;
+  description: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+
