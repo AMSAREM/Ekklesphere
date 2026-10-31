@@ -313,9 +313,15 @@ consoleRouter.get('/cron/rollup', handleCronRollup);
 consoleRouter.use(requireUser, requireCreator);
 
 // 1. Dashboard Summary (Aggregates only)
-consoleRouter.get('/dashboard', async (_req: Request, res: Response) => {
+consoleRouter.get(['/dashboard', '/overview'], async (_req: Request, res: Response) => {
   const summary = await platformStore.getDashboardSummary();
-  return res.status(200).json(summary);
+  const organisations = await platformStore.listOrganisations();
+  return res.status(200).json({
+    ...summary,
+    kpis: summary,
+    organisations,
+    organizations: organisations,
+  });
 });
 
 // 2. Organisations Directory & Provisioning

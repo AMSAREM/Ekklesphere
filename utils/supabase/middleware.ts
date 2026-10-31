@@ -176,10 +176,10 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
     console.warn("[Supabase Middleware] Session verification error:", err);
   }
 
-  // 2. Resolve organization_id from request
+  type NextOrgSource = 'header' | 'query' | 'cookie' | 'jwt_claim' | 'default' | 'none';
   const extracted = extractOrganizationIdFromHeadersAndCookies(request);
   let resolvedOrgId: string | null = extracted.id;
-  let orgSource: OrganizationContext['source'] = extracted.source;
+  let orgSource: NextOrgSource = extracted.source;
 
   // Fallback to user's JWT claim if not explicitly provided in request
   if (!resolvedOrgId && userClaimOrgId && validateOrganizationId(userClaimOrgId)) {

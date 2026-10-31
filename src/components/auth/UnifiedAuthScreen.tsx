@@ -280,12 +280,27 @@ export const UnifiedAuthScreen: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setLoginEmail('elenamends@gmail.com');
+                      loginWithCredentials('elenamends@gmail.com', '', 'creator');
+                    }}
+                    className="p-2.5 rounded-xl bg-gradient-to-r from-[#6D5CF2]/15 to-[#8C7DFF]/15 hover:from-[#6D5CF2]/25 hover:to-[#8C7DFF]/25 border border-[#6D5CF2]/40 text-left transition-colors cursor-pointer col-span-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends (Platform Creator)</div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#6D5CF2] text-white">Full Console Access</span>
+                    </div>
+                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#A594FD] mt-0.5">Platform Owner · Multi-Tenant Licensing, Organizations & Analytics</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginEmail('elenamends@gmail.com');
                       loginWithCredentials('elenamends@gmail.com', '', 'admin');
                     }}
                     className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-indigo-50 dark:hover:bg-indigo-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
                   >
                     <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends</div>
-                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF]">Administrator</div>
+                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF]">Church Administrator</div>
                   </button>
 
                   <button
@@ -398,7 +413,19 @@ export const UnifiedAuthScreen: React.FC = () => {
                   <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
                     Select Access Role
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole('creator')}
+                      className={`p-2.5 rounded-xl border text-xs font-semibold text-center transition-all ${
+                        selectedRole === 'creator'
+                          ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                          : 'border-[#E3E5F2] dark:border-[#2D2D55] text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      <ShieldCheck className="w-4 h-4 mx-auto mb-1 text-indigo-600" />
+                      <span>Creator</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setSelectedRole('admin')}

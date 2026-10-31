@@ -42,7 +42,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     expect(res.body.app).toBe('Ekklesphere Church Management');
   });
 
-  it('POST /api/auth/token issues signed cryptographic JWT token', async () => {
+  it('REJECTS unauthenticated POST /api/auth/token minting attempts with 401', async () => {
     const res = await request(app)
       .post('/api/auth/token')
       .send({
@@ -52,9 +52,39 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
         name: 'New Member',
       });
 
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+  });
+
+  it('POST /api/auth/token performs authenticated session token exchange', async () => {
+    const res = await request(app)
+      .post('/api/auth/token')
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({});
+
     expect(res.status).toBe(200);
     expect(res.body.token).toBeDefined();
     expect(res.body.role).toBe('member');
+    expect(res.body.user).toBeDefined();
+  });
+
+  it('POST /api/dev/preview-session is disabled (404) in production or returns session in dev', async () => {
+    const res = await request(app)
+      .post('/api/dev/preview-session')
+      .send({
+        email: 'member@ekklesphere.church',
+        role: 'member',
+        name: 'New Member',
+      });
+
+    if (process.env.NODE_ENV === 'production') {
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('not_found');
+    } else {
+      expect(res.status).toBe(200);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.role).toBe('member');
+    }
   });
 
   describe('Church Premise GPS Role-Level Security', () => {
@@ -108,8 +138,16 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.premiseSettings.churchName).toBe('PIWC KWADASO');
     });
 
-    it('GET /api/campus-premise returns the saved church premise GPS location', async () => {
+    it('REJECTS unauthenticated GET /api/campus-premise with 401', async () => {
       const res = await request(app).get('/api/campus-premise');
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized');
+    });
+
+    it('GET /api/campus-premise returns the saved church premise GPS location for authenticated user', async () => {
+      const res = await request(app)
+        .get('/api/campus-premise')
+        .set('Authorization', `Bearer ${pastorToken}`);
       expect(res.status).toBe(200);
       expect(res.body.configured).toBe(true);
       expect(res.body.premiseSettings.lat).toBe(5.6037);
@@ -212,9 +250,27 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.success).toBe(true);
     });
 
-    it('POST /attendance/events verifies arrival signal against church premise geofence', async () => {
+    it('REJECTS unauthenticated arrival signals on POST /attendance/events with 401', async () => {
       const eventRes = await request(app)
         .post('/attendance/events')
+        .send({
+          clientEventId: '00000000-0000-0000-0000-000000000000',
+          type: 'enter',
+          source: 'geofence',
+          lat: 5.6037,
+          lng: -0.1870,
+          accuracyM: 10,
+          deviceTime: new Date().toISOString(),
+        });
+
+      expect(eventRes.status).toBe(401);
+      expect(eventRes.body.error).toBe('unauthorized');
+    });
+
+    it('POST /attendance/events verifies arrival signal against church premise geofence for authenticated member', async () => {
+      const eventRes = await request(app)
+        .post('/attendance/events')
+        .set('Authorization', `Bearer ${memberToken}`)
         .send({
           clientEventId: '00000000-0000-0000-0000-000000000001',
           type: 'enter',
@@ -233,6 +289,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     it('REJECTS mock location GPS spoofing attempt', async () => {
       const spoofRes = await request(app)
         .post('/api/attendance/events')
+        .set('Authorization', `Bearer ${memberToken}`)
         .send({
           clientEventId: '00000000-0000-0000-0000-000000000002',
           type: 'enter',
@@ -252,6 +309,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     it('REJECTS attendance arrival signal outside church geofence perimeter', async () => {
       const outsideRes = await request(app)
         .post('/api/attendance/events')
+        .set('Authorization', `Bearer ${memberToken}`)
         .send({
           clientEventId: '00000000-0000-0000-0000-000000000003',
           type: 'enter',
@@ -272,6 +330,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     it('FLAGS attendance event in perimeter grace margin for staff review', async () => {
       const marginRes = await request(app)
         .post('/api/attendance/events')
+        .set('Authorization', `Bearer ${memberToken}`)
         .send({
           clientEventId: '00000000-0000-0000-0000-000000000004',
           type: 'enter',
@@ -288,22 +347,27 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(marginRes.body.flag_reasons.some((r: string) => r.startsWith('perimeter_margin_'))).toBe(true);
     });
 
-    it('GET /api/attendance/raw-events returns telemetry audit trail', async () => {
-      const res = await request(app).get('/api/attendance/raw-events');
+    it('GET /api/attendance/raw-events returns telemetry audit trail for staff', async () => {
+      const res = await request(app)
+        .get('/api/attendance/raw-events')
+        .set('Authorization', `Bearer ${pastorToken}`);
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
     });
 
-    it('GET /api/attendance/shifts returns computed user shifts', async () => {
-      const res = await request(app).get('/api/attendance/shifts');
+    it('GET /api/attendance/shifts returns computed user shifts for staff', async () => {
+      const res = await request(app)
+        .get('/api/attendance/shifts')
+        .set('Authorization', `Bearer ${pastorToken}`);
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it('POST /api/attendance/auto-close closes expired open shifts', async () => {
+    it('POST /api/attendance/auto-close closes expired open shifts for staff', async () => {
       const res = await request(app)
         .post('/api/attendance/auto-close')
+        .set('Authorization', `Bearer ${pastorToken}`)
         .send({ maxHours: 12 });
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -358,8 +422,16 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
   });
 
   describe('Church Events & Directory Role-Level Security', () => {
-    it('GET /api/events returns church worship services', async () => {
+    it('REJECTS unauthenticated GET /api/events with 401', async () => {
       const res = await request(app).get('/api/events');
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized');
+    });
+
+    it('GET /api/events returns church worship services for authenticated users', async () => {
+      const res = await request(app)
+        .get('/api/events')
+        .set('Authorization', `Bearer ${memberToken}`);
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
@@ -428,9 +500,22 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
   });
 
   describe('Push Notifications Role-Level Security', () => {
-    it('POST /api/notifications/subscribe registers a member push notification device', async () => {
+    it('REJECTS unauthenticated POST /api/notifications/subscribe with 401', async () => {
       const res = await request(app)
         .post('/api/notifications/subscribe')
+        .send({
+          id: 'sub-test-unauth',
+          endpoint: 'https://fcm.googleapis.com/fcm/send/test-unauth',
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized');
+    });
+
+    it('POST /api/notifications/subscribe registers a member push notification device for authenticated user', async () => {
+      const res = await request(app)
+        .post('/api/notifications/subscribe')
+        .set('Authorization', `Bearer ${memberToken}`)
         .send({
           id: 'sub-test-elena-1',
           endpoint: 'https://fcm.googleapis.com/fcm/send/test-token-123',

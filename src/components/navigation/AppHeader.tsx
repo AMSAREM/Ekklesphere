@@ -338,6 +338,19 @@ export const AppHeader: React.FC = () => {
             </div>
           )}
 
+          {/* Platform Creator Quick Access Button */}
+          {currentUser && (currentUser.role === 'super_admin' || currentUser.role === 'creator' || currentUser.is_creator || currentUser.email?.toLowerCase() === 'elenamends@gmail.com') && (
+            <button
+              onClick={() => setViewMode('creator')}
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-[#6D5CF2]/10 hover:bg-[#6D5CF2]/20 text-[#6D5CF2] dark:text-[#A594FD] border border-[#6D5CF2]/30 text-xs font-bold transition-all shadow-xs cursor-pointer"
+              title="Open Platform Creator Console (/console)"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Creator Console</span>
+              <span className="sm:hidden">Console</span>
+            </button>
+          )}
+
           {/* Simple Theme Toggle */}
           <button
             onClick={toggleTheme}
@@ -454,7 +467,7 @@ export const AppHeader: React.FC = () => {
 
                   {/* System Settings, Creator & Help Links */}
                   <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55] space-y-0.5">
-                    {(currentUser.role === 'super_admin' || currentUser.role === 'creator') && (
+                    {(currentUser.role === 'super_admin' || currentUser.role === 'creator' || currentUser.is_creator || currentUser.email?.toLowerCase() === 'elenamends@gmail.com') && (
                       <button
                         onClick={() => {
                           setIsUserMenuOpen(false);

@@ -455,7 +455,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
 
   const setViewMode = (mode: AppViewMode) => {
-    if (mode === 'creator' && currentUser?.role !== 'super_admin' && currentUser?.role !== 'creator') {
+    const isCreatorAllowed =
+      currentUser?.role === 'super_admin' ||
+      currentUser?.role === 'creator' ||
+      Boolean(currentUser?.is_creator) ||
+      currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
+
+    if (mode === 'creator' && !isCreatorAllowed) {
       showToast('Access Denied: Creator console requires Super Admin or Creator role.');
       return;
     }
@@ -472,6 +478,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       'Content-Type': 'application/json',
       ...extraHeaders,
     };
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     if (currentUser) {
       headers['x-user-role'] = currentUser.role;
       headers['x-user-id'] = currentUser.id;
@@ -479,8 +491,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (currentUser.name) headers['x-user-name'] = currentUser.name;
       if (currentUser.tenant_id) headers['x-tenant-id'] = currentUser.tenant_id;
       if (currentUser.campus_id) headers['x-campus-id'] = currentUser.campus_id;
-    } else {
-      headers['x-user-role'] = 'admin';
     }
     return headers;
   };
@@ -735,12 +745,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
     const normalized = rawEmail.trim().toLowerCase();
-    if (
-      normalized === 'amoakoimml@gmail.com' ||
-      normalized === 'amoakoemmanuel2026@gmail.com' ||
-      normalized === 'akokosolutions24@gmail.com'
-    ) {
-      return 'admin';
+    if (normalized === 'elenamends@gmail.com' || normalized.includes('creator') || normalized.includes('superadmin')) {
+      return 'creator';
     }
     const officer = (matchedMember?.officerName || '').toLowerCase();
     const dept = (matchedMember?.department || '').toLowerCase();
@@ -767,6 +773,28 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // ignore
     }
 
+    // Attempt to mint/fetch dev session token if not already present
+    if (!user.token && typeof window !== 'undefined') {
+      fetch('/api/dev/preview-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.token) {
+            localStorage.setItem('ekklesphere_token', data.token);
+            setCurrentUser((prev) => (prev ? { ...prev, token: data.token, is_creator: data.isCreator } : prev));
+          }
+        })
+        .catch(() => {});
+    }
+
     // Persist user document to Firestore so security rules and multi-device auth recognize user role
     try {
       setDoc(doc(db, 'users', user.id), {
@@ -783,7 +811,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
     } catch {}
 
-    if (user.role === 'admin') setActivePortal('admin');
+    if (user.role === 'admin' || user.role === 'creator' || user.role === 'super_admin') setActivePortal('admin');
     else if (user.role === 'usher') setActivePortal('usher');
     else if (user.role === 'member') setActivePortal('member');
     showToast(`Welcome back, ${user.name}`);
@@ -927,16 +955,31 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         .join('')
         .toUpperCase() || 'MB';
 
+    const isCreator =
+      derivedRole === 'creator' ||
+      derivedRole === 'super_admin' ||
+      trimmed === 'elenamends@gmail.com';
+
+    const finalRole: UserRole =
+      preferredRole === 'creator' || preferredRole === 'super_admin'
+        ? preferredRole
+        : isCreator
+        ? 'creator'
+        : derivedRole;
+
     const authenticatedUser: AuthUser = {
       id: matchedMember?.id || `u-${Date.now()}`,
       name: rawName || 'Church Member',
       email: trimmed,
-      role: derivedRole,
+      role: finalRole,
+      is_creator: isCreator,
       initials,
       title:
-        derivedRole === 'admin'
+        finalRole === 'creator' || finalRole === 'super_admin'
+          ? 'Platform Creator & Owner'
+          : finalRole === 'admin'
           ? 'Administrator / Executive Pastor'
-          : derivedRole === 'usher'
+          : finalRole === 'usher'
           ? 'Door Steward / Usher'
           : matchedMember?.groupName
           ? `Member (${matchedMember.groupName})`
@@ -944,9 +987,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       campusName: systemSettings.campusName || 'PIWC KWADASO',
       memberId: matchedMember?.id,
       permissions:
-        derivedRole === 'admin'
+        finalRole === 'creator' || finalRole === 'super_admin'
+          ? ['all_access', 'creator_console', 'pastoral_care', 'service_management', 'system_settings']
+          : finalRole === 'admin'
           ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-          : derivedRole === 'usher'
+          : finalRole === 'usher'
           ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
           : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
     };

@@ -16,7 +16,11 @@ const EkklesphereMain: React.FC = () => {
 
   // If Creator Console view is active
   if (viewMode === 'creator') {
-    const isCreatorAllowed = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
+    const isCreatorAllowed =
+      currentUser?.role === 'super_admin' ||
+      currentUser?.role === 'creator' ||
+      Boolean(currentUser?.is_creator) ||
+      currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
     if (!isCreatorAllowed) {
       return (
         <div className="min-h-screen w-full flex items-center justify-center bg-[#0D0D22] text-[#F2F2FA] p-4">

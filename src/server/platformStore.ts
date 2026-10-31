@@ -2008,6 +2008,10 @@ class PlatformStore {
     return { organisation: hydrated, license: issuedLicense };
   }
 
+  public readonly createOrganization = this.createOrganisation.bind(this);
+  public readonly getOrganizationById = this.getOrganisationById.bind(this);
+  public readonly listOrganizations = this.listOrganisations.bind(this);
+
   public async updateOrganisation(
     organizationId: string,
     updates: Partial<{

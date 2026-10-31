@@ -25,6 +25,8 @@ export interface AuthUser {
   organization_id?: string;
   username?: string;
   permissions: string[];
+  token?: string;
+  is_creator?: boolean;
 }
 
 export type SignalKind =
