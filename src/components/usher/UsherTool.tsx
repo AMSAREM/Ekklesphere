@@ -17,6 +17,7 @@ import {
   UserCheck,
   Settings,
 } from 'lucide-react';
+import { getCanonicalMemberId, findMemberByScannedId } from '../member/DigitalMemberCard';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -56,22 +57,32 @@ export const UsherTool: React.FC = () => {
     isOfflineSaved: boolean;
   } | null>(null);
 
+  const [scannedIdInput, setScannedIdInput] = useState('');
+
+  const isMemberCheckedInForService = (personId: string) =>
+    attendanceRecords.some(
+      (r) =>
+        r.personId === personId &&
+        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+    );
+
   // Filter members based on search and status tabs
   const filteredMembers = members.filter((m) => {
-    const isChecked = attendanceRecords.some((r) => r.personId === m.id);
+    const isChecked = isMemberCheckedInForService(m.id);
 
     if (filterMode === 'unchecked' && isChecked) return false;
     if (filterMode === 'checked' && !isChecked) return false;
 
     const q = searchQuery.toLowerCase().replace(/\s/g, '');
     if (!q) return true;
-    const nameMatch = `${m.firstName}${m.lastName}`.toLowerCase().includes(q);
-    const phoneMatch = m.phoneE164.replace(/\D/g, '').includes(q);
-    const groupMatch = m.groupName.toLowerCase().includes(q);
-    return nameMatch || phoneMatch || groupMatch;
+    const nameMatch = `${m.firstName || ''}${m.lastName || ''}`.toLowerCase().includes(q);
+    const phoneMatch = (m.phoneE164 || m.phoneNumber || '').replace(/\D/g, '').includes(q);
+    const groupMatch = (m.groupName || m.homeCellGroup || '').toLowerCase().includes(q);
+    const memberIdMatch = getCanonicalMemberId(m).toLowerCase().replace(/\s/g, '').includes(q);
+    return nameMatch || phoneMatch || groupMatch || memberIdMatch;
   });
 
-  const uncheckedMembers = members.filter((m) => !attendanceRecords.some((r) => r.personId === m.id));
+  const uncheckedMembers = members.filter((m) => !isMemberCheckedInForService(m.id));
 
   const handleScanClick = () => {
     if (members.length === 0) {
@@ -93,9 +104,9 @@ export const UsherTool: React.FC = () => {
     checkInPerson(personId, 'usher', 98, 'Usher scanner audit');
 
     setConfirmationMember({
-      name: `${person.firstName} ${person.lastName}`,
-      group: person.groupName,
-      initials: person.avatarInitials,
+      name: `${person.firstName || ''} ${person.lastName || ''}`.trim() || 'Registered Member',
+      group: person.groupName || person.homeCellGroup || 'General Congregation',
+      initials: person.avatarInitials || 'MB',
       isOfflineSaved: !isUsherOnline,
     });
 
@@ -117,8 +128,11 @@ export const UsherTool: React.FC = () => {
     showToast(`Visitor ${visitorName} registered! Welcome packet queued.`);
   };
 
-  const formatPhone = (phone: string) => {
-    const clean = phone.replace('+233', '0');
+  const formatPhone = (phone?: string | null) => {
+    if (!phone || typeof phone !== 'string' || !phone.trim()) {
+      return 'No phone';
+    }
+    const clean = phone.trim().replace('+233', '0');
     return clean.replace(/(\d{3})(\d{3})(\d{4})/, '$1 $2 $3');
   };
 
@@ -414,20 +428,51 @@ export const UsherTool: React.FC = () => {
               </div>
             </div>
 
+            {/* Direct Member ID / QR Wedge Scanner Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!scannedIdInput.trim()) return;
+                const matched = findMemberByScannedId(members, scannedIdInput);
+                if (matched) {
+                  triggerCheckIn(matched.id);
+                  setScannedIdInput('');
+                } else {
+                  showToast(`No member found with ID "${scannedIdInput.trim()}"`);
+                }
+              }}
+              className="pt-3 flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={scannedIdInput}
+                onChange={(e) => setScannedIdInput(e.target.value)}
+                placeholder="Scan or enter Member ID (e.g. MEM-...)"
+                aria-label="Scan or enter Member ID"
+                className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl bg-white/10 border border-white/15 text-xs text-white placeholder-white/50 font-mono outline-none focus:border-[#8C7DFF]"
+              />
+              <button
+                type="submit"
+                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                Verify ID
+              </button>
+            </form>
+
             {/* Scan Action Buttons */}
-            <div className="pt-4 flex flex-col sm:flex-row gap-2">
+            <div className="pt-3 flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleScanClick}
-                className="flex-1 py-3 px-4 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                className="flex-1 min-h-[44px] py-3 px-4 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98] whitespace-nowrap"
               >
-                <QrCode className="w-4 h-4" />
+                <QrCode className="w-4 h-4 shrink-0" />
                 <span>Check In Next Member</span>
               </button>
               <button
                 onClick={() => setIsVisitorSheetOpen(true)}
-                className="py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                className="min-h-[44px] py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap"
               >
-                <UserPlus className="w-4 h-4" />
+                <UserPlus className="w-4 h-4 shrink-0" />
                 <span>+ Visitor</span>
               </button>
             </div>
@@ -464,9 +509,19 @@ export const UsherTool: React.FC = () => {
               <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="search"
-                placeholder="Search member by name, phone (+233), or cell group..."
+                placeholder="Search name, Member ID, phone (+233), or cell group..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchQuery.trim()) {
+                    const exact = findMemberByScannedId(members, searchQuery);
+                    if (exact) {
+                      e.preventDefault();
+                      triggerCheckIn(exact.id);
+                      setSearchQuery('');
+                    }
+                  }
+                }}
                 className="w-full bg-slate-50 dark:bg-black/20 border border-[#E3E5F2] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-2xl pl-10 pr-4 py-2.5 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-[#6C5CE7]"
               />
             </div>
@@ -497,7 +552,11 @@ export const UsherTool: React.FC = () => {
           <ul className="space-y-2.5 max-h-[620px] overflow-y-auto pr-1" role="list">
             {filteredMembers.length > 0 ? (
               filteredMembers.map((m) => {
-                const record = attendanceRecords.find((r) => r.personId === m.id);
+                const record = attendanceRecords.find(
+                  (r) =>
+                    r.personId === m.id &&
+                    (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+                );
                 const isChecked = !!record;
                 const isWaitingSync = record?.waitingToSync;
 
@@ -507,17 +566,28 @@ export const UsherTool: React.FC = () => {
                     className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-3 sm:p-3.5 flex items-center justify-between gap-3 shadow-sm hover:border-[#6C5CE7]/50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-11 h-11 rounded-2xl bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] font-bold text-sm flex items-center justify-center shrink-0">
-                        {m.avatarInitials}
-                      </div>
+                      {m.imageUrl ? (
+                        <img
+                          src={m.imageUrl}
+                          alt={`${m.firstName} ${m.lastName}`}
+                          referrerPolicy="no-referrer"
+                          className="w-11 h-11 rounded-2xl object-cover border border-[#E3E5F2] dark:border-[#2D2D55] shrink-0"
+                        />
+                      ) : (
+                        <div className="w-11 h-11 rounded-2xl bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] font-bold text-sm flex items-center justify-center shrink-0">
+                          {m.avatarInitials || 'MB'}
+                        </div>
+                      )}
                       <div className="min-w-0">
                         <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                           {m.firstName} {m.lastName}
                         </b>
                         <div className="flex items-center gap-2 text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] truncate mt-0.5">
-                          <span className="font-mono">{formatPhone(m.phoneE164)}</span>
+                          <span className="font-mono tabular-nums">{getCanonicalMemberId(m)}</span>
                           <span>·</span>
-                          <span className="truncate">{m.groupName}</span>
+                          <span className="font-mono">{formatPhone(m.phoneE164 || m.phoneNumber)}</span>
+                          <span>·</span>
+                          <span className="truncate">{m.groupName || m.homeCellGroup || 'General Congregation'}</span>
                         </div>
                       </div>
                     </div>

@@ -145,9 +145,11 @@ export const AppHeader: React.FC = () => {
     ? members
         .filter(
           (m) =>
-            `${m.firstName} ${m.lastName}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            m.phoneE164.includes(searchQuery) ||
-            m.groupName.toLowerCase().includes(searchQuery.toLowerCase())
+            `${m.firstName || ''} ${m.lastName || ''}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (m.memberId || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (m.id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (m.phoneE164 || m.phoneNumber || '').includes(searchQuery) ||
+            (m.groupName || m.homeCellGroup || '').toLowerCase().includes(searchQuery.toLowerCase())
         )
         .slice(0, 5)
     : [];
@@ -159,7 +161,7 @@ export const AppHeader: React.FC = () => {
         .concat(
           members.map(
             (m) =>
-              `"${m.firstName} ${m.lastName}","${m.phoneE164}","${m.groupName}","${m.status}",${m.consecutiveAbsences},${m.autoCheckinOptedIn}`
+              `"${m.firstName || ''} ${m.lastName || ''}","${m.phoneE164 || ''}","${m.groupName || m.homeCellGroup || 'General'}","${m.status || 'member'}",${m.consecutiveAbsences ?? 0},${Boolean(m.autoCheckinOptedIn)}`
           )
         )
         .join('\n');
@@ -273,7 +275,7 @@ export const AppHeader: React.FC = () => {
                             {m.firstName} {m.lastName}
                           </p>
                           <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
-                            {m.phoneE164} · {m.groupName}
+                            {m.phoneE164 || m.phoneNumber || 'No phone'} · {m.groupName || m.homeCellGroup || 'General'}
                           </p>
                         </div>
                       </div>
@@ -564,7 +566,7 @@ export const AppHeader: React.FC = () => {
                           {m.firstName} {m.lastName}
                         </p>
                         <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
-                          {m.phoneE164} · {m.groupName}
+                          {m.phoneE164 || m.phoneNumber || 'No phone'} · {m.groupName || m.homeCellGroup || 'General'}
                         </p>
                       </div>
                     </div>

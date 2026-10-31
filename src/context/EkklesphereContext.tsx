@@ -63,6 +63,36 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   enablePushNotifications: true,
 };
 
+function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>): Person {
+  const raw = (input || {}) as Partial<Person> & Record<string, unknown>;
+  const firstName = String(raw.firstName ?? raw.first_name ?? 'Member').trim() || 'Member';
+  const lastName = String(raw.lastName ?? raw.last_name ?? '').trim();
+  const phoneE164 = String(raw.phoneE164 ?? raw.phone_e164 ?? raw.phoneNumber ?? raw.phone ?? '').trim();
+  const groupName =
+    String(raw.groupName ?? raw.group_name ?? raw.homeCellGroup ?? raw.home_cell_group ?? 'General Congregation').trim() ||
+    'General Congregation';
+  const avatarInitials =
+    String(raw.avatarInitials ?? raw.avatar_initials ?? '').trim() ||
+    `${firstName[0] || 'M'}${lastName[0] || ''}`.toUpperCase() ||
+    'MB';
+
+  return {
+    ...(raw as Person),
+    id: String(raw.id || `mem-${Date.now()}`),
+    tenantId: String(raw.tenantId ?? raw.tenant_id ?? '00000000-0000-0000-0000-000000000001'),
+    firstName,
+    lastName,
+    phoneE164,
+    groupName,
+    homeCellGroup: String(raw.homeCellGroup ?? raw.home_cell_group ?? groupName),
+    avatarInitials,
+    status: (raw.status as Person['status']) || 'member',
+    consecutiveAbsences: typeof raw.consecutiveAbsences === 'number' ? raw.consecutiveAbsences : 0,
+    autoCheckinOptedIn: Boolean(raw.autoCheckinOptedIn ?? raw.auto_checkin_opted_in ?? false),
+    joinedOn: String(raw.joinedOn ?? raw.joined_on ?? new Date().toISOString().split('T')[0]),
+  };
+}
+
 interface EkklesphereContextType {
   // Push Notifications (Web Push & Sanctuary Radar Confirmations)
   pushPermissionStatus: NotificationPermission | 'unsupported';
@@ -964,7 +994,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     })
       .then(async (res) => {
         if (res.ok) {
-          const savedPerson: Person = await res.json();
+          const savedPerson = normalizePersonRecord(await res.json());
           setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
           const updatedUser = { ...newUser, memberId: savedPerson.id };
           setCurrentUser(updatedUser);
@@ -1021,7 +1051,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((item) => normalizePersonRecord(item));
         }
       }
     } catch {}
@@ -1432,9 +1462,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          setMembers(data);
+          const normalized = data.map((item) => normalizePersonRecord(item));
+          setMembers(normalized);
           try {
-            localStorage.setItem('ekklesphere_members', JSON.stringify(data));
+            localStorage.setItem('ekklesphere_members', JSON.stringify(normalized));
           } catch {
             // ignore
           }
@@ -1451,7 +1482,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setMembers(parsed);
+          setMembers(parsed.map((item) => normalizePersonRecord(item)));
         }
       }
     } catch {}
@@ -1491,7 +1522,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
 
       if (res.ok) {
-        savedPerson = await res.json();
+        savedPerson = normalizePersonRecord(await res.json());
       }
     } catch {
       // offline or serverless fallback
@@ -1566,7 +1597,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
 
       if (res.ok) {
-        savedPerson = (await res.json().catch(() => ({}))) as Person;
+        const body = await res.json().catch(() => null);
+        if (body && typeof body === 'object' && 'id' in body) {
+          savedPerson = normalizePersonRecord(body);
+        }
       }
     } catch {
       // offline or serverless fallback
@@ -1647,9 +1681,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
     }
 
-    setMembers(updatedRoster);
+    const normalizedRoster = updatedRoster.map((item) => normalizePersonRecord(item));
+    setMembers(normalizedRoster);
     try {
-      localStorage.setItem('ekklesphere_members', JSON.stringify(updatedRoster));
+      localStorage.setItem('ekklesphere_members', JSON.stringify(normalizedRoster));
     } catch {}
 
     setAuditLogs((prev) => [

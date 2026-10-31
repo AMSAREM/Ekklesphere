@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
+import { DigitalMemberCard, getCanonicalMemberId } from './DigitalMemberCard';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -64,7 +65,9 @@ export const MemberApp: React.FC = () => {
     removeCheckIn,
     refreshLivePremise,
     setChurchPremiseLocation,
+    updateMember,
     currentUser,
+    setCurrentUser,
     logout,
     switchUserRole,
     pushPermissionStatus,
@@ -107,12 +110,61 @@ export const MemberApp: React.FC = () => {
     ? `${matchedMember.firstName} ${matchedMember.lastName}`
     : currentUser?.name || 'Church Member';
   const memberFirstName = matchedMember?.firstName || memberDisplayName.split(' ')[0] || 'Member';
-  const memberCode = matchedMember?.memberId || targetPersonId.toUpperCase();
+  const memberCode = getCanonicalMemberId(matchedMember, targetPersonId);
+  const memberInitials =
+    matchedMember?.avatarInitials ||
+    currentUser?.initials ||
+    memberDisplayName
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('') ||
+    'MB';
   const memberGroup = matchedMember?.groupName || matchedMember?.homeCellGroup || 'General Congregation';
+  const memberDepartment = matchedMember?.department;
   const memberEmail = matchedMember?.email || currentUser?.email || systemSettings.contactEmail;
   const memberPhone = matchedMember?.phoneE164 || systemSettings.contactPhone;
 
-  const myAttendanceRecord = attendanceRecords.find((r) => r.personId === targetPersonId);
+  const [localPhotoOverride, setLocalPhotoOverride] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(`ekklesphere_member_photo_${targetPersonId}`);
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setLocalPhotoOverride(localStorage.getItem(`ekklesphere_member_photo_${targetPersonId}`));
+    } catch {
+      setLocalPhotoOverride(null);
+    }
+  }, [targetPersonId]);
+
+  const memberPhotoUrl = matchedMember?.imageUrl || localPhotoOverride || currentUser?.avatar || null;
+
+  const handleUpdateMemberPhoto = async (dataUrl: string) => {
+    try {
+      localStorage.setItem(`ekklesphere_member_photo_${targetPersonId}`, dataUrl);
+    } catch {
+      // Ignore storage quota errors
+    }
+    setLocalPhotoOverride(dataUrl);
+
+    if (matchedMember) {
+      await updateMember(matchedMember.id, { imageUrl: dataUrl });
+    }
+    if (currentUser) {
+      setCurrentUser({ ...currentUser, avatar: dataUrl });
+    }
+  };
+
+  const myAttendanceRecord = attendanceRecords.find(
+    (r) =>
+      r.personId === targetPersonId &&
+      (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+  );
   const isCheckedIn = Boolean(myAttendanceRecord);
   const isPremiseConfigured =
     systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null;
@@ -1160,21 +1212,40 @@ export const MemberApp: React.FC = () => {
   );
 
   const renderMeContent = () => (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
-            Privacy & Profile Centre
+            Me
           </h1>
           <p className="text-xs sm:text-sm text-[#5B5F7A] dark:text-[#A9ACC8]">
-            Ghana Data Protection Act (Act 843) compliant. You maintain complete control over your records.
+            Your Digital Member Card for on-site event registration, official profile, and privacy controls.
           </p>
         </div>
         <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
           <ShieldCheck className="w-3.5 h-3.5" />
-          <span>Consent Active</span>
+          <span>Act 843 Protected</span>
         </span>
       </div>
+
+      {/* Digital Member Card for On-Site Event Registration */}
+      <DigitalMemberCard
+        memberId={memberCode}
+        fullName={memberDisplayName}
+        photoUrl={memberPhotoUrl}
+        initials={memberInitials}
+        churchName={systemSettings.churchName}
+        campusName={systemSettings.campusName}
+        groupName={memberGroup}
+        department={memberDepartment}
+        joinedOn={matchedMember?.joinedOn}
+        activeServiceName={currentService.name}
+        isCheckedIn={isCheckedIn}
+        checkedInAt={myAttendanceRecord?.checkedInAt}
+        onUpdatePhoto={handleUpdateMemberPhoto}
+        onOpenScanner={() => setIsQrSheetOpen(true)}
+        onNotify={showToast}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* Privacy Permissions */}
@@ -1317,6 +1388,10 @@ export const MemberApp: React.FC = () => {
             </h2>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Member ID</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums">{memberCode}</b>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Full Name</span>
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberDisplayName}</b>
               </div>
@@ -1398,21 +1473,22 @@ export const MemberApp: React.FC = () => {
       {/* Navigation Bar */}
       <aside
         aria-label="Member Navigation"
-        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-32px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-3 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200"
+        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-24px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2.5 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200"
       >
         {/* 1. Home */}
         <div className="relative group">
           <button
             onClick={() => setActiveTab('home')}
-            aria-label="Home Feed"
+            aria-label="Home"
             aria-current={activeTab === 'home' && !isQrSheetOpen ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'home' && !isQrSheetOpen
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Home className="w-5 h-5 shrink-0" />
+            <Home className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-none font-semibold">Home</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Home</span>
@@ -1423,18 +1499,19 @@ export const MemberApp: React.FC = () => {
         <div className="relative group">
           <button
             onClick={() => setActiveTab('events')}
-            aria-label="Services & Calendar"
+            aria-label="Events"
             aria-current={activeTab === 'events' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'events'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Calendar className="w-5 h-5 shrink-0" />
+            <Calendar className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-none font-semibold">Events</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
-            <span>Services</span>
+            <span>Events</span>
           </span>
         </div>
 
@@ -1442,18 +1519,19 @@ export const MemberApp: React.FC = () => {
         <div className="relative group">
           <button
             onClick={() => setActiveTab('give')}
-            aria-label="Tithes & Giving"
+            aria-label="Give"
             aria-current={activeTab === 'give' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'give'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <Heart className="w-5 h-5 shrink-0" />
+            <Heart className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-none font-semibold">Give</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
-            <span>Giving</span>
+            <span>Give</span>
           </span>
         </div>
 
@@ -1461,32 +1539,34 @@ export const MemberApp: React.FC = () => {
         <div className="relative group">
           <button
             onClick={() => setIsQrSheetOpen(true)}
-            aria-label="Check-in Scanner & Pass"
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+            aria-label="Scan & Pass"
+            className="min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
           >
-            <QrCode className="w-5 h-5 shrink-0" />
+            <QrCode className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-none font-semibold">Scan</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Scan & Pass</span>
           </span>
         </div>
 
-        {/* 5. Profile & Settings */}
+        {/* 5. Me (Digital Member Card & Profile) */}
         <div className="relative group">
           <button
             onClick={() => setActiveTab('me')}
-            aria-label="Profile & Settings"
+            aria-label="Me"
             aria-current={activeTab === 'me' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'me'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
-            <User className="w-5 h-5 shrink-0" />
+            <User className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-none font-semibold">Me</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
-            <span>Profile</span>
+            <span>Me</span>
           </span>
         </div>
       </aside>

@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
 import { signToken, type ChurchRole } from '../lib/auth';
+import { getCanonicalMemberId, findMemberByScannedId } from '../src/components/member/DigitalMemberCard';
+import type { Person } from '../src/types/ekklesphere';
 
 describe('Ekklesphere Church Management & GPS Premise Suite', () => {
   const adminToken = signToken({
@@ -605,5 +607,54 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`);
     });
   });
+
+  describe('Digital Member Card QR & Member ID Resolution', () => {
+    const sampleRoster: Person[] = [
+      {
+        id: '9f4a8c12-4410-4b90-88cc-001122334455',
+        tenantId: 'e0000000-0000-0000-0000-000000000001',
+        memberId: 'PIWC-0042',
+        firstName: 'Ama',
+        lastName: 'Mensah',
+        phoneE164: '+233244112233',
+        groupName: 'Youth Ministry',
+        status: 'member',
+        avatarInitials: 'AM',
+        consecutiveAbsences: 0,
+        autoCheckinOptedIn: true,
+        joinedOn: '2024-03-10',
+      },
+      {
+        id: '8b22019a-1234-4a56-9b78-abcdef123456',
+        tenantId: 'e0000000-0000-0000-0000-000000000001',
+        firstName: 'Kwesi',
+        lastName: 'Owusu',
+        phoneE164: '+233208998877',
+        groupName: 'Men Fellowship',
+        status: 'member',
+        avatarInitials: 'KO',
+        consecutiveAbsences: 0,
+        autoCheckinOptedIn: false,
+        joinedOn: '2025-01-15',
+      },
+    ];
+
+    it('uses explicit memberId when assigned and derives deterministic MEM-* ID when missing', () => {
+      expect(getCanonicalMemberId(sampleRoster[0])).toBe('PIWC-0042');
+      expect(getCanonicalMemberId(sampleRoster[1])).toBe('MEM-8B22019A');
+      expect(getCanonicalMemberId(null, 'unlinked-member')).toBe('MEM-GUEST01');
+    });
+
+    it('resolves scanned QR Member IDs back to the exact roster member for event registration', () => {
+      expect(findMemberByScannedId(sampleRoster, 'PIWC-0042')?.firstName).toBe('Ama');
+      expect(findMemberByScannedId(sampleRoster, 'piwc-0042')?.lastName).toBe('Mensah');
+      expect(findMemberByScannedId(sampleRoster, 'MEM-8B22019A')?.firstName).toBe('Kwesi');
+      expect(findMemberByScannedId(sampleRoster, 'EKKLESPHERE:MEMBER:PIWC-0042')?.id).toBe(
+        sampleRoster[0].id
+      );
+      expect(findMemberByScannedId(sampleRoster, 'UNKNOWN-999')).toBeUndefined();
+    });
+  });
 });
+
 

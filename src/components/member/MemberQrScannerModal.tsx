@@ -18,8 +18,10 @@ import {
   VolumeX,
   AlertCircle
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Person } from '../../types/ekklesphere';
 import { useEkklesphere } from '../../context/EkklesphereContext';
+import { getCanonicalMemberId, findMemberByScannedId } from './DigitalMemberCard';
 
 interface MemberQrScannerModalProps {
   isOpen: boolean;
@@ -59,10 +61,10 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   const passHolderName = currentUserMember
     ? `${currentUserMember.firstName} ${currentUserMember.lastName}`
     : currentUser?.name || 'Registered Member';
-  const passMemberId =
-    currentUserMember?.memberId ||
-    (currentUserMember?.id ? `MEM-${currentUserMember.id.slice(0, 6).toUpperCase()}` : currentUser?.id ? `USR-${currentUser.id.slice(0, 6).toUpperCase()}` : 'UNASSIGNED');
-  const passQrToken = `${passHolderName.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}-${passMemberId}`;
+  const passMemberId = getCanonicalMemberId(
+    currentUserMember,
+    currentUser?.memberId || currentUser?.id
+  );
 
   const playScanBeep = () => {
     if (!soundEnabled) return;
@@ -94,8 +96,12 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
     setIsScanning(false);
     playScanBeep();
 
-    // Check if member already checked in
-    const isAlreadyCheckedIn = attendanceRecords.some((r) => r.personId === targetMember.id);
+    // Check if member already checked in for the active service
+    const isAlreadyCheckedIn = attendanceRecords.some(
+      (r) =>
+        r.personId === targetMember.id &&
+        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+    );
 
     if (!isAlreadyCheckedIn) {
       checkInPerson(targetMember.id, 'posted_qr', 98, `Scanned in ${fellowshipContext}`);
@@ -127,9 +133,11 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   const availableMembers = members.filter((m) => {
     if (!searchFilter.trim()) return true;
     const q = searchFilter.toLowerCase();
+    const canonicalId = getCanonicalMemberId(m).toLowerCase();
     return (
-      m.firstName.toLowerCase().includes(q) ||
-      m.lastName.toLowerCase().includes(q) ||
+      (m.firstName || '').toLowerCase().includes(q) ||
+      (m.lastName || '').toLowerCase().includes(q) ||
+      canonicalId.includes(q) ||
       (m.memberId && m.memberId.toLowerCase().includes(q)) ||
       (m.homeCellGroup && m.homeCellGroup.toLowerCase().includes(q)) ||
       (m.groupName && m.groupName.toLowerCase().includes(q))
@@ -338,6 +346,7 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                         <img
                           src={scannedMember.imageUrl}
                           alt={scannedMember.firstName}
+                          referrerPolicy="no-referrer"
                           className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-400 shadow-md"
                         />
                       ) : (
@@ -352,8 +361,8 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                             {scannedMember.firstName} {scannedMember.lastName}
                           </h3>
                         </div>
-                        <p className="text-xs text-emerald-300/90 font-mono">
-                          ID: {scannedMember.memberId || `MEM-${scannedMember.id.slice(0, 6).toUpperCase()}`}
+                        <p className="text-xs text-emerald-300/90 font-mono tabular-nums">
+                          ID: {getCanonicalMemberId(scannedMember)}
                         </p>
                         <p className="text-[11px] text-slate-300 mt-0.5">
                           {scannedMember.groupName || scannedMember.homeCellGroup || 'General'} · {scannedMember.department || 'General'}
@@ -394,22 +403,41 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   </span>
                 </div>
 
-                {/* Quick Search filter */}
+                {/* Quick Search or Hardware QR Scanner input */}
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Quick search member name, ID, or cell..."
+                    placeholder="Scan Member ID QR or search name / cell..."
                     value={searchFilter}
                     onChange={(e) => setSearchFilter(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 outline-none focus:border-[#6D5CF2]"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && searchFilter.trim()) {
+                        e.preventDefault();
+                        const exact = findMemberByScannedId(members, searchFilter);
+                        if (exact) {
+                          handleProcessScan(exact);
+                          setSearchFilter('');
+                        } else if (availableMembers.length === 1) {
+                          handleProcessScan(availableMembers[0]);
+                          setSearchFilter('');
+                        } else {
+                          showToast(`No member found for "${searchFilter.trim()}"`);
+                        }
+                      }
+                    }}
+                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 outline-none focus:border-[#6D5CF2]"
                   />
                 </div>
 
                 {/* Carousel of available members */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                   {availableMembers.slice(0, 9).map((member) => {
-                    const isChecked = attendanceRecords.some((r) => r.personId === member.id);
+                    const isChecked = attendanceRecords.some(
+                      (r) =>
+                        r.personId === member.id &&
+                        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+                    );
                     return (
                       <button
                         key={member.id}
@@ -485,43 +513,25 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 </p>
               </div>
 
-              {/* High-contrast Digital QR Code */}
-              <div className="bg-white p-5 rounded-3xl w-56 h-56 mx-auto flex items-center justify-center border-4 border-[#6D5CF2] shadow-2xl">
-                <svg className="w-full h-full" viewBox="0 0 100 100">
-                  <rect x="5" y="5" width="28" height="28" fill="#000" rx="3" />
-                  <rect x="9" y="9" width="20" height="20" fill="#fff" rx="2" />
-                  <rect x="13" y="13" width="12" height="12" fill="#000" rx="1" />
-
-                  <rect x="67" y="5" width="28" height="28" fill="#000" rx="3" />
-                  <rect x="71" y="9" width="20" height="20" fill="#fff" rx="2" />
-                  <rect x="75" y="13" width="12" height="12" fill="#000" rx="1" />
-
-                  <rect x="5" y="67" width="28" height="28" fill="#000" rx="3" />
-                  <rect x="9" y="71" width="20" height="20" fill="#fff" rx="2" />
-                  <rect x="13" y="75" width="12" height="12" fill="#000" rx="1" />
-
-                  <rect x="40" y="8" width="6" height="6" fill="#000" />
-                  <rect x="52" y="8" width="6" height="6" fill="#000" />
-                  <rect x="40" y="20" width="6" height="6" fill="#000" />
-                  <rect x="46" y="26" width="6" height="6" fill="#000" />
-                  <rect x="40" y="40" width="12" height="12" fill="#6D5CF2" rx="2" />
-                  <rect x="10" y="44" width="6" height="6" fill="#000" />
-                  <rect x="22" y="44" width="6" height="6" fill="#000" />
-                  <rect x="68" y="44" width="6" height="6" fill="#000" />
-                  <rect x="80" y="44" width="6" height="6" fill="#000" />
-                  <rect x="44" y="60" width="6" height="6" fill="#000" />
-                  <rect x="56" y="60" width="6" height="6" fill="#000" />
-                  <rect x="68" y="72" width="6" height="6" fill="#000" />
-                  <rect x="80" y="80" width="12" height="12" fill="#000" />
-                </svg>
+              {/* High-contrast Scannable Digital QR Code */}
+              <div className="bg-white p-4 rounded-3xl w-56 h-56 mx-auto flex items-center justify-center border-4 border-[#6D5CF2] shadow-2xl">
+                <QRCodeSVG
+                  value={passMemberId}
+                  size={184}
+                  level="H"
+                  bgColor="#FFFFFF"
+                  fgColor="#111827"
+                  marginSize={2}
+                  title={`Member ID QR Code for ${passHolderName} (${passMemberId})`}
+                />
               </div>
 
               <div>
-                <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/30">
-                  {passQrToken}
+                <span className="text-xs font-mono font-bold text-emerald-400 tabular-nums">
+                  {passMemberId}
                 </span>
-                <span className="block text-[11px] text-slate-400 mt-2">
-                  Present this QR code to fellow members or door stewards to verify check-in.
+                <span className="block text-[11px] text-slate-400 mt-1.5">
+                  Present this QR code to door stewards for on-site event registration.
                 </span>
               </div>
             </div>
