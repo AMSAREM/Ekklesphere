@@ -1,6 +1,10 @@
-// lib/auth.ts - Ekklesphere Church Management Authentication & RBAC Engine
+// lib/auth.ts - Ekklesphere Hardened Authentication, Supabase JWT Verification & RBAC Engine
 import type { Request, Response, NextFunction } from 'express';
+import { randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
+
+export const PRIMARY_ORGANIZATION_ID = 'e0000000-0000-0000-0000-000000000001';
+export const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
 export type ChurchRole =
   | 'super_admin'
@@ -17,51 +21,185 @@ export interface AuthUserPayload {
   email: string;
   role: ChurchRole;
   tenant_id?: string;
+  organization_id?: string;
   campus_id?: string;
   name?: string;
+  is_creator?: boolean;
+  auth_provider?: 'supabase' | 'session_jwt';
   iat?: number;
   exp?: number;
+}
+
+export interface ActiveSupportGrantContext {
+  id: string;
+  organizationId: string;
+  creatorUserId: string;
+  reason: string;
+  expiresAt: string;
 }
 
 declare global {
   namespace Express {
     interface Request {
       user?: AuthUserPayload;
+      organizationId?: string;
       tenant_id?: string;
       campus_id?: string;
+      supportGrant?: ActiveSupportGrantContext;
     }
   }
 }
 
+// Ephemeral per-process secret used ONLY in non-production test/dev environments
+// when JWT_SECRET is not set. Production ALWAYS fails closed at startup if JWT_SECRET is missing.
+const NON_PROD_EPHEMERAL_SECRET = randomBytes(32).toString('hex');
+
+export type ExternalIdentityVerifier = (token: string) => Promise<AuthUserPayload | null>;
+
+let externalIdentityVerifier: ExternalIdentityVerifier | null = null;
+
+export function registerExternalIdentityVerifier(verifier: ExternalIdentityVerifier | null): void {
+  externalIdentityVerifier = verifier;
+}
+
 /**
- * Returns JWT secret from environment, with a safe fallback for Ekklesphere.
+ * Validates required production security & database environment variables at server boot.
+ * Fails immediately rather than degrading to insecure defaults or ephemeral memory.
  */
-export function getJwtSecret(): string {
-  return process.env.JWT_SECRET || 'ekklesphere-church-proximity-jwt-secret-2026';
+export function assertProductionAuthConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') {
+    return;
+  }
+
+  const missing: string[] = [];
+  if (!env.JWT_SECRET || env.JWT_SECRET.trim().length < 16) {
+    missing.push('JWT_SECRET (minimum 16 characters)');
+  }
+  if (!env.SUPABASE_URL || !env.SUPABASE_URL.trim()) {
+    missing.push('SUPABASE_URL');
+  }
+  if (!env.SUPABASE_SERVICE_ROLE_KEY || !env.SUPABASE_SERVICE_ROLE_KEY.trim()) {
+    missing.push('SUPABASE_SERVICE_ROLE_KEY');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `[Ekklesphere Security] Refusing to start in production. Missing required environment variables: ${missing.join(', ')}`
+    );
+  }
+}
+
+/**
+ * Returns JWT signing/verification secret from environment.
+ * Throws immediately in production if JWT_SECRET is missing (no hardcoded fallback).
+ */
+export function getJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.JWT_SECRET?.trim();
+  if (configured && configured.length > 0) {
+    if (env.NODE_ENV === 'production' && configured.length < 16) {
+      throw new Error('CRITICAL: JWT_SECRET must be at least 16 characters in production.');
+    }
+    return configured;
+  }
+
+  if (env.NODE_ENV === 'production') {
+    throw new Error('CRITICAL: JWT_SECRET environment variable is required in production.');
+  }
+
+  return NON_PROD_EPHEMERAL_SECRET;
 }
 
 /**
  * Signs an authenticated payload into a cryptographically secured JWT.
  */
-export function signToken(payload: Omit<AuthUserPayload, 'iat' | 'exp'>, expiresIn: string | number = '24h'): string {
+export function signToken(
+  payload: Omit<AuthUserPayload, 'iat' | 'exp'>,
+  expiresIn: string | number = '24h'
+): string {
   const secret = getJwtSecret();
-  return jwt.sign(payload, secret, { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] });
+  const orgId = payload.organization_id || payload.tenant_id || PRIMARY_ORGANIZATION_ID;
+  const normalizedPayload: Omit<AuthUserPayload, 'iat' | 'exp'> = {
+    ...payload,
+    organization_id: orgId,
+    tenant_id: orgId,
+    campus_id: payload.campus_id || PRIMARY_CAMPUS_SITE_ID,
+    is_creator:
+      payload.is_creator === true ||
+      payload.role === 'creator' ||
+      payload.role === 'super_admin',
+    auth_provider: payload.auth_provider || 'session_jwt',
+  };
+  return jwt.sign(normalizedPayload, secret, { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] });
 }
 
 /**
- * Cryptographically verifies token and returns user payload.
+ * Cryptographically verifies a locally signed session JWT and normalizes claims.
  */
 export function verifyToken(token: string): AuthUserPayload {
   const secret = getJwtSecret();
-  return jwt.verify(token, secret) as AuthUserPayload;
+  const decoded = jwt.verify(token, secret) as AuthUserPayload;
+  const orgId = decoded.organization_id || decoded.tenant_id || PRIMARY_ORGANIZATION_ID;
+  return {
+    ...decoded,
+    organization_id: orgId,
+    tenant_id: orgId,
+    campus_id: decoded.campus_id || PRIMARY_CAMPUS_SITE_ID,
+    is_creator:
+      decoded.is_creator === true ||
+      decoded.role === 'creator' ||
+      decoded.role === 'super_admin',
+  };
 }
 
 /**
- * Express middleware requiring a valid authenticated user session.
+ * Verifies a Bearer token against either server-signed session JWTs or Supabase Auth JWTs.
+ * Never trusts client headers (x-user-role, x-user-id, x-tenant-id).
  */
-export function requireUser(req: Request, res: Response, next: NextFunction): void {
+export async function resolveVerifiedUserFromToken(token: string): Promise<AuthUserPayload> {
+  let localJwtError: any = null;
+  try {
+    return verifyToken(token);
+  } catch (err: any) {
+    localJwtError = err;
+    if (err?.name === 'TokenExpiredError') {
+      throw err;
+    }
+  }
+
+  if (externalIdentityVerifier) {
+    const verifiedSupabaseUser = await externalIdentityVerifier(token);
+    if (verifiedSupabaseUser) {
+      return verifiedSupabaseUser;
+    }
+  }
+
+  throw localJwtError || new Error('Invalid token signature');
+}
+
+export function extractBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const raw = authHeader.slice(7).trim();
+    return raw.length > 0 ? raw : null;
+  }
+  return null;
+}
+
+/**
+ * Checks if an authenticated user holds verified Platform Creator privileges.
+ * Sourced strictly from verified token/app_metadata claims, never user_metadata or emails.
+ */
+export function isCreatorClaim(user?: AuthUserPayload | null): boolean {
+  if (!user) return false;
+  return user.is_creator === true || user.role === 'creator' || user.role === 'super_admin';
+}
+
+/**
+ * Express middleware requiring a valid authenticated user session via Bearer JWT.
+ */
+export async function requireUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const token = extractBearerToken(req);
+  if (!token) {
     res.status(401).json({
       error: 'unauthorized',
       message: 'Authentication required. Missing or malformed Bearer token.',
@@ -69,19 +207,43 @@ export function requireUser(req: Request, res: Response, next: NextFunction): vo
     return;
   }
 
-  const token = authHeader.split(' ')[1];
   try {
-    const decoded = verifyToken(token);
+    const decoded = await resolveVerifiedUserFromToken(token);
     req.user = decoded;
-    if (decoded.tenant_id) req.tenant_id = decoded.tenant_id;
-    if (decoded.campus_id) req.campus_id = decoded.campus_id;
+    const orgId = decoded.organization_id || decoded.tenant_id || PRIMARY_ORGANIZATION_ID;
+    req.organizationId = orgId;
+    req.tenant_id = orgId;
+    req.campus_id = decoded.campus_id || PRIMARY_CAMPUS_SITE_ID;
     next();
   } catch (err: any) {
     res.status(401).json({
       error: 'unauthorized',
-      message: err.name === 'TokenExpiredError' ? 'Token has expired' : 'Invalid token signature',
+      message: err?.name === 'TokenExpiredError' ? 'Token has expired' : 'Invalid token signature',
     });
   }
+}
+
+/**
+ * Express middleware requiring verified Platform Creator claim (`app_metadata.creator`).
+ */
+export function requireCreator(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({
+      error: 'unauthorized',
+      message: 'Authentication required for Creator Console access.',
+    });
+    return;
+  }
+
+  if (!isCreatorClaim(req.user)) {
+    res.status(403).json({
+      error: 'creator_required',
+      message: 'Access denied. Verified platform creator claim in app_metadata is required.',
+    });
+    return;
+  }
+
+  next();
 }
 
 /**
@@ -96,8 +258,7 @@ export function requireRoles(...allowedRoles: ChurchRole[]) {
 
     const { role } = req.user;
 
-    // Platform super administrators have master management access
-    if (role === 'super_admin' || role === 'creator') {
+    if (isCreatorClaim(req.user)) {
       return next();
     }
 
@@ -112,17 +273,11 @@ export function requireRoles(...allowedRoles: ChurchRole[]) {
   };
 }
 
-/**
- * Checks whether a given role has staff-level access.
- */
 export function isStaffRole(role?: ChurchRole): boolean {
   if (!role) return false;
   return ['super_admin', 'creator', 'admin', 'pastor', 'usher', 'finance'].includes(role);
 }
 
-/**
- * Role permission checks for granular access control.
- */
 export function canManagePremise(role?: ChurchRole): boolean {
   return role === 'super_admin' || role === 'creator' || role === 'admin';
 }
@@ -146,22 +301,9 @@ export function canManageFinance(role?: ChurchRole): boolean {
   return role === 'super_admin' || role === 'creator' || role === 'admin' || role === 'finance';
 }
 
-/**
- * Tenant / Campus scope middleware for Ekklesphere multi-campus church setups.
- */
 export function requireCampusScope(req: Request, _res: Response, next: NextFunction): void {
-  const requestedCampusId =
-    req.params.campusId ||
-    req.params.campus_id ||
-    req.query.campus_id ||
-    req.query.campusId ||
-    (req.body && (req.body.campus_id || req.body.campusId)) ||
-    req.headers['x-campus-id'] ||
-    req.headers['x-tenant-id'];
-
-  if (typeof requestedCampusId === 'string' && requestedCampusId.trim()) {
-    req.campus_id = requestedCampusId.trim();
+  if (req.user?.campus_id) {
+    req.campus_id = req.user.campus_id;
   }
-
   next();
 }

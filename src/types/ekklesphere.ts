@@ -375,8 +375,12 @@ export interface ChurchGroup {
 export type AppViewMode = 'landing' | 'app' | 'creator';
 
 export type LicenseTier = 'grace_starter' | 'ministry_pro' | 'cathedral_enterprise';
-export type TenantStatus = 'active' | 'trial' | 'suspended' | 'maintenance';
+export type TenantStatus = 'active' | 'trial' | 'suspended' | 'maintenance' | 'archived';
 export type BillingCycle = 'monthly' | 'annual' | 'lifetime';
+export type OrganisationType = 'church' | 'organisation';
+export type LicenseStatus = 'active' | 'trial' | 'grace_period' | 'expired' | 'revoked' | 'suspended';
+export type PaymentCurrency = 'GHS' | 'USD';
+export type PaymentMethod = 'momo' | 'bank' | 'cash';
 
 export interface TenantFeatures {
   bleRadar: boolean;
@@ -393,23 +397,40 @@ export interface TenantChurch {
   id: string;
   name: string;
   slug: string;
+  orgType?: OrganisationType;
   campusCode: string;
   city: string;
   country: string;
   seniorPastor: string;
+  contactName?: string;
   contactEmail: string;
   contactPhone: string;
   status: TenantStatus;
   memberCount: number;
   maxCapacity: number;
+  sitesCount?: number;
+  sitesLimit?: number;
   licenseKey: string;
   licenseTier: LicenseTier;
+  licenseStatus?: LicenseStatus;
   renewalDate: string;
   billingCycle: BillingCycle;
   customDomain?: string;
   geofenceRadiusMeters: number;
+  geofenceConfigured?: boolean;
+  smsConfigured?: boolean;
+  pushConfigured?: boolean;
+  checkins30d?: number;
+  lastActivityAt?: string | null;
   features: TenantFeatures;
   createdAt: string;
+}
+
+export interface LicenseOverrides {
+  seatsLimit?: number;
+  sitesLimit?: number;
+  monthlyCheckinsLimit?: number;
+  features?: Partial<TenantFeatures>;
 }
 
 export interface SystemLicense {
@@ -417,14 +438,237 @@ export interface SystemLicense {
   key: string;
   tier: LicenseTier;
   tenantId: string;
+  organizationId?: string;
   tenantName: string;
   seatsLimit: number;
-  status: 'active' | 'expired' | 'revoked' | 'grace_period';
+  sitesLimit?: number;
+  monthlyCheckinsLimit?: number;
+  seatsUsed?: number;
+  sitesUsed?: number;
+  status: LicenseStatus;
   issuedDate: string;
   expiresDate: string;
+  graceEndsDate?: string | null;
   billingCycle: BillingCycle;
   annualCostUSD: number;
+  overrides?: LicenseOverrides;
+  notes?: string;
   enabledFeatures: string[];
+}
+
+export interface ConsolePlan {
+  id: LicenseTier;
+  name: string;
+  description: string;
+  monthlyCostUSD: number;
+  annualCostUSD: number;
+  seatsLimit: number;
+  sitesLimit: number;
+  monthlyCheckinsLimit: number;
+  featureFlags: TenantFeatures;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface LicensePaymentRecord {
+  id: string;
+  licenseId: string;
+  organizationId: string;
+  organizationName?: string;
+  amount: number;
+  currency: PaymentCurrency;
+  method: PaymentMethod;
+  reference: string;
+  paidAt: string;
+  notes?: string;
+  recordedByEmail: string;
+  createdAt: string;
+}
+
+export interface UsageDailyAggregate {
+  organizationId: string;
+  organizationName?: string;
+  usageDate: string;
+  activeUsers: number;
+  checkinsCount: number;
+  flaggedCount: number;
+  rejectedCount: number;
+  mockLocationAttempts: number;
+  sitesCount: number;
+  pushSubscribers: number;
+  lastActivityAt: string | null;
+}
+
+export type ConsoleAlertType =
+  | 'expiring_license'
+  | 'limit_exceeded'
+  | 'usage_drop'
+  | 'high_spoofing_rate'
+  | 'geofence_not_configured'
+  | 'comms_not_configured';
+
+export interface ConsoleAlert {
+  id: string;
+  organizationId: string | null;
+  organizationName?: string;
+  alertType: ConsoleAlertType;
+  severity: 'info' | 'warning' | 'critical';
+  status: 'open' | 'acknowledged' | 'resolved';
+  title: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  acknowledgedAt?: string | null;
+  resolvedAt?: string | null;
+}
+
+export interface PlatformAnnouncement {
+  id: string;
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'critical';
+  targetTiers: LicenseTier[];
+  targetOrganizationIds: string[];
+  active: boolean;
+  startsAt: string;
+  expiresAt?: string | null;
+  createdByEmail?: string;
+  createdAt: string;
+}
+
+export interface PlatformFeatureFlag {
+  key: string;
+  name: string;
+  description: string;
+  enabledGlobally: boolean;
+  enabledTiers: LicenseTier[];
+  organizationOverrides: Record<string, boolean>;
+  updatedAt: string;
+}
+
+export interface DataPrivacyRequest {
+  id: string;
+  organizationId: string;
+  organizationName?: string;
+  requestType: 'export' | 'deletion';
+  status: 'pending' | 'in_progress' | 'completed' | 'rejected';
+  requestedByEmail: string;
+  reason?: string;
+  notes?: string;
+  dueAt: string;
+  completedAt?: string | null;
+  createdAt: string;
+}
+
+export interface SupportGrantSession {
+  id: string;
+  organizationId: string;
+  organizationName: string;
+  creatorUserId: string;
+  creatorEmail: string;
+  reason: string;
+  accessLevel: 'read_only_admin';
+  startsAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  active: boolean;
+}
+
+export interface ConsoleAuditLogRecord {
+  id: string;
+  actorId?: string | null;
+  actorEmail: string;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  organizationId?: string | null;
+  organizationName?: string;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+  ipAddress?: string | null;
+  createdAt: string;
+}
+
+export interface LicenseEvaluationResult {
+  allowed: boolean;
+  code:
+    | 'LICENSE_OK'
+    | 'LICENSE_TRIAL'
+    | 'LICENSE_GRACE_PERIOD'
+    | 'LICENSE_MISSING'
+    | 'LICENSE_EXPIRED'
+    | 'LICENSE_REVOKED'
+    | 'LICENSE_SUSPENDED';
+  httpStatus: number;
+  status: LicenseStatus | 'unlicensed';
+  tier: LicenseTier | null;
+  organizationId: string;
+  licenseKey?: string;
+  seatsUsed: number;
+  seatsLimit: number;
+  sitesUsed: number;
+  sitesLimit: number;
+  monthlyCheckinsLimit: number;
+  expiresDate: string | null;
+  graceEndsDate: string | null;
+  inGracePeriod: boolean;
+  daysRemaining: number | null;
+  graceDaysRemaining: number | null;
+  message: string;
+}
+
+export interface ConsoleDashboardSummary {
+  organisationsByStatus: Record<string, number>;
+  licensesByTier: Record<LicenseTier, number>;
+  licensesByStatus: Record<string, number>;
+  expiringIn7Days: SystemLicense[];
+  expiringIn30Days: SystemLicense[];
+  annualRunRateUSD: number;
+  paymentsTotalGHS: number;
+  paymentsTotalUSD: number;
+  checkinsTrend: Array<{ date: string; checkins: number; flagged: number; mockAttempts: number }>;
+  topOrganisations: Array<{ id: string; name: string; city: string; tier: LicenseTier; checkins30d: number; seatsUsed: number; seatsLimit: number }>;
+  inactiveOrganisations: Array<{ id: string; name: string; city: string; status: string; lastActivityAt: string | null }>;
+  nearOrOverLimits: Array<{
+    id: string;
+    name: string;
+    seatsUsed: number;
+    seatsLimit: number;
+    sitesUsed: number;
+    sitesLimit: number;
+    seatUtilizationPct: number;
+    siteUtilizationPct: number;
+  }>;
+  openAlertsCount: number;
+  storageBackend: 'supabase' | 'sandbox_ephemeral';
+  generatedAt: string;
+}
+
+export interface OrganisationDetailPayload {
+  organisation: TenantChurch;
+  license: SystemLicense | null;
+  evaluation: LicenseEvaluationResult;
+  payments: LicensePaymentRecord[];
+  usageDaily: UsageDailyAggregate[];
+  usersSummary: {
+    totalMembersCount: number;
+    visitorsCount: number;
+    optedInProximityCount: number;
+    staffByRole: Record<string, number>;
+    staffAccounts: Array<{ id: string; role: string; status: string; joinedAt: string }>;
+  };
+  sites: Array<{
+    id: string;
+    name: string;
+    address?: string;
+    lat: number;
+    lng: number;
+    radius_m: number;
+    outer_radius_m?: number;
+    active: boolean;
+  }>;
+  audit: ConsoleAuditLogRecord[];
 }
 
 export interface LandingPageConfig {
@@ -442,6 +686,7 @@ export interface LandingPageConfig {
     networkUptime: string;
   };
 }
+
 
 
 
