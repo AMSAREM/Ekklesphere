@@ -4,12 +4,11 @@ export type UserRole =
   | 'super_admin'
   | 'creator'
   | 'admin'
-  | 'teacher'
-  | 'accountant'
   | 'pastor'
   | 'usher'
   | 'member'
-  | 'student';
+  | 'group_leader'
+  | 'finance';
 
 export interface AuthUser {
   id: string;
@@ -21,7 +20,8 @@ export interface AuthUser {
   title: string;
   campusName: string;
   memberId?: string;
-  school_id?: string;
+  tenant_id?: string;
+  campus_id?: string;
   organization_id?: string;
   username?: string;
   permissions: string[];

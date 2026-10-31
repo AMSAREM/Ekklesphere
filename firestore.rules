@@ -11,7 +11,10 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'password'
+      );
     }
 
     function isValidId(id) {
@@ -26,88 +29,151 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isAdmin() {
+    // Role-Level Security Invariants sourced strictly from Firestore user profile
+    function userDocExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
       return isVerified() && (
-        request.auth.token.email == 'elenamends@gmail.com' ||
-        request.auth.token.email == 'amoakoemmanuel2026@gmail.com' ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+        request.auth.token.email == 'akokosolutions24@gmail.com' ||
+        (userDocExists() && getUserData().role in ['super_admin', 'creator'])
       );
     }
 
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isVerified() && userDocExists() && getUserData().role == 'admin'
+      );
+    }
+
+    function isPastor() {
+      return isAdmin() || (
+        isVerified() && userDocExists() && getUserData().role == 'pastor'
+      );
+    }
+
+    function isUsher() {
+      return isPastor() || (
+        isVerified() && userDocExists() && getUserData().role == 'usher'
+      );
+    }
+
+    function isFinance() {
+      return isAdmin() || (
+        isVerified() && userDocExists() && getUserData().role == 'finance'
+      );
+    }
+
+    function isStaff() {
+      return isSuperAdmin() || isAdmin() || isPastor() || isUsher() || isFinance();
+    }
+
+    // Entity validation blueprints
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'name', 'email', 'role']) &&
-        data.keys().hasOnly(['id', 'name', 'email', 'photoURL', 'role', 'title', 'campusName', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'name', 'email', 'photoURL', 'role', 'title', 'campusName', 'createdAt', 'tenant_id', 'campus_id', 'memberId', 'permissions', 'initials']) &&
         data.id is string && data.id.size() <= 128 &&
         data.name is string && data.name.size() > 0 && data.name.size() <= 120 &&
         data.email is string && data.email.size() > 0 && data.email.size() <= 254 &&
-        data.role in ['admin', 'usher', 'member'] &&
-        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024)) &&
-        (!('title' in data) || (data.title is string && data.title.size() <= 120)) &&
-        (!('campusName' in data) || (data.campusName is string && data.campusName.size() <= 120)) &&
-        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64));
+        data.role in ['super_admin', 'creator', 'admin', 'pastor', 'usher', 'member', 'group_leader', 'finance'];
     }
 
-    // 2. Users Collection
+    // 2. Users Collection (RBAC Profiles)
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isStaff());
       allow list: if isAdmin();
       allow create: if isVerified() &&
         isValidId(userId) &&
         request.auth.uid == userId &&
         isValidUser(incoming()) &&
         incoming().id == userId &&
-        incoming().email == request.auth.token.email &&
-        (incoming().role == 'member' || isAdmin());
+        (isSuperAdmin() || incoming().role in ['member', 'usher']);
       allow update: if isVerified() &&
         isValidId(userId) &&
         isValidUser(incoming()) &&
-        incoming().id == existing().id &&
-        incoming().email == existing().email && (
+        incoming().id == existing().id && (
           isAdmin() ||
           (request.auth.uid == userId &&
            incoming().role == existing().role &&
-           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL', 'title', 'campusName']))
+           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL', 'title', 'campusName', 'initials']))
         );
-      allow delete: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId) && isSuperAdmin();
     }
 
-    // 3. Members Collection (Congregation Roster)
+    // 3. Members Collection (Congregation Directory)
     match /members/{memberId} {
-      allow get: if isSignedIn() && isValidId(memberId) && (isAdmin() || resource.data.id == request.auth.uid);
-      allow list: if isAdmin();
-      allow create, update, delete: if isValidId(memberId) && isAdmin();
+      allow get: if isSignedIn() && isValidId(memberId) && (
+        isStaff() ||
+        resource.data.id == request.auth.uid ||
+        (resource.data.email is string && resource.data.email == request.auth.token.email)
+      );
+      allow list: if isStaff();
+      allow create, update: if isValidId(memberId) && isPastor();
+      allow delete: if isValidId(memberId) && isAdmin();
     }
 
-    // 4. Attendance Records
+    // 4. Attendance Records (Sanctuary Radar & Check-ins)
     match /attendance_records/{recordId} {
-      allow get: if isSignedIn() && isValidId(recordId) && (isAdmin() || resource.data.personId == request.auth.uid);
-      allow list: if isSignedIn() && (isAdmin() || resource.data.personId == request.auth.uid);
+      allow get: if isSignedIn() && isValidId(recordId) && (
+        isStaff() ||
+        resource.data.personId == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isStaff() ||
+        resource.data.personId == request.auth.uid
+      );
       allow create: if isVerified() && isValidId(recordId) && (
-        isAdmin() ||
+        isUsher() ||
         (incoming().personId is string && incoming().personId.size() <= 128 && incoming().personId == request.auth.uid)
       );
-      allow update, delete: if isValidId(recordId) && isAdmin();
+      allow update: if isValidId(recordId) && isUsher();
+      allow delete: if isValidId(recordId) && isPastor();
     }
 
-    // 5. System Settings (Church premise geofence & GPS parameters)
+    // 5. System Settings (Church Premise Geofence & Radii)
     match /system_settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if isSignedIn();
-      allow write: if isValidId(settingId) && (
-        isAdmin() ||
-        (isVerified() && (request.auth.token.email == 'elenamends@gmail.com' || request.auth.token.email == 'amoakoemmanuel2026@gmail.com'))
-      );
+      allow write: if isValidId(settingId) && isAdmin();
     }
 
-    // 6. Church Groups (Ministries, Fellowships, Cell Groups)
+    // 6. Church Groups (Ministries, Fellowships, Home Cells)
     match /church_groups/{groupId} {
       allow get: if isSignedIn() && isValidId(groupId);
       allow list: if isSignedIn() && resource.data.active == true;
-      allow write: if isValidId(groupId) && isAdmin();
+      allow write: if isValidId(groupId) && isPastor();
     }
 
-    // 7. Test connection probe
+    // 7. Donations (Giving, Tithing & MoMo Offerings)
+    match /donations/{donationId} {
+      allow get: if isSignedIn() && isValidId(donationId) && (
+        isFinance() ||
+        resource.data.personId == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isFinance() ||
+        resource.data.personId == request.auth.uid
+      );
+      allow create: if isVerified() && isValidId(donationId) && (
+        isFinance() ||
+        (incoming().personId is string && incoming().personId == request.auth.uid)
+      );
+      allow update, delete: if isValidId(donationId) && isFinance();
+    }
+
+    // 8. Licenses (Multi-Tenant Software Subscriptions)
+    match /licenses/{licenseId} {
+      allow get: if isSignedIn() && isValidId(licenseId) && isAdmin();
+      allow list: if isSuperAdmin();
+      allow write: if isValidId(licenseId) && isSuperAdmin();
+    }
+
+    // 9. Test connection probe
     match /test/{docId} {
       allow get: if isValidId(docId);
     }

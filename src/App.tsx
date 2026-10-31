@@ -16,6 +16,29 @@ const EkklesphereMain: React.FC = () => {
 
   // If Creator Console view is active
   if (viewMode === 'creator') {
+    const isCreatorAllowed = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
+    if (!isCreatorAllowed) {
+      return (
+        <div className="min-h-screen w-full flex items-center justify-center bg-[#0D0D22] text-[#F2F2FA] p-4">
+          <div className="max-w-md w-full bg-[#171738] p-6 rounded-2xl border border-rose-500/30 text-center space-y-4">
+            <div className="w-12 h-12 rounded-xl bg-rose-500/10 text-rose-400 mx-auto flex items-center justify-center font-bold text-xl">
+              !
+            </div>
+            <h2 className="text-lg font-bold">Access Restricted</h2>
+            <p className="text-xs text-zinc-400">
+              The Creators Panel is strictly restricted to platform <strong>super_admin</strong> and <strong>creator</strong> roles. Your current role is <span className="text-amber-400 font-semibold">{currentUser?.role || 'unauthenticated'}</span>.
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] transition-colors cursor-pointer"
+            >
+              Return to Safe Portal
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F5F6FA] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
         <CreatorsPanel />
@@ -64,16 +87,20 @@ const EkklesphereMain: React.FC = () => {
       {/* Top Application Portal Header */}
       {currentUser && <AppHeader />}
 
-      {/* Role view */}
+      {/* Role-governed portal rendering */}
       {!currentUser ? (
         <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8">
           <UnifiedAuthScreen />
         </div>
       ) : (
         <>
-          {currentUser.role === 'admin' && <AdminDashboard />}
+          {(currentUser.role === 'admin' ||
+            currentUser.role === 'pastor' ||
+            currentUser.role === 'super_admin' ||
+            currentUser.role === 'creator' ||
+            currentUser.role === 'finance') && <AdminDashboard />}
           {currentUser.role === 'usher' && <UsherTool />}
-          {currentUser.role === 'member' && <MemberApp />}
+          {(currentUser.role === 'member' || currentUser.role === 'group_leader') && <MemberApp />}
         </>
       )}
 

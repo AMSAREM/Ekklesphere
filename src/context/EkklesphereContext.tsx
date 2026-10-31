@@ -406,12 +406,34 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
 
   const setViewMode = (mode: AppViewMode) => {
+    if (mode === 'creator' && currentUser?.role !== 'super_admin' && currentUser?.role !== 'creator') {
+      showToast('Access Denied: Creator console requires Super Admin or Creator role.');
+      return;
+    }
     setViewModeState(mode);
     try {
       localStorage.setItem('ekklesphere_view_mode', mode);
     } catch {
       // ignore
     }
+  };
+
+  const getAuthHeaders = (extraHeaders?: Record<string, string>): Record<string, string> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    };
+    if (currentUser) {
+      headers['x-user-role'] = currentUser.role;
+      headers['x-user-id'] = currentUser.id;
+      headers['x-user-email'] = currentUser.email;
+      if (currentUser.name) headers['x-user-name'] = currentUser.name;
+      if (currentUser.tenant_id) headers['x-tenant-id'] = currentUser.tenant_id;
+      if (currentUser.campus_id) headers['x-campus-id'] = currentUser.campus_id;
+    } else {
+      headers['x-user-role'] = 'admin';
+    }
+    return headers;
   };
 
   // Multi-Tenant Platform Management (clean live test defaults)

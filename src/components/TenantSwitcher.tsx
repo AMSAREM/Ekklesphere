@@ -6,8 +6,8 @@ import { Building2, Check, ShieldCheck } from 'lucide-react';
 export const TenantSwitcher: React.FC = () => {
   const { currentUser, tenants, impersonateTenant } = useEkklesphere();
 
-  // CRITICAL SECURITY ENFORCEMENT (Step 2):
-  // Tenant switching across arbitrary schools/campuses is strictly restricted to verified
+  // CRITICAL SECURITY ENFORCEMENT:
+  // Tenant switching across arbitrary church campuses/tenants is strictly restricted to verified
   // 'super_admin' or 'creator' roles in Supabase. Backdoors have been permanently purged.
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
 

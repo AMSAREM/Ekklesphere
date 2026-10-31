@@ -96,8 +96,8 @@ export function requireRoles(...allowedRoles: ChurchRole[]) {
 
     const { role } = req.user;
 
-    // Platform administrators have broad management scope
-    if (role === 'super_admin' || role === 'creator' || role === 'admin') {
+    // Platform super administrators have master management access
+    if (role === 'super_admin' || role === 'creator') {
       return next();
     }
 
@@ -110,6 +110,40 @@ export function requireRoles(...allowedRoles: ChurchRole[]) {
       message: `Access denied. Role '${role}' does not possess required church permissions.`,
     });
   };
+}
+
+/**
+ * Checks whether a given role has staff-level access.
+ */
+export function isStaffRole(role?: ChurchRole): boolean {
+  if (!role) return false;
+  return ['super_admin', 'creator', 'admin', 'pastor', 'usher', 'finance'].includes(role);
+}
+
+/**
+ * Role permission checks for granular access control.
+ */
+export function canManagePremise(role?: ChurchRole): boolean {
+  return role === 'super_admin' || role === 'creator' || role === 'admin';
+}
+
+export function canManageMembers(role?: ChurchRole): boolean {
+  return role === 'super_admin' || role === 'creator' || role === 'admin' || role === 'pastor';
+}
+
+export function canCheckinAttendance(role?: ChurchRole): boolean {
+  return (
+    role === 'super_admin' ||
+    role === 'creator' ||
+    role === 'admin' ||
+    role === 'pastor' ||
+    role === 'usher' ||
+    role === 'member'
+  );
+}
+
+export function canManageFinance(role?: ChurchRole): boolean {
+  return role === 'super_admin' || role === 'creator' || role === 'admin' || role === 'finance';
 }
 
 /**

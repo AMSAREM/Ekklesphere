@@ -438,16 +438,18 @@ export const AppHeader: React.FC = () => {
 
                   {/* System Settings, Creator & Help Links */}
                   <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55] space-y-0.5">
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        setViewMode('creator');
-                      }}
-                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#EFEDFF] dark:hover:bg-[#1E1C38] transition-all cursor-pointer"
-                    >
-                      <Sliders className="w-3.5 h-3.5" />
-                      <span>Creators Panel (Tenants/Licenses)</span>
-                    </button>
+                    {(currentUser.role === 'super_admin' || currentUser.role === 'creator') && (
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setViewMode('creator');
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#EFEDFF] dark:hover:bg-[#1E1C38] transition-all cursor-pointer"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                        <span>Creators Panel (Tenants/Licenses)</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         setIsUserMenuOpen(false);
@@ -458,16 +460,18 @@ export const AppHeader: React.FC = () => {
                       <Globe className="w-3.5 h-3.5 text-blue-500" />
                       <span>Public Landing Page</span>
                     </button>
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        setIsSettingsModalOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 transition-all cursor-pointer"
-                    >
-                      <Settings className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
-                      <span>Church Settings</span>
-                    </button>
+                    {(currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'creator') && (
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setIsSettingsModalOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 transition-all cursor-pointer"
+                      >
+                        <Settings className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
+                        <span>Church Settings</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         setIsUserMenuOpen(false);

@@ -48,6 +48,7 @@ interface SystemSettingsPanelProps {
 
 export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClose, isModal }) => {
   const {
+    currentUser,
     systemSettings,
     updateSystemSettings,
     resetSystemSettings,
@@ -67,6 +68,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     requestPushPermission,
     sendTestPushNotification,
   } = useEkklesphere();
+
+  const isSettingsAdmin =
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'super_admin' ||
+    currentUser?.role === 'creator';
 
   const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways'>('general');
   const [formData, setFormData] = useState<SystemSettings>({ ...systemSettings });
@@ -216,6 +222,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!isSettingsAdmin) {
+      showToast('Access Denied: Only administrators can modify church geofence parameters.');
+      return;
+    }
     let updatedPayload: SystemSettings = { ...formData };
 
     if (latInput.trim() !== '' && lngInput.trim() !== '') {

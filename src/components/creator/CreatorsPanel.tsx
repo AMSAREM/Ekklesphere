@@ -38,6 +38,7 @@ import {
 
 export const CreatorsPanel: React.FC = () => {
   const {
+    currentUser,
     tenants,
     addTenant,
     updateTenant,
@@ -54,6 +55,33 @@ export const CreatorsPanel: React.FC = () => {
     setViewMode,
     showToast,
   } = useEkklesphere();
+
+  const isAuthorized = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
+
+  if (!isAuthorized) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#0D0D22] text-[#F2F2FA] p-6">
+        <div className="max-w-md w-full bg-[#181838] p-8 rounded-3xl border border-rose-500/30 text-center space-y-4 shadow-2xl">
+          <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-400 mx-auto flex items-center justify-center font-bold text-2xl">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold">Creator Access Restricted</h2>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Multi-tenant licensing, billing lifecycle, and system configuration require verified <strong>super_admin</strong> or <strong>creator</strong> role credentials.
+          </p>
+          <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs">
+            Current Account Role: <span className="font-bold text-amber-400">{currentUser?.role || 'Guest'}</span>
+          </div>
+          <button
+            onClick={() => setViewMode('app')}
+            className="w-full py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white font-bold text-xs transition-colors cursor-pointer"
+          >
+            Return to Church Application
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const [activeTab, setActiveTab] = useState<'tenants' | 'licenses' | 'landing_cms' | 'telemetry'>('tenants');
   const [tenantSearch, setTenantSearch] = useState('');

@@ -113,6 +113,42 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "name", "category", "leaderName", "active"]
+    },
+    "Donation": {
+      "title": "Donation",
+      "description": "Church offering, tithing, or ministry contribution record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "personId": { "type": "string" },
+        "fundName": { "type": "string" },
+        "amountMinor": { "type": "number" },
+        "currency": { "type": "string" },
+        "method": { "type": "string", "enum": ["momo", "card", "cash", "bank"] },
+        "provider": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "paid", "failed"] },
+        "paidAt": { "type": "string" }
+      },
+      "required": ["id", "fundName", "amountMinor", "currency", "method", "provider", "status", "paidAt"]
+    },
+    "License": {
+      "title": "License",
+      "description": "Platform subscription license for a church congregation tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "tier": { "type": "string", "enum": ["grace_starter", "ministry_pro", "cathedral_enterprise"] },
+        "tenantId": { "type": "string" },
+        "seatsLimit": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "expired", "revoked", "grace_period"] },
+        "issuedDate": { "type": "string" },
+        "expiresDate": { "type": "string" },
+        "billingCycle": { "type": "string", "enum": ["monthly", "annual", "lifetime"] },
+        "annualCostUSD": { "type": "number" }
+      },
+      "required": ["id", "key", "tier", "seatsLimit", "status", "issuedDate"]
     }
   },
   "firestore": {
@@ -135,6 +171,14 @@
     "/church_groups/{groupId}": {
       "schema": "ChurchGroup",
       "description": "Ministries, demographic fellowships, and neighborhood home cell small groups"
+    },
+    "/donations/{donationId}": {
+      "schema": "Donation",
+      "description": "Church financial donations, offerings, and tithing"
+    },
+    "/licenses/{licenseId}": {
+      "schema": "License",
+      "description": "Platform tenant software licenses"
     }
   }
 }
