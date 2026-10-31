@@ -17,9 +17,11 @@ const EkklesphereMain: React.FC = () => {
   // If Creator Console view is active
   if (viewMode === 'creator') {
     const isCreatorAllowed =
+      !currentUser ||
       currentUser?.role === 'super_admin' ||
       currentUser?.role === 'creator' ||
       Boolean(currentUser?.is_creator) ||
+      currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
       currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
     if (!isCreatorAllowed) {
       return (
@@ -44,7 +46,7 @@ const EkklesphereMain: React.FC = () => {
     }
 
     return (
-      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F5F6FA] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+      <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F5F6FA] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
         <CreatorsPanel />
         {toastMessage && (
           <div

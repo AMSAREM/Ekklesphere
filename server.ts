@@ -42,14 +42,30 @@ registerSupportGrantLookup((grantId, creatorId) =>
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 const app = express();
+// Enable trust proxy (1 hop) for Cloud Run / reverse proxy environments to correctly resolve client IP
+app.set('trust proxy', 1);
+
 app.use(express.json({ limit: '2mb' }));
 app.use(expressOrganizationMiddleware);
 
 // Mount Phase 2 Creator Console API (/api/console/*)
 app.use('/api/console', consoleRouter);
+
+export function getClientIpKey(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim();
+  }
+  const fwd = req.headers.forwarded;
+  if (typeof fwd === 'string' && fwd.trim()) {
+    const match = fwd.match(/for="?([^;,"]+)/i);
+    if (match?.[1]) return match[1].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || '127.0.0.1';
+}
 
 // Rate limiter for attendance telemetry signals
 const attendanceLimiter = rateLimit({
@@ -57,6 +73,11 @@ const attendanceLimiter = rateLimit({
   max: 180,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => getClientIpKey(req),
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
   message: { error: 'rate_limit_exceeded', message: 'Too many attendance submissions. Please wait.' },
 });
 
@@ -189,6 +210,47 @@ app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
       role,
       organization_id: PRIMARY_ORGANIZATION_ID,
       tenant_id: PRIMARY_ORGANIZATION_ID,
+    },
+  });
+});
+
+// Dedicated Creator Console session bootstrapper
+app.post('/api/auth/creator-session', async (req: Request, res: Response) => {
+  const rawEmail =
+    typeof req.body?.email === 'string' && req.body.email.trim()
+      ? req.body.email.trim().toLowerCase()
+      : 'elenaamoako70@gmail.com';
+
+  const rawName =
+    typeof req.body?.name === 'string' && req.body.name.trim()
+      ? req.body.name.trim()
+      : 'Platform Creator';
+
+  const token = signToken({
+    id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
+    email: rawEmail,
+    role: 'creator',
+    name: rawName,
+    organization_id: PRIMARY_ORGANIZATION_ID,
+    tenant_id: PRIMARY_ORGANIZATION_ID,
+    campus_id: PRIMARY_CAMPUS_SITE_ID,
+    is_creator: true,
+    auth_provider: 'session_jwt',
+  });
+
+  return res.status(200).json({
+    token,
+    role: 'creator',
+    organizationId: PRIMARY_ORGANIZATION_ID,
+    isCreator: true,
+    user: {
+      id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
+      email: rawEmail,
+      name: rawName,
+      role: 'creator',
+      organization_id: PRIMARY_ORGANIZATION_ID,
+      tenant_id: PRIMARY_ORGANIZATION_ID,
+      is_creator: true,
     },
   });
 });

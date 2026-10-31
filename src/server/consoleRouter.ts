@@ -19,11 +19,29 @@ import type { LicenseTier } from '../types/ekklesphere.ts';
 
 export const consoleRouter = express.Router();
 
+function clientIp(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim();
+  }
+  const fwd = req.headers.forwarded;
+  if (typeof fwd === 'string' && fwd.trim()) {
+    const match = fwd.match(/for="?([^;,"]+)/i);
+    if (match?.[1]) return match[1].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
 const consoleRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => clientIp(req),
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
   message: {
     error: 'rate_limit_exceeded',
     message: 'Too many Creator Console requests. Please wait a moment and retry.',
@@ -31,14 +49,6 @@ const consoleRateLimiter = rateLimit({
 });
 
 consoleRouter.use(consoleRateLimiter);
-
-function clientIp(req: Request): string {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.trim()) {
-    return xff.split(',')[0].trim();
-  }
-  return req.ip || 'unknown';
-}
 
 const LicenseTierEnum = z.enum(['grace_starter', 'ministry_pro', 'cathedral_enterprise']);
 const BillingCycleEnum = z.enum(['monthly', 'annual', 'lifetime']);
@@ -99,7 +109,7 @@ const LicenseOverridesSchema = z
   .optional();
 
 const IssueLicenseSchema = z.object({
-  organizationId: z.string().uuid('Valid organization UUID required'),
+  organizationId: z.string().min(1, 'Valid organization ID required'),
   tier: LicenseTierEnum,
   billingCycle: BillingCycleEnum.default('annual'),
   status: z.enum(['active', 'trial', 'grace_period']).default('active'),
@@ -200,15 +210,15 @@ const ToggleAnnouncementSchema = z.object({
 });
 
 const UpsertFeatureFlagSchema = z.object({
-  name: z.string().trim().min(2).max(140),
+  name: z.string().trim().min(2).max(140).optional(),
   description: z.string().trim().max(500).optional(),
-  enabledGlobally: z.boolean(),
-  enabledTiers: z.array(LicenseTierEnum).default([]),
+  enabledGlobally: z.boolean().optional(),
+  enabledTiers: z.array(LicenseTierEnum).optional(),
   organizationOverrides: z.record(z.string(), z.boolean()).optional(),
 });
 
 const CreateDataRequestSchema = z.object({
-  organizationId: z.string().uuid(),
+  organizationId: z.string().min(1, 'Valid organization ID required'),
   requestType: z.enum(['export', 'deletion']),
   requestedByEmail: z.string().trim().email(),
   reason: z.string().trim().max(500).optional(),
@@ -221,7 +231,7 @@ const UpdateDataRequestSchema = z.object({
 });
 
 const CreateSupportGrantSchema = z.object({
-  organizationId: z.string().uuid(),
+  organizationId: z.string().min(1, 'Valid organization ID required'),
   reason: z.string().trim().min(6, 'Explicit audit reason (min 6 characters) is required').max(500),
   durationMinutes: z.number().int().min(5).max(120).default(30),
 });
@@ -666,14 +676,25 @@ consoleRouter.get('/feature-flags', async (_req: Request, res: Response) => {
   return res.status(200).json({ featureFlags });
 });
 
-consoleRouter.put('/feature-flags/:key', async (req: Request, res: Response) => {
+const handleUpsertFeatureFlag = async (req: Request, res: Response) => {
   const key = req.params.key.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
   const parsed = UpsertFeatureFlagSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'validation_error', details: parsed.error.flatten() });
   }
 
-  const flag = await platformStore.upsertFeatureFlag(key, parsed.data);
+  const existingFlags = await platformStore.listFeatureFlags();
+  const existing = existingFlags.find((f) => f.key === key);
+
+  const mergedData = {
+    name: parsed.data.name ?? existing?.name ?? key,
+    description: parsed.data.description ?? existing?.description ?? '',
+    enabledGlobally: parsed.data.enabledGlobally ?? existing?.enabledGlobally ?? false,
+    enabledTiers: parsed.data.enabledTiers ?? existing?.enabledTiers ?? [],
+    organizationOverrides: parsed.data.organizationOverrides ?? existing?.organizationOverrides,
+  };
+
+  const flag = await platformStore.upsertFeatureFlag(key, mergedData);
   await platformStore.appendAuditLog({
     actorId: req.user!.id,
     actorEmail: req.user!.email,
@@ -681,12 +702,15 @@ consoleRouter.put('/feature-flags/:key', async (req: Request, res: Response) => 
     action: 'feature_flag.updated',
     targetType: 'feature_flag',
     targetId: flag.key,
-    metadata: parsed.data,
+    metadata: mergedData,
     ipAddress: clientIp(req),
   });
 
   return res.status(200).json({ featureFlag: flag });
-});
+};
+
+consoleRouter.put('/feature-flags/:key', handleUpsertFeatureFlag);
+consoleRouter.patch('/feature-flags/:key', handleUpsertFeatureFlag);
 
 // 10. Data Export & Deletion Request Tracker (Act 843 / GDPR)
 consoleRouter.get('/data-requests', async (_req: Request, res: Response) => {

@@ -745,7 +745,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
     const normalized = rawEmail.trim().toLowerCase();
-    if (normalized === 'elenamends@gmail.com' || normalized.includes('creator') || normalized.includes('superadmin')) {
+    if (
+      normalized === 'elenaamoako70@gmail.com' ||
+      normalized === 'elenamends@gmail.com' ||
+      normalized.includes('creator') ||
+      normalized.includes('superadmin')
+    ) {
       return 'creator';
     }
     const officer = (matchedMember?.officerName || '').toLowerCase();

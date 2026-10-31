@@ -740,6 +740,40 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(findMemberByScannedId(sampleRoster, 'UNKNOWN-999')).toBeUndefined();
     });
   });
+
+  describe('Reverse Proxy & Rate Limit Headers (Cloud Run & Gateway)', () => {
+    it('handles X-Forwarded-For and Forwarded headers without throwing express-rate-limit ValidationError', async () => {
+      const res = await request(app)
+        .post('/attendance/events')
+        .set('Authorization', `Bearer ${memberToken}`)
+        .set('X-Forwarded-For', '203.0.113.195, 70.41.3.18')
+        .set('Forwarded', 'for=203.0.113.195;proto=https')
+        .send({
+          clientEventId: '00000000-0000-0000-0000-000000000099',
+          type: 'enter',
+          source: 'geofence',
+          lat: 5.6037,
+          lng: -0.1870,
+          accuracyM: 10,
+          deviceTime: new Date().toISOString(),
+        });
+
+      // Should succeed, never throwing express-rate-limit proxy validation errors
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('accepted');
+    });
+
+    it('handles Forwarded RFC 7239 header on console endpoints without validation error', async () => {
+      const res = await request(app)
+        .get('/api/console/cron/rollup')
+        .set('X-Forwarded-For', '198.51.100.1')
+        .set('Forwarded', 'for="198.51.100.1:443";proto=https');
+
+      // Reaches route logic cleanly rather than crashing in rate-limiter middleware
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized_cron');
+    });
+  });
 });
 
 
