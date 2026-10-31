@@ -23,12 +23,14 @@ create table if not exists public.tenants (
 
 alter table public.tenants enable row level security;
 
+drop policy if exists "tenants_select" on public.tenants;
 create policy "tenants_select" on public.tenants
   for select using (
     id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "tenants_admin_all" on public.tenants;
 create policy "tenants_admin_all" on public.tenants
   for all using (
     (auth.jwt() ->> 'role') in ('super_admin', 'creator')
@@ -55,12 +57,14 @@ create table if not exists public.campuses (
 
 alter table public.campuses enable row level security;
 
+drop policy if exists "campuses_tenant_isolation_select" on public.campuses;
 create policy "campuses_tenant_isolation_select" on public.campuses
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "campuses_tenant_isolation_manage" on public.campuses;
 create policy "campuses_tenant_isolation_manage" on public.campuses
   for all using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
@@ -85,6 +89,7 @@ create table if not exists public.users (
 
 alter table public.users enable row level security;
 
+drop policy if exists "users_tenant_scoped_select" on public.users;
 create policy "users_tenant_scoped_select" on public.users
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
@@ -92,12 +97,14 @@ create policy "users_tenant_scoped_select" on public.users
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "users_tenant_scoped_insert" on public.users;
 create policy "users_tenant_scoped_insert" on public.users
   for insert with check (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "users_tenant_scoped_update" on public.users;
 create policy "users_tenant_scoped_update" on public.users
   for update using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
@@ -105,6 +112,7 @@ create policy "users_tenant_scoped_update" on public.users
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "users_tenant_scoped_delete" on public.users;
 create policy "users_tenant_scoped_delete" on public.users
   for delete using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'super_admin', 'creator'))
@@ -161,24 +169,28 @@ create table if not exists public.persons (
 
 alter table public.persons enable row level security;
 
+drop policy if exists "persons_tenant_isolation_select" on public.persons;
 create policy "persons_tenant_isolation_select" on public.persons
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "persons_tenant_isolation_insert" on public.persons;
 create policy "persons_tenant_isolation_insert" on public.persons
   for insert with check (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'usher', 'super_admin', 'creator'))
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "persons_tenant_isolation_update" on public.persons;
 create policy "persons_tenant_isolation_update" on public.persons
   for update using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'usher', 'super_admin', 'creator'))
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "persons_tenant_isolation_delete" on public.persons;
 create policy "persons_tenant_isolation_delete" on public.persons
   for delete using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
@@ -219,12 +231,14 @@ create table if not exists public.service_instances (
 alter table public.services enable row level security;
 alter table public.service_instances enable row level security;
 
+drop policy if exists "services_tenant_select" on public.services;
 create policy "services_tenant_select" on public.services
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "service_instances_tenant_select" on public.service_instances;
 create policy "service_instances_tenant_select" on public.service_instances
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
@@ -252,24 +266,28 @@ create table if not exists public.attendance_records (
 
 alter table public.attendance_records enable row level security;
 
+drop policy if exists "attendance_tenant_isolation_select" on public.attendance_records;
 create policy "attendance_tenant_isolation_select" on public.attendance_records
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "attendance_tenant_isolation_insert" on public.attendance_records;
 create policy "attendance_tenant_isolation_insert" on public.attendance_records
   for insert with check (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'usher', 'super_admin', 'creator'))
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "attendance_tenant_isolation_update" on public.attendance_records;
 create policy "attendance_tenant_isolation_update" on public.attendance_records
   for update using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'usher', 'super_admin', 'creator'))
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "attendance_tenant_isolation_delete" on public.attendance_records;
 create policy "attendance_tenant_isolation_delete" on public.attendance_records
   for delete using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
@@ -295,12 +313,14 @@ create table if not exists public.donations (
 
 alter table public.donations enable row level security;
 
+drop policy if exists "donations_tenant_isolation_select" on public.donations;
 create policy "donations_tenant_isolation_select" on public.donations
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "donations_tenant_isolation_insert" on public.donations;
 create policy "donations_tenant_isolation_insert" on public.donations
   for insert with check (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'finance', 'super_admin', 'creator'))
@@ -344,9 +364,11 @@ create table if not exists public.system_settings (
 
 alter table public.system_settings enable row level security;
 
+drop policy if exists "system_settings_select" on public.system_settings;
 create policy "system_settings_select" on public.system_settings
   for select using (true);
 
+drop policy if exists "system_settings_update" on public.system_settings;
 create policy "system_settings_update" on public.system_settings
   for all using (
     (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and (auth.jwt() ->> 'role') in ('admin', 'pastor', 'super_admin', 'creator'))
@@ -373,12 +395,14 @@ create table if not exists public.licenses (
 
 alter table public.licenses enable row level security;
 
+drop policy if exists "licenses_tenant_isolation_select" on public.licenses;
 create policy "licenses_tenant_isolation_select" on public.licenses
   for select using (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid 
     or (auth.jwt() ->> 'role') in ('super_admin', 'creator')
   );
 
+drop policy if exists "licenses_creator_manage" on public.licenses;
 create policy "licenses_creator_manage" on public.licenses
   for all using (
     (auth.jwt() ->> 'role') in ('super_admin', 'creator')
