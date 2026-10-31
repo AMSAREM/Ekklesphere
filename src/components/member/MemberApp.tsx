@@ -31,6 +31,7 @@ import {
   Send,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
+import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -484,6 +485,24 @@ export const MemberApp: React.FC = () => {
                 </span>
               </div>
 
+              {/* Church Mini-Map Preview & Device Native Map Integration */}
+              {isPremiseConfigured && (
+                <div className="mt-3">
+                  <ChurchLocationMiniMap
+                    churchName={systemSettings.churchName}
+                    campusName={systemSettings.campusName}
+                    campusAddress={systemSettings.campusAddress}
+                    latitude={systemSettings.campusLatitude!}
+                    longitude={systemSettings.campusLongitude!}
+                    innerRadiusM={systemSettings.innerGeofenceMeters}
+                    outerRadiusM={systemSettings.outerGeofenceMeters}
+                    livePosition={livePosition}
+                    isCheckedIn={true}
+                    onToast={showToast}
+                  />
+                </div>
+              )}
+
               <div className="mt-4 pt-4 border-t border-white/20 flex flex-wrap items-center justify-between gap-3 text-xs text-white/90">
                 <span className="flex items-center gap-1.5 font-mono">
                   <MapPin className="w-3.5 h-3.5 shrink-0" />
@@ -528,6 +547,22 @@ export const MemberApp: React.FC = () => {
                     : 'Live GPS Ready'}
                 </span>
               </div>
+
+              {/* Mini-Map Preview & Device Native Map Integration */}
+              {isPremiseConfigured && (
+                <ChurchLocationMiniMap
+                  churchName={systemSettings.churchName}
+                  campusName={systemSettings.campusName}
+                  campusAddress={systemSettings.campusAddress}
+                  latitude={systemSettings.campusLatitude!}
+                  longitude={systemSettings.campusLongitude!}
+                  innerRadiusM={systemSettings.innerGeofenceMeters}
+                  outerRadiusM={systemSettings.outerGeofenceMeters}
+                  livePosition={livePosition}
+                  isCheckedIn={false}
+                  onToast={showToast}
+                />
+              )}
 
               {/* Live Device Telemetry Readout when acquired */}
               {livePosition && (
