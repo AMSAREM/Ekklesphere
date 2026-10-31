@@ -28,6 +28,7 @@ import {
   TenantStatus,
   BillingCycle,
   LandingPageConfig,
+  LiveTelemetrySummary,
 } from '../types/ekklesphere';
 import { pushNotificationService } from '../services/pushNotificationService';
 
@@ -91,8 +92,8 @@ interface EkklesphereContextType {
   toggleSidebar: () => void;
   isMobileNavOpen: boolean;
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  adminSubTab: 'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings';
-  setAdminSubTab: (tab: 'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
+  adminSubTab: 'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings';
+  setAdminSubTab: (tab: 'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isAddServiceOpen: boolean;
@@ -169,6 +170,7 @@ interface EkklesphereContextType {
   autoCheckinOptedInCount: number;
   totalMembersCount: number;
   optInPercentage: number;
+  telemetrySummary: LiveTelemetrySummary;
 
   // Check-in Actions
   checkInPerson: (personId: string, method: CheckinMethod, confidence?: number, note?: string) => boolean;
@@ -402,7 +404,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return false;
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
-  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAddServiceOpen, setIsAddServiceOpen] = useState<boolean>(false);
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
@@ -1164,6 +1166,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Real live attendance records synchronized across devices via /api/campus-premise & /api/live-checkins
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [telemetrySummary, setTelemetrySummary] = useState<LiveTelemetrySummary>({
+    totalSignals: 0,
+    accepted: 0,
+    flagged: 0,
+    rejected: 0,
+    mockAttempts: 0,
+    openShifts: 0,
+    avgDwellMinutes: null,
+    recentSignals: [],
+  });
 
   // Web Push Notification States & Service Worker Integration
   const [pushPermissionStatus, setPushPermissionStatus] = useState<NotificationPermission | 'unsupported'>(
@@ -1321,16 +1333,31 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const person = members.find((m) => m.id === personId);
     const personFullName = person ? `${person.firstName} ${person.lastName}`.trim() : currentUser?.name || 'Member';
+    const now = new Date();
+    let isLate = false;
+    if (!currentService.date || currentService.date === formatLocalDateIso(now)) {
+      const [sh, sm] = (currentService.startsAt || '').split(':').map(Number);
+      if (Number.isFinite(sh) && Number.isFinite(sm)) {
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const graceDeadlineMinutes = sh * 60 + sm + 15;
+        if (currentMinutes > graceDeadlineMinutes) {
+          isLate = true;
+        }
+      }
+    }
+
     const newRecord: AttendanceRecord = {
       id: `rec-${personId}-${Date.now()}`,
       tenantId: 'tenant-live',
       personId,
+      personName: personFullName,
       serviceInstanceId: activeServiceId,
       campusId: '00000000-0000-0000-0000-000000000001',
       method,
       confidence,
-      checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      late: false,
+      checkedInAt: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      checkedInIso: now.toISOString(),
+      late: isLate,
       note,
       waitingToSync: !isUsherOnline,
     };
@@ -1343,7 +1370,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } else {
       fetch('/api/live-checkins', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           ...newRecord,
           personName: personFullName,
@@ -1366,7 +1393,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         actor: method === 'usher' ? 'Usher Desk' : `${person?.firstName || personFullName} Device`,
         action: 'Attendance Recorded',
         entityType: 'AttendanceRecord',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         details: note || `Method: ${method}, Confidence: ${confidence}%`,
       },
       ...prev,
@@ -1379,6 +1406,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setAttendanceRecords((prev) => prev.filter((r) => r.personId !== personId));
     fetch(`/api/live-checkins/${encodeURIComponent(personId)}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     }).catch((err) => console.warn('Could not remove check-in on server:', err));
     const person = members.find((m) => m.id === personId);
     showToast(`Check-in removed for ${person?.firstName || 'Member'}`);
@@ -1386,7 +1414,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const refreshMembers = async (): Promise<void> => {
     try {
-      const res = await fetch('/api/members');
+      const res = await fetch('/api/members', { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -1800,7 +1828,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
               // Push restored premise back to server to keep it active
               fetch('/api/campus-premise', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({
                   lat: latVal,
                   lng: lngVal,
@@ -1843,6 +1871,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const remainingOffline = offlineQueued.filter((r) => !serverIds.has(r.personId));
           return [...remainingOffline, ...serverData.liveCheckins];
         });
+      }
+
+      if (serverData?.telemetrySummary) {
+        setTelemetrySummary(serverData.telemetrySummary);
       }
     } catch {
       // ignore transient network errors
@@ -2417,7 +2449,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const person = members.find((m) => m.id === rec.personId);
       fetch('/api/live-checkins', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           ...rec,
           waitingToSync: false,
@@ -2630,6 +2662,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         autoCheckinOptedInCount,
         totalMembersCount,
         optInPercentage,
+        telemetrySummary,
         checkInPerson,
         removeCheckIn,
         isUsherOnline,

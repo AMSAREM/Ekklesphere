@@ -17,7 +17,11 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = 3000;
-const LIVE_STATE_PATH = path.join(os.tmpdir(), 'ekklesphere_live_campus_state.json');
+const IS_TEST_RUNTIME = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+const LIVE_STATE_PATH = path.join(
+  os.tmpdir(),
+  IS_TEST_RUNTIME ? 'ekklesphere_test_campus_state.json' : 'ekklesphere_live_campus_state.json'
+);
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 const PRIMARY_ORGANIZATION_ID = 'e0000000-0000-0000-0000-000000000001';
 
@@ -91,6 +95,7 @@ interface LiveCheckinRecord {
   method: 'usher' | 'posted_qr' | 'beacon' | 'geofence' | 'email_link' | 'manual';
   confidence: number;
   checkedInAt: string;
+  checkedInIso?: string;
   departedAt?: string;
   late: boolean;
   recordedBy?: string;
@@ -379,6 +384,78 @@ const MAX_ACCURACY_M = 100;
 // CHURCH PREMISE GPS GEOFENCE CONFIGURATION ENDPOINTS
 // =========================================================================
 
+function computeTelemetrySummary() {
+  let accepted = 0;
+  let flagged = 0;
+  let rejected = 0;
+  let mockAttempts = 0;
+
+  for (const ev of inMemoryEvents) {
+    if (ev.status === 'accepted') accepted++;
+    else if (ev.status === 'flagged') flagged++;
+    else if (ev.status === 'rejected') rejected++;
+    if (ev.is_mock || ev.flag_reasons?.includes('mock_location')) mockAttempts++;
+  }
+
+  const eventsByUser = new Map<string, StoredEvent[]>();
+  for (const ev of inMemoryEvents) {
+    const list = eventsByUser.get(ev.user_id) || [];
+    list.push(ev);
+    eventsByUser.set(ev.user_id, list);
+  }
+
+  let openShifts = 0;
+  const completedDurations: number[] = [];
+
+  for (const userEvents of eventsByUser.values()) {
+    const chronological = [...userEvents].sort(
+      (a, b) => new Date(a.server_time).getTime() - new Date(b.server_time).getTime()
+    );
+    let openIn: StoredEvent | null = null;
+    for (const ev of chronological) {
+      if (ev.type === 'enter' || ev.type === 'manual_in') {
+        openIn = ev;
+      } else if ((ev.type === 'exit' || ev.type === 'manual_out') && openIn) {
+        const durMin = Math.max(
+          0,
+          Math.round((new Date(ev.server_time).getTime() - new Date(openIn.server_time).getTime()) / 60000)
+        );
+        completedDurations.push(durMin);
+        openIn = null;
+      }
+    }
+    if (openIn) openShifts++;
+  }
+
+  const avgDwellMinutes =
+    completedDurations.length > 0
+      ? Math.round(completedDurations.reduce((a, b) => a + b, 0) / completedDurations.length)
+      : null;
+
+  return {
+    totalSignals: inMemoryEvents.length,
+    accepted,
+    flagged,
+    rejected,
+    mockAttempts,
+    openShifts,
+    avgDwellMinutes,
+    recentSignals: inMemoryEvents.slice(0, 12).map((e) => ({
+      id: e.id,
+      person_id: e.person_id || e.user_id,
+      person_name: e.person_name,
+      type: e.type,
+      source: e.source,
+      distance_m: e.distance_m,
+      accuracy_m: e.accuracy_m,
+      is_mock: e.is_mock,
+      server_time: e.server_time,
+      status: e.status,
+      flag_reasons: e.flag_reasons,
+    })),
+  };
+}
+
 app.get(['/campus-premise', '/api/campus-premise'], (_req: Request, res: Response) => {
   const isConfigured =
     premiseSettings !== null &&
@@ -394,6 +471,7 @@ app.get(['/campus-premise', '/api/campus-premise'], (_req: Request, res: Respons
     premiseSettings,
     liveCheckins,
     totalCheckedIn: liveCheckins.length,
+    telemetrySummary: computeTelemetrySummary(),
   });
 });
 
@@ -794,6 +872,7 @@ app.post(
       }
     }
 
+    const nowIso = new Date().toISOString();
     const existingIdx = liveCheckins.findIndex((r) => r.personId === body.personId);
     const record: LiveCheckinRecord = {
       id: body.id || `rec-${body.personId}-${Date.now()}`,
@@ -806,6 +885,7 @@ app.post(
       confidence: typeof body.confidence === 'number' ? body.confidence : 95,
       checkedInAt:
         body.checkedInAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      checkedInIso: body.checkedInIso || nowIso,
       late: Boolean(body.late),
       recordedBy: body.recordedBy || req.user?.name || req.user?.role,
       note: body.note,
@@ -820,6 +900,41 @@ app.post(
       liveCheckins.unshift(record);
     }
 
+    const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+    if (
+      supabase &&
+      !isTestEnv &&
+      uuidRegex.test(record.serviceInstanceId) &&
+      uuidRegex.test(record.personId)
+    ) {
+      const mappedDbMethod =
+        record.method === 'posted_qr'
+          ? 'qr_scan'
+          : record.method === 'email_link'
+          ? 'web_link'
+          : record.method;
+      supabase
+        .from('attendance')
+        .upsert(
+          {
+            organization_id: PRIMARY_ORGANIZATION_ID,
+            event_id: record.serviceInstanceId,
+            member_id: record.personId,
+            checked_in_at: record.checkedInIso || nowIso,
+            method: mappedDbMethod,
+            status: 'accepted',
+            confidence_score: Math.min(100, Math.max(0, Math.round(record.confidence))),
+            distance_m: record.distanceM ?? null,
+            notes: record.note || null,
+          },
+          { onConflict: 'organization_id,event_id,member_id' }
+        )
+        .then(
+          () => {},
+          () => {}
+        );
+    }
+
     saveLiveState();
     return res.status(200).json({ success: true, record, liveCheckins });
   }
@@ -827,7 +942,7 @@ app.post(
 
 app.delete(
   ['/live-checkins/:personId', '/api/live-checkins/:personId'],
-  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireAuthRole('usher', 'admin', 'pastor', 'super_admin', 'creator'),
   (req: Request, res: Response) => {
     const { personId } = req.params;
     if (personId === '__all__') {
@@ -931,6 +1046,7 @@ async function handleAttendanceEvent(req: Request, res: Response) {
       method: e.source === 'geofence' ? 'geofence' : 'manual',
       confidence: typeof e.accuracyM === 'number' ? Math.max(70, Math.min(99, Math.round(100 - e.accuracyM / 3))) : 95,
       checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      checkedInIso: now,
       late: false,
       recordedBy: 'GPS Geofence Radar',
       note: `Verified Live GPS (${distance ?? 0}m from center, ±${Math.round(e.accuracyM ?? 0)}m)`,
@@ -1091,6 +1207,64 @@ app.post(['/attendance/auto-close', '/api/attendance/auto-close'], (req: Request
 app.get(['/attendance/sites', '/api/attendance/sites'], (_req: Request, res: Response) => {
   res.status(200).json(registeredSites);
 });
+
+app.get(
+  ['/attendance/insights', '/api/attendance/insights'],
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  (req: Request, res: Response) => {
+    const serviceId = typeof req.query.serviceId === 'string' && req.query.serviceId.trim()
+      ? req.query.serviceId.trim()
+      : null;
+
+    const scopedCheckins = serviceId
+      ? liveCheckins.filter((c) => c.serviceInstanceId === serviceId)
+      : liveCheckins;
+
+    const methodBreakdown: Record<string, number> = {
+      geofence: 0,
+      beacon: 0,
+      usher: 0,
+      posted_qr: 0,
+      manual: 0,
+      email_link: 0,
+    };
+
+    let onTimeCount = 0;
+    let lateCount = 0;
+    let confidenceSum = 0;
+    const gpsDistances: number[] = [];
+
+    for (const rec of scopedCheckins) {
+      methodBreakdown[rec.method] = (methodBreakdown[rec.method] || 0) + 1;
+      if (rec.late) lateCount++;
+      else onTimeCount++;
+      confidenceSum += typeof rec.confidence === 'number' ? rec.confidence : 95;
+      if (typeof rec.distanceM === 'number' && Number.isFinite(rec.distanceM)) {
+        gpsDistances.push(rec.distanceM);
+      }
+    }
+
+    const totalCheckedIn = scopedCheckins.length;
+    const avgConfidence = totalCheckedIn > 0 ? Math.round(confidenceSum / totalCheckedIn) : 0;
+    const avgDistanceM =
+      gpsDistances.length > 0
+        ? Math.round((gpsDistances.reduce((a, b) => a + b, 0) / gpsDistances.length) * 10) / 10
+        : null;
+
+    return res.status(200).json({
+      serviceId,
+      totalCheckedIn,
+      onTimeCount,
+      lateCount,
+      avgConfidence,
+      avgDistanceM,
+      methodBreakdown,
+      telemetrySummary: computeTelemetrySummary(),
+      liveCheckins: scopedCheckins,
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
 
 // =========================================================================
 // CHURCH WORSHIP SERVICES & EVENTS

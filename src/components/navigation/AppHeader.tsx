@@ -18,6 +18,7 @@ import {
   Download,
   Sliders,
   Globe,
+  PieChart,
 } from 'lucide-react';
 
 export const AppHeader: React.FC = () => {
@@ -102,7 +103,7 @@ export const AppHeader: React.FC = () => {
 
 
   const adminTabs: Array<{
-    id: 'dashboard' | 'workflows' | 'proximity' | 'integrations';
+    id: 'dashboard' | 'insights' | 'workflows' | 'proximity' | 'integrations';
     label: string;
     icon: React.ReactNode;
   }> = [
@@ -110,6 +111,11 @@ export const AppHeader: React.FC = () => {
       id: 'dashboard',
       label: 'Dashboard',
       icon: <Grid className="w-4 h-4 text-[#6D5CF2]" />,
+    },
+    {
+      id: 'insights',
+      label: 'Insights',
+      icon: <PieChart className="w-4 h-4 text-[#6D5CF2]" />,
     },
     {
       id: 'workflows',

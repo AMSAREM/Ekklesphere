@@ -202,16 +202,46 @@ export interface AttendanceRecord {
   id: string;
   tenantId: string;
   personId: string;
+  personName?: string;
   serviceInstanceId: string;
   campusId: string;
   method: CheckinMethod;
   confidence: number; // 0-100
   checkedInAt: string;
+  checkedInIso?: string;
   departedAt?: string;
   late: boolean;
   recordedBy?: string;
   note?: string;
+  distanceM?: number | null;
+  lat?: number | null;
+  lng?: number | null;
   waitingToSync?: boolean; // For offline Usher queue
+}
+
+export interface LiveTelemetrySignal {
+  id: string;
+  person_id?: string;
+  person_name?: string;
+  type: 'enter' | 'exit' | 'manual_in' | 'manual_out';
+  source: string;
+  distance_m: number | null;
+  accuracy_m: number | null;
+  is_mock: boolean;
+  server_time: string;
+  status: 'accepted' | 'flagged' | 'rejected';
+  flag_reasons: string[];
+}
+
+export interface LiveTelemetrySummary {
+  totalSignals: number;
+  accepted: number;
+  flagged: number;
+  rejected: number;
+  mockAttempts: number;
+  openShifts: number;
+  avgDwellMinutes: number | null;
+  recentSignals: LiveTelemetrySignal[];
 }
 
 export interface FollowupTask {

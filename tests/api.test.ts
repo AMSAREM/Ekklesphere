@@ -307,6 +307,52 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.success).toBe(true);
       expect(typeof res.body.closedShifts).toBe('number');
     });
+
+    it('GET /api/attendance/insights rejects unauthenticated requests and returns live insights for staff', async () => {
+      const unauthRes = await request(app).get('/api/attendance/insights');
+      expect(unauthRes.status).toBe(401);
+
+      await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${pastorToken}`)
+        .send({
+          personId: 'person-insight-1',
+          personName: 'Kofi Mensah',
+          serviceInstanceId: 'svc-insights-test',
+          method: 'geofence',
+          confidence: 92,
+          late: false,
+          distanceM: 18,
+        });
+
+      await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${pastorToken}`)
+        .send({
+          personId: 'person-insight-2',
+          personName: 'Abena Osei',
+          serviceInstanceId: 'svc-insights-test',
+          method: 'usher',
+          confidence: 98,
+          late: true,
+        });
+
+      const res = await request(app)
+        .get('/api/attendance/insights?serviceId=svc-insights-test')
+        .set('Authorization', `Bearer ${pastorToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.totalCheckedIn).toBe(2);
+      expect(res.body.onTimeCount).toBe(1);
+      expect(res.body.lateCount).toBe(1);
+      expect(res.body.avgConfidence).toBe(95);
+      expect(res.body.avgDistanceM).toBe(18);
+      expect(res.body.methodBreakdown.geofence).toBe(1);
+      expect(res.body.methodBreakdown.usher).toBe(1);
+      expect(res.body.telemetrySummary).toBeDefined();
+      expect(typeof res.body.telemetrySummary.accepted).toBe('number');
+      expect(typeof res.body.telemetrySummary.mockAttempts).toBe('number');
+    });
   });
 
   describe('Church Events & Directory Role-Level Security', () => {

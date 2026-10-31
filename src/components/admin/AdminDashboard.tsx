@@ -42,6 +42,7 @@ import { AddMemberModal } from './AddMemberModal';
 import { SystemSettingsPanel } from './SystemSettingsPanel';
 import { MemberDirectoryTable } from './MemberDirectoryTable';
 import { ImportMembersModal } from './ImportMembersModal';
+import { LiveAttendanceInsights } from './LiveAttendanceInsights';
 import { Person } from '../../types/ekklesphere';
 
 export const AdminDashboard: React.FC = () => {
@@ -78,6 +79,7 @@ export const AdminDashboard: React.FC = () => {
     deleteMember,
     batchImportMembers,
     attendanceRecords,
+    telemetrySummary,
     systemSettings,
     autoCheckinOptedInCount,
     auditLogs,
@@ -86,7 +88,7 @@ export const AdminDashboard: React.FC = () => {
   } = useEkklesphere();
 
   // Active sub-navigation tabs inside Admin
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'workflows' | 'members' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'insights' | 'workflows' | 'members' | 'integrations' | 'proximity' | 'settings'>('dashboard');
   const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages' | 'settings'>('dashboard');
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
@@ -96,6 +98,8 @@ export const AdminDashboard: React.FC = () => {
       setActiveTab(adminSubTab as any);
       if (adminSubTab === 'workflows') {
         setActiveModule('members');
+      } else if (adminSubTab === 'insights') {
+        setActiveModule('attendance');
       } else if (adminSubTab === 'dashboard') {
         setActiveModule('dashboard');
       } else if (adminSubTab === 'settings') {
@@ -218,6 +222,35 @@ export const AdminDashboard: React.FC = () => {
   const openTasks = followupTasks.filter((t) => t.status === 'open');
   const primaryOpenTask = openTasks[0] || null;
 
+  const liveInsightsPreview = React.useMemo(() => {
+    const scoped = attendanceRecords.filter(
+      (r) =>
+        r.serviceInstanceId === currentService.id ||
+        (!r.serviceInstanceId && services.length <= 1)
+    );
+    const total = scoped.length;
+    const late = scoped.filter((r) => r.late).length;
+    const onTime = Math.max(0, total - late);
+    const punctualityPct = total > 0 ? Math.round((onTime / total) * 100) : 0;
+    const autoCount = scoped.filter((r) => r.method === 'geofence' || r.method === 'beacon').length;
+    const assistedCount = Math.max(0, total - autoCount);
+    const threshold = Math.max(1, systemSettings.absenteeThresholdServices || 2);
+    const checkedIds = new Set(scoped.map((r) => r.personId));
+    const atRiskCount = members.filter(
+      (m) => !checkedIds.has(m.id) && (m.consecutiveAbsences || 0) >= threshold
+    ).length;
+
+    return {
+      total,
+      onTime,
+      late,
+      punctualityPct,
+      autoCount,
+      assistedCount,
+      atRiskCount,
+    };
+  }, [attendanceRecords, currentService.id, services.length, systemSettings.absenteeThresholdServices, members]);
+
   const handleQuickArrivalCheckin = () => {
     setActiveTab('workflows');
     setActiveModule('members');
@@ -310,6 +343,7 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => {
               setActiveTab('dashboard');
               setActiveModule('dashboard');
+              setAdminSubTab('dashboard');
             }}
             aria-label="Dashboard Overview"
             aria-current={activeTab === 'dashboard' && activeModule === 'dashboard' ? 'page' : undefined}
@@ -326,30 +360,26 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 2. Live Attendance */}
+        {/* 2. Live Attendance Insights */}
         <div className="relative group">
           <button
             onClick={() => {
-              setActiveTab('dashboard');
+              setActiveTab('insights');
               setActiveModule('attendance');
-              showToast(`Attendance: ${totalCheckedInCount} / ${expectedAttendance} (${attendancePercentage}%)`);
+              setAdminSubTab('insights');
             }}
-            aria-label="Live Attendance"
-            aria-current={activeModule === 'attendance' ? 'page' : undefined}
+            aria-label="Live Attendance Insights"
+            aria-current={activeTab === 'insights' ? 'page' : undefined}
             className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
-              activeModule === 'attendance'
+              activeTab === 'insights'
                 ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
                 : 'text-white/85 hover:text-white hover:bg-white/20'
             }`}
           >
             <PieChart className="w-5 h-5 shrink-0" />
-            <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#59E0AE] border-2 border-[#6D5CF2] animate-pulse" />
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Live Attendance</span>
-            <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-400 dark:text-emerald-600 text-[10px] rounded-full font-extrabold">
-              {attendancePercentage}%
-            </span>
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150 tabular-nums">
+            <span>Live Insights ({attendancePercentage}%)</span>
           </span>
         </div>
 
@@ -359,6 +389,7 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => {
               setActiveTab('workflows');
               setActiveModule('members');
+              setAdminSubTab('workflows');
             }}
             aria-label="Members Directory"
             aria-current={activeTab === 'workflows' ? 'page' : undefined}
@@ -372,7 +403,7 @@ export const AdminDashboard: React.FC = () => {
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Members & Roster</span>
-            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold">
+            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold tabular-nums">
               {members.length}
             </span>
           </span>
@@ -383,6 +414,7 @@ export const AdminDashboard: React.FC = () => {
           <button
             onClick={() => {
               setActiveTab('proximity');
+              setAdminSubTab('proximity');
               showToast('Proximity & Geofencing Radar Suite active');
             }}
             aria-label="Proximity Radar"
@@ -406,6 +438,7 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => {
               setActiveTab('settings');
               setActiveModule('settings');
+              setAdminSubTab('settings');
               showToast('System & Campus Settings');
             }}
             aria-label="System Settings"
@@ -551,6 +584,70 @@ export const AdminDashboard: React.FC = () => {
                 <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">Push, SMS & email</small>
               </div>
             </button>
+          </section>
+
+          {/* Live Attendance Insights Summary Strip */}
+          <section className="my-4 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              <div>
+                <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Live Attendance Insights
+                </h2>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+                  {currentService.name}
+                  {currentService.date ? ` · ${formatServiceDate(currentService.date)}` : ''} ·{' '}
+                  {currentService.startsAt}–{currentService.endsAt}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('insights');
+                  setActiveModule('attendance');
+                  setAdminSubTab('insights');
+                }}
+                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 self-start sm:self-auto whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <PieChart className="w-3.5 h-3.5" />
+                <span>Open Full Insights</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-4 tabular-nums">
+              <div>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
+                  Session Turnout
+                </span>
+                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
+                  {liveInsightsPreview.total} / {expectedAttendance} ({attendancePercentage}%)
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
+                  On-Time Punctuality
+                </span>
+                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
+                  {liveInsightsPreview.punctualityPct}% ({liveInsightsPreview.onTime} on time ·{' '}
+                  {liveInsightsPreview.late} late)
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
+                  Channel Split
+                </span>
+                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
+                  {liveInsightsPreview.autoCount} auto · {liveInsightsPreview.assistedCount} assisted
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
+                  Care & GPS Signals
+                </span>
+                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
+                  {liveInsightsPreview.atRiskCount} at-risk · {telemetrySummary.accepted} GPS verified
+                </span>
+              </div>
+            </div>
           </section>
 
           {/* Cards Grid: Responsive across mobile (1 col), tablet (2 cols), desktop (6 cols) */}
@@ -1025,6 +1122,19 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
         </>
+      )}
+
+      {/* Live Attendance Insights Workspace */}
+      {activeTab === 'insights' && (
+        <div className="mt-4">
+          <LiveAttendanceInsights
+            onOpenAddMember={() => {
+              setEditingMember(null);
+              setIsAddMemberOpen(true);
+            }}
+            onOpenImportModal={() => setIsImportModalOpen(true)}
+          />
+        </div>
       )}
 
       {/* Workflows / Members Directory Tab: Complete 28 Columns Table & Care Workflows */}
