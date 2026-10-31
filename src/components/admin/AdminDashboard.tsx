@@ -133,11 +133,15 @@ export const AdminDashboard: React.FC = () => {
 
   // Schedule new service form state
   const [newServiceName, setNewServiceName] = useState('Sunday Main Service');
+  const [newServiceDate, setNewServiceDate] = useState<string>(
+    () => new Date().toISOString().split('T')[0]
+  );
   const [newServiceTime, setNewServiceTime] = useState('08:00');
   const [newServiceEndTime, setNewServiceEndTime] = useState('10:30');
   const [newServiceExpected, setNewServiceExpected] = useState('');
   const [newServiceDwell, setNewServiceDwell] = useState(String(systemSettings.dwellTimeMinutes || 5));
   const [isCreatingService, setIsCreatingService] = useState(false);
+  const [showAllServicesInCalendar, setShowAllServicesInCalendar] = useState(false);
 
   // New assignment form state
   const [newAssignMemberId, setNewAssignMemberId] = useState('');
@@ -267,11 +271,12 @@ export const AdminDashboard: React.FC = () => {
   return (
     <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] transition-all duration-200">
       {/* Signature Purple Navigation Bar - Fixed to Left Screen Edge on Desktop & Centered Floating Pill on Mobile */}
+      {/* Signature Purple Navigation Bar - 5 Standard Modules */}
       <aside
         aria-label="Admin Module Navigation"
-        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-32px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-3 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none backdrop-blur-md transition-all duration-200"
+        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-32px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-3 px-3 py-1.5 sm:px-4 sm:py-2 lg:py-6 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none backdrop-blur-md transition-all duration-200"
       >
-        {/* 1. Dashboard */}
+        {/* 1. Dashboard Overview */}
         <div className="relative group">
           <button
             onClick={() => {
@@ -293,32 +298,7 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 2. Members & Roster */}
-        <div className="relative group">
-          <button
-            onClick={() => {
-              setActiveTab('workflows');
-              setActiveModule('members');
-            }}
-            aria-label="Members Directory"
-            aria-current={activeTab === 'workflows' ? 'page' : undefined}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
-              activeTab === 'workflows'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
-                : 'text-white/85 hover:text-white hover:bg-white/20'
-            }`}
-          >
-            <Users className="w-5 h-5 shrink-0" />
-          </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Members & Roster</span>
-            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold">
-              {members.length}
-            </span>
-          </span>
-        </div>
-
-        {/* 3. Live Attendance */}
+        {/* 2. Live Attendance */}
         <div className="relative group">
           <button
             onClick={() => {
@@ -345,57 +325,32 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 4. Schedule & Services */}
+        {/* 3. Members & Roster */}
         <div className="relative group">
           <button
-            onClick={() => setIsAddServiceOpen(true)}
-            aria-label="Schedule Service"
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+            onClick={() => {
+              setActiveTab('workflows');
+              setActiveModule('members');
+            }}
+            aria-label="Members Directory"
+            aria-current={activeTab === 'workflows' ? 'page' : undefined}
+            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              activeTab === 'workflows'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold scale-105'
+                : 'text-white/85 hover:text-white hover:bg-white/20'
+            }`}
           >
-            <CalendarIcon className="w-5 h-5 shrink-0" />
+            <Users className="w-5 h-5 shrink-0" />
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Schedule Service</span>
+            <span>Members & Roster</span>
+            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold">
+              {members.length}
+            </span>
           </span>
         </div>
 
-        {/* 5. Care Follow-up */}
-        <div className="relative group">
-          <button
-            onClick={() => setIsFollowupModalOpen(true)}
-            aria-label="Care Follow-up Queue"
-            className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
-          >
-            <CheckSquare className="w-5 h-5 shrink-0" />
-            {followupTasks.filter((t) => t.status === 'open').length > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#EF5A6F] border-2 border-[#6D5CF2]" />
-            )}
-          </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Care Follow-up</span>
-            {followupTasks.filter((t) => t.status === 'open').length > 0 && (
-              <span className="px-1.5 py-0.2 bg-rose-500/20 text-rose-300 text-[10px] rounded-full font-bold">
-                {followupTasks.filter((t) => t.status === 'open').length}
-              </span>
-            )}
-          </span>
-        </div>
-
-        {/* 6. Broadcast Comms */}
-        <div className="relative group">
-          <button
-            onClick={() => setIsMessageModalOpen(true)}
-            aria-label="Broadcast Messages"
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full lg:rounded-[14px] flex items-center justify-center transition-all duration-150 cursor-pointer text-white/85 hover:text-white hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
-          >
-            <Mail className="w-5 h-5 shrink-0" />
-          </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Broadcast Comms</span>
-          </span>
-        </div>
-
-        {/* 7. Proximity Radar */}
+        {/* 4. Proximity & Geofencing Radar */}
         <div className="relative group">
           <button
             onClick={() => {
@@ -417,7 +372,7 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 8. Settings */}
+        {/* 5. System Settings */}
         <div className="relative group">
           <button
             onClick={() => {
@@ -443,6 +398,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Main Content & Active Views */}
       <div className="flex-1 min-w-0 w-full">
+
 
 
 

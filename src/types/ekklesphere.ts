@@ -178,6 +178,7 @@ export interface ServiceInstance {
   serviceId: string;
   campusId: string;
   name: string;
+  date?: string; // YYYY-MM-DD
   startsAt: string;
   endsAt: string;
   status: 'scheduled' | 'open' | 'closed' | 'cancelled';

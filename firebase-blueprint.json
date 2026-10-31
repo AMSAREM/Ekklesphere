@@ -149,9 +149,32 @@
         "annualCostUSD": { "type": "number" }
       },
       "required": ["id", "key", "tier", "seatsLimit", "status", "issuedDate"]
+    },
+    "ServiceEvent": {
+      "title": "ServiceEvent",
+      "description": "Church worship service instance, revival, or special program event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "campusId": { "type": "string" },
+        "name": { "type": "string" },
+        "date": { "type": "string" },
+        "startsAt": { "type": "string" },
+        "endsAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "closed", "scheduled", "draft"] },
+        "expectedAttendance": { "type": "number" },
+        "dwellMinutes": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "startsAt"]
     }
   },
   "firestore": {
+    "/events/{eventId}": {
+      "schema": "ServiceEvent",
+      "description": "Church worship service instances and scheduled programs"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "Registered and authenticated users"

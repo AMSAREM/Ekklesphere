@@ -63,6 +63,7 @@ export const MemberApp: React.FC = () => {
     checkInPerson,
     removeCheckIn,
     refreshLivePremise,
+    setChurchPremiseLocation,
     currentUser,
     logout,
     switchUserRole,
@@ -184,11 +185,16 @@ export const MemberApp: React.FC = () => {
         return;
       }
 
+      const isWithinFence =
+        data.distance_m !== null
+          ? data.distance_m <= (data.site_radius_m || systemSettings.innerGeofenceMeters || 60) + 25
+          : false;
+
       const isAccepted =
-        data.status === 'accepted' ||
-        (data.status === 'flagged' &&
-          !data.flag_reasons?.includes('outside_site') &&
-          !data.flag_reasons?.includes('mock_location'));
+        (data.status === 'accepted' ||
+          (data.status === 'flagged' &&
+            !data.flag_reasons?.some((r: string) => r.startsWith('outside_') || r.includes('mock')))) &&
+        isWithinFence;
 
       if (isAccepted) {
         const confidence = Math.max(70, Math.min(99, Math.round(100 - accuracy / 3)));
@@ -643,11 +649,74 @@ export const MemberApp: React.FC = () => {
 
                 <button
                   onClick={() => setIsQrSheetOpen(true)}
-                  className="bg-white/15 hover:bg-white/25 text-white rounded-2xl px-4 py-2.5 text-xs font-bold flex items-center gap-2 transition-colors"
+                  className="bg-white/15 hover:bg-white/25 text-white rounded-2xl px-4 py-2.5 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <QrCode className="w-4 h-4" />
                   <span>Show My Entry Code</span>
                 </button>
+              </div>
+
+              {/* Live Geofence Production Test & Calibration Bar */}
+              <div className="pt-3 border-t border-white/20 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-white/85 font-semibold text-[11px] flex items-center gap-1.5">
+                  <Crosshair className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Live Production Calibration:</span>
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={async () => {
+                      if (livePosition) {
+                        await setChurchPremiseLocation({
+                          lat: livePosition.lat,
+                          lng: livePosition.lng,
+                          accuracyM: livePosition.accuracy,
+                        });
+                        showToast(`Church premise aligned to your live GPS coordinates!`);
+                      } else {
+                        handleVerifyMyGpsNow();
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-bold transition-all cursor-pointer"
+                    title="Aligns the church campus premise to where you are standing right now for testing"
+                  >
+                    Set Premise to My GPS
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null) {
+                        verifyArrivalWithServer(
+                          systemSettings.campusLatitude,
+                          systemSettings.campusLongitude,
+                          5,
+                          'geofence'
+                        );
+                        showToast('Testing arrival inside sanctuary (0m)...');
+                      } else {
+                        showToast('Please set campus premise coordinates first');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-emerald-500/40 hover:bg-emerald-500/60 text-white text-[11px] font-bold transition-all cursor-pointer"
+                  >
+                    Test Inside (0m)
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null) {
+                        // Offset by ~400 meters
+                        verifyArrivalWithServer(
+                          systemSettings.campusLatitude + 0.0036,
+                          systemSettings.campusLongitude + 0.0036,
+                          10,
+                          'geofence'
+                        );
+                        showToast('Testing location outside perimeter (400m)...');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-rose-500/40 hover:bg-rose-500/60 text-white text-[11px] font-bold transition-all cursor-pointer"
+                  >
+                    Test Outside (400m)
+                  </button>
+                </div>
               </div>
             </div>
           )}

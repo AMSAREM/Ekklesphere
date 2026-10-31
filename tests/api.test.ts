@@ -227,6 +227,86 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(eventRes.body.status).toBe('accepted');
       expect(eventRes.body.distance_m).toBeLessThanOrEqual(15);
     });
+
+    it('REJECTS mock location GPS spoofing attempt', async () => {
+      const spoofRes = await request(app)
+        .post('/api/attendance/events')
+        .send({
+          clientEventId: '00000000-0000-0000-0000-000000000002',
+          type: 'enter',
+          source: 'geofence',
+          lat: 5.6037,
+          lng: -0.1870,
+          accuracyM: 5,
+          isMock: true,
+          deviceTime: new Date().toISOString(),
+        });
+
+      expect(spoofRes.status).toBe(200);
+      expect(spoofRes.body.status).toBe('rejected');
+      expect(spoofRes.body.flag_reasons).toContain('mock_location');
+    });
+
+    it('REJECTS attendance arrival signal outside church geofence perimeter', async () => {
+      const outsideRes = await request(app)
+        .post('/api/attendance/events')
+        .send({
+          clientEventId: '00000000-0000-0000-0000-000000000003',
+          type: 'enter',
+          source: 'geofence',
+          lat: 5.6150,
+          lng: -0.1870,
+          accuracyM: 8,
+          isMock: false,
+          deviceTime: new Date().toISOString(),
+        });
+
+      expect(outsideRes.status).toBe(200);
+      expect(outsideRes.body.status).toBe('rejected');
+      expect(outsideRes.body.distance_m).toBeGreaterThan(500);
+      expect(outsideRes.body.flag_reasons.some((r: string) => r.startsWith('outside_fence_'))).toBe(true);
+    });
+
+    it('FLAGS attendance event in perimeter grace margin for staff review', async () => {
+      const marginRes = await request(app)
+        .post('/api/attendance/events')
+        .send({
+          clientEventId: '00000000-0000-0000-0000-000000000004',
+          type: 'enter',
+          source: 'geofence',
+          lat: 5.6042,
+          lng: -0.1870,
+          accuracyM: 10,
+          isMock: false,
+          deviceTime: new Date().toISOString(),
+        });
+
+      expect(marginRes.status).toBe(200);
+      expect(marginRes.body.status).toBe('flagged');
+      expect(marginRes.body.flag_reasons.some((r: string) => r.startsWith('perimeter_margin_'))).toBe(true);
+    });
+
+    it('GET /api/attendance/raw-events returns telemetry audit trail', async () => {
+      const res = await request(app).get('/api/attendance/raw-events');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+    });
+
+    it('GET /api/attendance/shifts returns computed user shifts', async () => {
+      const res = await request(app).get('/api/attendance/shifts');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('POST /api/attendance/auto-close closes expired open shifts', async () => {
+      const res = await request(app)
+        .post('/api/attendance/auto-close')
+        .send({ maxHours: 12 });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(typeof res.body.closedShifts).toBe('number');
+    });
   });
 
   describe('Church Events & Directory Role-Level Security', () => {

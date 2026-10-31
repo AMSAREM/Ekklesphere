@@ -45,7 +45,7 @@ interface StoredEvent {
   person_name?: string;
   site_id: string;
   type: 'enter' | 'exit' | 'manual_in' | 'manual_out';
-  source: 'geofence' | 'manual' | 'web' | 'admin_edit';
+  source: 'geofence' | 'manual' | 'web' | 'admin_edit' | 'system_auto_close';
   platform: string;
   lat: number | null;
   lng: number | null;
@@ -142,7 +142,31 @@ function loadLiveState(): void {
       if (Array.isArray(parsed.inMemoryEvents)) inMemoryEvents = parsed.inMemoryEvents;
       if (Array.isArray(parsed.inMemoryMembers)) inMemoryMembers = parsed.inMemoryMembers;
       if (Array.isArray(parsed.inMemoryEventsList)) inMemoryEventsList = parsed.inMemoryEventsList;
-      if (Array.isArray(parsed.pushSubscriptions)) pushSubscriptions = parsed.pushSubscriptions;
+    }
+    if (registeredSites.length === 0) {
+      const defaultSite: RegisteredSite = {
+        id: PRIMARY_CAMPUS_SITE_ID,
+        name: 'PIWC KWADASO',
+        lat: 6.6833,
+        lng: -1.65,
+        radius_m: 60,
+      };
+      registeredSites = [defaultSite];
+    }
+    if (!premiseSettings || premiseSettings.lat == null) {
+      premiseSettings = {
+        churchName: 'PIWC KWADASO',
+        campusName: 'PIWC KWADASO',
+        campusAddress: 'Kwadaso Estate, Kumasi, Ghana',
+        lat: 6.6833,
+        lng: -1.65,
+        accuracyM: 5,
+        innerGeofenceMeters: 60,
+        outerGeofenceMeters: 300,
+        dwellTimeMinutes: 5,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'System Baseline',
+      };
     }
   } catch (err) {
     console.warn('[Ekklesphere] Could not read .live_campus_state.json, starting clean:', err);
@@ -846,8 +870,16 @@ async function handleAttendanceEvent(req: Request, res: Response) {
 
   if (site && e.lat != null && e.lng != null) {
     distance = computeDistanceMeters(e.lat, e.lng, site.lat, site.lng);
-    if (distance > siteRadius * 1.5) {
-      downgrade(`outside_fence_${distance}m`);
+    if (distance <= siteRadius) {
+      // Inside geofence perimeter
+      if (status !== 'rejected') status = 'accepted';
+    } else if (distance <= siteRadius + 25) {
+      // Grace margin for GPS accuracy variance
+      downgrade(`perimeter_margin_${distance}m`);
+    } else {
+      // Definitively outside church premise
+      status = 'rejected';
+      reasons.push(`outside_fence_${distance}m`);
     }
   }
 
@@ -879,6 +911,39 @@ async function handleAttendanceEvent(req: Request, res: Response) {
   };
 
   inMemoryEvents.unshift(row);
+
+  // If accepted or flagged within perimeter margin, auto-record into liveCheckins
+  const isApproved =
+    status !== 'rejected' &&
+    !reasons.some((r) => r.startsWith('outside_') || r.includes('mock')) &&
+    (distance === null || distance <= siteRadius + 25);
+
+  if (isApproved && e.personId) {
+    const existingIdx = liveCheckins.findIndex((r) => r.personId === e.personId);
+    const checkinRec: LiveCheckinRecord = {
+      id: `rec-${e.personId}-${Date.now()}`,
+      tenantId: e.organizationId || PRIMARY_ORGANIZATION_ID,
+      personId: e.personId,
+      personName: e.personName,
+      serviceInstanceId: e.serviceInstanceId || 'svc-sun-1',
+      campusId: site?.id || PRIMARY_CAMPUS_SITE_ID,
+      method: e.source === 'geofence' ? 'geofence' : 'manual',
+      confidence: typeof e.accuracyM === 'number' ? Math.max(70, Math.min(99, Math.round(100 - e.accuracyM / 3))) : 95,
+      checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      late: false,
+      recordedBy: 'GPS Geofence Radar',
+      note: `Verified Live GPS (${distance ?? 0}m from center, ±${Math.round(e.accuracyM ?? 0)}m)`,
+      distanceM: distance,
+      lat: e.lat,
+      lng: e.lng,
+    };
+    if (existingIdx >= 0) {
+      liveCheckins[existingIdx] = checkinRec;
+    } else {
+      liveCheckins.unshift(checkinRec);
+    }
+  }
+
   saveLiveState();
 
   return res.status(200).json({
@@ -889,6 +954,138 @@ async function handleAttendanceEvent(req: Request, res: Response) {
 }
 
 app.post(['/attendance/events', '/api/attendance/events'], attendanceLimiter, handleAttendanceEvent);
+
+app.get(['/attendance/raw-events', '/api/attendance/raw-events'], (_req: Request, res: Response) => {
+  return res.status(200).json(inMemoryEvents);
+});
+
+app.get(['/attendance/shifts', '/api/attendance/shifts'], (_req: Request, res: Response) => {
+  const shifts: Array<{
+    user_id: string;
+    site_id: string;
+    in_event_id: string;
+    clock_in: string;
+    out_event_id: string | null;
+    clock_out: string | null;
+    duration_minutes: number | null;
+    needs_review: boolean;
+    is_open: boolean;
+  }> = [];
+
+  const eventsByUser = new Map<string, StoredEvent[]>();
+  for (const ev of inMemoryEvents) {
+    const list = eventsByUser.get(ev.user_id) || [];
+    list.push(ev);
+    eventsByUser.set(ev.user_id, list);
+  }
+
+  for (const [userId, userEvents] of eventsByUser.entries()) {
+    const chronological = [...userEvents].sort(
+      (a, b) => new Date(a.server_time).getTime() - new Date(b.server_time).getTime()
+    );
+
+    let openIn: StoredEvent | null = null;
+
+    for (const ev of chronological) {
+      if (ev.type === 'enter' || ev.type === 'manual_in') {
+        if (openIn) {
+          shifts.unshift({
+            user_id: userId,
+            site_id: openIn.site_id,
+            in_event_id: openIn.id,
+            clock_in: openIn.server_time,
+            out_event_id: null,
+            clock_out: null,
+            duration_minutes: null,
+            needs_review: openIn.status === 'flagged',
+            is_open: true,
+          });
+        }
+        openIn = ev;
+      } else if (ev.type === 'exit' || ev.type === 'manual_out') {
+        if (openIn) {
+          const inMs = new Date(openIn.server_time).getTime();
+          const outMs = new Date(ev.server_time).getTime();
+          const durMin = Math.max(0, Math.round((outMs - inMs) / 60000));
+          shifts.unshift({
+            user_id: userId,
+            site_id: openIn.site_id,
+            in_event_id: openIn.id,
+            clock_in: openIn.server_time,
+            out_event_id: ev.id,
+            clock_out: ev.server_time,
+            duration_minutes: durMin,
+            needs_review: openIn.status === 'flagged' || ev.status === 'flagged',
+            is_open: false,
+          });
+          openIn = null;
+        }
+      }
+    }
+
+    if (openIn) {
+      shifts.unshift({
+        user_id: userId,
+        site_id: openIn.site_id,
+        in_event_id: openIn.id,
+        clock_in: openIn.server_time,
+        out_event_id: null,
+        clock_out: null,
+        duration_minutes: null,
+        needs_review: openIn.status === 'flagged',
+        is_open: true,
+      });
+    }
+  }
+
+  return res.status(200).json(shifts);
+});
+
+app.post(['/attendance/auto-close', '/api/attendance/auto-close'], (req: Request, res: Response) => {
+  const maxHours = Number(req.body?.maxHours) || 12;
+  const now = Date.now();
+  let closedCount = 0;
+
+  // Find all users who have an active check-in or unclosed enter event older than maxHours
+  for (const checkin of [...liveCheckins]) {
+    const matchingEvents = inMemoryEvents.filter((e) => e.user_id === checkin.personId);
+    const lastEvent = matchingEvents[0];
+    if (lastEvent && (lastEvent.type === 'enter' || lastEvent.type === 'manual_in')) {
+      const elapsedHours = (now - new Date(lastEvent.server_time).getTime()) / 3600000;
+      if (elapsedHours >= maxHours || req.body?.force) {
+        const exitEvt: StoredEvent = {
+          id: `evt-autoclose-${Date.now()}-${closedCount}`,
+          organization_id: PRIMARY_ORGANIZATION_ID,
+          client_event_id: `auto-close-${checkin.personId}`,
+          user_id: checkin.personId,
+          person_id: checkin.personId,
+          person_name: checkin.personName,
+          site_id: checkin.campusId || PRIMARY_CAMPUS_SITE_ID,
+          type: 'exit',
+          source: 'system_auto_close',
+          platform: 'web',
+          lat: checkin.lat ?? null,
+          lng: checkin.lng ?? null,
+          accuracy_m: null,
+          distance_m: checkin.distanceM ?? null,
+          is_mock: false,
+          device_time: new Date().toISOString(),
+          server_time: new Date().toISOString(),
+          status: 'accepted',
+          flag_reasons: ['auto_closed_timeout'],
+        };
+        inMemoryEvents.unshift(exitEvt);
+        closedCount++;
+      }
+    }
+  }
+
+  if (closedCount > 0) {
+    saveLiveState();
+  }
+
+  return res.status(200).json({ success: true, closedShifts: closedCount });
+});
 
 app.get(['/attendance/sites', '/api/attendance/sites'], (_req: Request, res: Response) => {
   res.status(200).json(registeredSites);
@@ -917,11 +1114,13 @@ app.get(['/api/v1/events', '/api/events'], async (_req: Request, res: Response) 
     return res.json(inMemoryEventsList);
   }
 
+  const todayIso = new Date().toISOString().split('T')[0];
   // Default initial church services
   return res.json([
     {
       id: 'svc-sun-1',
       name: 'Sunday First Service (English)',
+      date: todayIso,
       starts_at: '07:00',
       ends_at: '09:00',
       status: 'open',
@@ -930,6 +1129,7 @@ app.get(['/api/v1/events', '/api/events'], async (_req: Request, res: Response) 
     {
       id: 'svc-sun-2',
       name: 'Sunday Second Service (Twi / Multilingual)',
+      date: todayIso,
       starts_at: '09:30',
       ends_at: '11:45',
       status: 'scheduled',
@@ -943,18 +1143,24 @@ app.post(
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   async (req: Request, res: Response) => {
     const name = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : 'Worship Service';
+    const rawDate = typeof req.body?.date === 'string' && req.body.date.trim()
+      ? req.body.date.trim()
+      : new Date().toISOString().split('T')[0];
     const rawStartsAt = typeof req.body?.startsAt === 'string' ? req.body.startsAt.trim() : '08:00';
     const rawEndsAt = typeof req.body?.endsAt === 'string' ? req.body.endsAt.trim() : '10:30';
     const dwellMin = Number.isFinite(Number(req.body?.dwellMinutes)) ? Math.max(1, Number(req.body.dwellMinutes)) : 5;
+    const expectedAttendance = Number.isFinite(Number(req.body?.expectedAttendance)) ? Math.max(0, Number(req.body.expectedAttendance)) : 0;
 
     const newService = {
       id: `svc-${Date.now()}`,
       name,
+      date: rawDate,
       starts_at: rawStartsAt,
       ends_at: rawEndsAt,
       dwell_min: dwellMin,
       status: 'open',
       site_id: PRIMARY_CAMPUS_SITE_ID,
+      expected_attendance: expectedAttendance,
     };
 
     inMemoryEventsList.push(newService);
@@ -964,10 +1170,12 @@ app.post(
       try {
         await supabase.from('events').insert({
           name,
+          date: rawDate,
           starts_at: rawStartsAt,
           ends_at: rawEndsAt,
           dwell_min: dwellMin,
           status: 'open',
+          expected_attendance: expectedAttendance,
         });
       } catch {
         // ignore
@@ -1232,7 +1440,7 @@ async function startServer() {
   });
 }
 
-if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST && !process.env.VERCEL) {
   startServer();
 }
 

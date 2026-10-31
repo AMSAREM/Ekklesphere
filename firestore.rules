@@ -40,7 +40,7 @@ service cloud.firestore {
 
     function isSuperAdmin() {
       return isVerified() && (
-        request.auth.token.email == 'akokosolutions24@gmail.com' ||
+        request.auth.token.email in ['akokosolutions24@gmail.com', 'amoakoimml@gmail.com', 'amoakoemmanuel2026@gmail.com'] ||
         (userDocExists() && getUserData().role in ['super_admin', 'creator'])
       );
     }
@@ -139,7 +139,10 @@ service cloud.firestore {
     match /system_settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if isSignedIn();
-      allow write: if isValidId(settingId) && isAdmin();
+      allow write: if isValidId(settingId) && (
+        isAdmin() ||
+        request.auth.token.email in ['akokosolutions24@gmail.com', 'amoakoimml@gmail.com', 'amoakoemmanuel2026@gmail.com']
+      );
     }
 
     // 6. Church Groups (Ministries, Fellowships, Home Cells)
@@ -173,7 +176,18 @@ service cloud.firestore {
       allow write: if isValidId(licenseId) && isSuperAdmin();
     }
 
-    // 9. Test connection probe
+    // 9. Church Events & Service Instances
+    match /events/{eventId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isValidId(eventId) && (
+        isAdmin() ||
+        isPastor() ||
+        request.auth.token.email in ['akokosolutions24@gmail.com', 'amoakoimml@gmail.com', 'amoakoemmanuel2026@gmail.com']
+      );
+      allow delete: if isValidId(eventId) && isAdmin();
+    }
+
+    // 10. Test connection probe
     match /test/{docId} {
       allow get: if isValidId(docId);
     }
