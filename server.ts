@@ -873,13 +873,16 @@ app.post(
     }
 
     const nowIso = new Date().toISOString();
-    const existingIdx = liveCheckins.findIndex((r) => r.personId === body.personId);
+    const targetServiceInstanceId = body.serviceInstanceId || 'svc-sun-1';
+    const existingIdx = liveCheckins.findIndex(
+      (r) => r.personId === body.personId && r.serviceInstanceId === targetServiceInstanceId
+    );
     const record: LiveCheckinRecord = {
       id: body.id || `rec-${body.personId}-${Date.now()}`,
       tenantId: body.tenantId || PRIMARY_ORGANIZATION_ID,
       personId: body.personId,
       personName: body.personName,
-      serviceInstanceId: body.serviceInstanceId || 'svc-sun-1',
+      serviceInstanceId: targetServiceInstanceId,
       campusId: PRIMARY_CAMPUS_SITE_ID,
       method: body.method || 'manual',
       confidence: typeof body.confidence === 'number' ? body.confidence : 95,
@@ -945,8 +948,18 @@ app.delete(
   requireAuthRole('usher', 'admin', 'pastor', 'super_admin', 'creator'),
   (req: Request, res: Response) => {
     const { personId } = req.params;
+    const serviceId =
+      typeof req.query.serviceId === 'string' && req.query.serviceId.trim()
+        ? req.query.serviceId.trim()
+        : null;
     if (personId === '__all__') {
-      liveCheckins = [];
+      liveCheckins = serviceId
+        ? liveCheckins.filter((r) => r.serviceInstanceId !== serviceId)
+        : [];
+    } else if (serviceId) {
+      liveCheckins = liveCheckins.filter(
+        (r) => !(r.personId === personId && r.serviceInstanceId === serviceId)
+      );
     } else {
       liveCheckins = liveCheckins.filter((r) => r.personId !== personId);
     }
@@ -1035,13 +1048,16 @@ async function handleAttendanceEvent(req: Request, res: Response) {
     (distance === null || distance <= siteRadius + 25);
 
   if (isApproved && e.personId) {
-    const existingIdx = liveCheckins.findIndex((r) => r.personId === e.personId);
+    const targetServiceInstanceId = e.serviceInstanceId || 'svc-sun-1';
+    const existingIdx = liveCheckins.findIndex(
+      (r) => r.personId === e.personId && r.serviceInstanceId === targetServiceInstanceId
+    );
     const checkinRec: LiveCheckinRecord = {
       id: `rec-${e.personId}-${Date.now()}`,
       tenantId: e.organizationId || PRIMARY_ORGANIZATION_ID,
       personId: e.personId,
       personName: e.personName,
-      serviceInstanceId: e.serviceInstanceId || 'svc-sun-1',
+      serviceInstanceId: targetServiceInstanceId,
       campusId: site?.id || PRIMARY_CAMPUS_SITE_ID,
       method: e.source === 'geofence' ? 'geofence' : 'manual',
       confidence: typeof e.accuracyM === 'number' ? Math.max(70, Math.min(99, Math.round(100 - e.accuracyM / 3))) : 95,
@@ -1261,6 +1277,276 @@ app.get(
       methodBreakdown,
       telemetrySummary: computeTelemetrySummary(),
       liveCheckins: scopedCheckins,
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
+
+function formatLocalDateIsoServer(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildShortWeekLabel(start: Date, end: Date): string {
+  const sDay = start.getDate();
+  const eDay = end.getDate();
+  const sMonth = start.toLocaleDateString('en-GB', { month: 'short' });
+  const eMonth = end.toLocaleDateString('en-GB', { month: 'short' });
+  if (sDay === eDay && sMonth === eMonth) return `${sDay} ${sMonth}`;
+  if (sMonth === eMonth) return `${sDay}–${eDay} ${sMonth}`;
+  return `${sDay} ${sMonth}–${eDay} ${eMonth}`;
+}
+
+function buildFullWeekRangeLabel(start: Date, end: Date): string {
+  const sFmt = start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const eFmt = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  if (formatLocalDateIsoServer(start) === formatLocalDateIsoServer(end)) {
+    return end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  return `${sFmt} – ${eFmt}`;
+}
+
+app.get(
+  ['/attendance/weekly-trend', '/api/attendance/weekly-trend'],
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  async (_req: Request, res: Response) => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const windowStart = new Date(today);
+    windowStart.setDate(today.getDate() - 29);
+
+    const startDateIso = formatLocalDateIsoServer(windowStart);
+    const endDateIso = formatLocalDateIsoServer(today);
+
+    const eventDateMap = new Map<string, string>();
+    for (const ev of inMemoryEventsList) {
+      if (ev && typeof ev.id === 'string') {
+        const normalized = normalizeEventRow(ev);
+        if (normalized.date) {
+          eventDateMap.set(ev.id, normalized.date);
+        }
+      }
+    }
+
+    const mergedByKey = new Map<string, LiveCheckinRecord>();
+    for (const rec of liveCheckins) {
+      const key = `${rec.serviceInstanceId || 'svc'}::${rec.personId}`;
+      mergedByKey.set(key, rec);
+    }
+
+    const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+    let activeMemberBaseline = inMemoryMembers.length;
+
+    if (supabase && !isTestEnv) {
+      try {
+        const [attRes, evRes, memCountRes] = await Promise.all([
+          supabase
+            .from('attendance')
+            .select('*')
+            .gte('checked_in_at', new Date(windowStart.getTime() - 24 * 60 * 60 * 1000).toISOString())
+            .order('checked_in_at', { ascending: false }),
+          supabase.from('events').select('id, start_time'),
+          supabase.from('members').select('id', { count: 'exact', head: true }),
+        ]);
+
+        if (!evRes.error && Array.isArray(evRes.data)) {
+          for (const ev of evRes.data) {
+            if (ev?.id && typeof ev.start_time === 'string' && ev.start_time.includes('T')) {
+              const dt = new Date(ev.start_time);
+              if (!Number.isNaN(dt.getTime())) {
+                eventDateMap.set(ev.id, formatLocalDateIsoServer(dt));
+              }
+            }
+          }
+        }
+
+        if (typeof memCountRes.count === 'number' && memCountRes.count > 0) {
+          activeMemberBaseline = memCountRes.count;
+        }
+
+        if (!attRes.error && Array.isArray(attRes.data)) {
+          for (const row of attRes.data) {
+            const svcId = String(row.event_id || 'svc-db');
+            const personId = String(row.member_id || '');
+            if (!personId) continue;
+            const key = `${svcId}::${personId}`;
+            if (!mergedByKey.has(key)) {
+              const rawMethod = String(row.method || 'manual');
+              const mappedMethod: LiveCheckinRecord['method'] =
+                rawMethod === 'qr_scan'
+                  ? 'posted_qr'
+                  : rawMethod === 'web_link'
+                  ? 'email_link'
+                  : rawMethod === 'geofence' ||
+                    rawMethod === 'beacon' ||
+                    rawMethod === 'usher' ||
+                    rawMethod === 'posted_qr' ||
+                    rawMethod === 'email_link'
+                  ? rawMethod
+                  : 'manual';
+              const checkedIso =
+                typeof row.checked_in_at === 'string' ? row.checked_in_at : new Date().toISOString();
+              const dt = new Date(checkedIso);
+              mergedByKey.set(key, {
+                id: String(row.id || `db-${svcId}-${personId}`),
+                tenantId: String(row.organization_id || PRIMARY_ORGANIZATION_ID),
+                personId,
+                serviceInstanceId: svcId,
+                campusId: PRIMARY_CAMPUS_SITE_ID,
+                method: mappedMethod,
+                confidence: typeof row.confidence_score === 'number' ? row.confidence_score : 95,
+                checkedInAt: !Number.isNaN(dt.getTime())
+                  ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : '08:00',
+                checkedInIso: checkedIso,
+                late: false,
+                distanceM: typeof row.distance_m === 'number' ? row.distance_m : null,
+                note: row.notes || undefined,
+              });
+            }
+          }
+        }
+      } catch {
+        // graceful fallback to in-memory records
+      }
+    }
+
+    // Build chronological Monday-Sunday weekly buckets covering [windowStart, today]
+    const buckets: Array<{
+      weekKey: string;
+      startDate: string;
+      endDate: string;
+      shortLabel: string;
+      fullRangeLabel: string;
+      isCurrentWeek: boolean;
+      records: LiveCheckinRecord[];
+      serviceIds: Set<string>;
+    }> = [];
+
+    const cursor = new Date(windowStart);
+    while (cursor.getTime() <= today.getTime()) {
+      const bStart = new Date(cursor);
+      const dow = bStart.getDay(); // 0=Sun..6=Sat
+      const daysUntilSunday = dow === 0 ? 0 : 7 - dow;
+      const candidateEnd = new Date(bStart);
+      candidateEnd.setDate(bStart.getDate() + daysUntilSunday);
+      const bEnd = candidateEnd.getTime() > today.getTime() ? new Date(today) : candidateEnd;
+
+      const sIso = formatLocalDateIsoServer(bStart);
+      const eIso = formatLocalDateIsoServer(bEnd);
+      const serviceIds = new Set<string>();
+      for (const [evId, evDate] of eventDateMap.entries()) {
+        if (evDate >= sIso && evDate <= eIso) {
+          serviceIds.add(evId);
+        }
+      }
+
+      buckets.push({
+        weekKey: `${sIso}_${eIso}`,
+        startDate: sIso,
+        endDate: eIso,
+        shortLabel: buildShortWeekLabel(bStart, bEnd),
+        fullRangeLabel: buildFullWeekRangeLabel(bStart, bEnd),
+        isCurrentWeek: eIso === endDateIso,
+        records: [],
+        serviceIds,
+      });
+
+      cursor.setTime(bEnd.getTime());
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const windowHistoricalRecords: LiveCheckinRecord[] = [];
+    const uniquePeople30d = new Set<string>();
+
+    for (const rec of mergedByKey.values()) {
+      let resolvedDateIso = eventDateMap.get(rec.serviceInstanceId) || '';
+      if (!resolvedDateIso && rec.checkedInIso) {
+        const parsed = new Date(rec.checkedInIso);
+        if (!Number.isNaN(parsed.getTime())) {
+          resolvedDateIso = formatLocalDateIsoServer(parsed);
+        }
+      }
+      if (!resolvedDateIso) {
+        resolvedDateIso = endDateIso;
+      }
+
+      if (resolvedDateIso < startDateIso || resolvedDateIso > endDateIso) {
+        continue;
+      }
+
+      windowHistoricalRecords.push(rec);
+      uniquePeople30d.add(rec.personId);
+
+      const targetBucket = buckets.find(
+        (b) => resolvedDateIso >= b.startDate && resolvedDateIso <= b.endDate
+      );
+      if (targetBucket) {
+        targetBucket.records.push(rec);
+        if (rec.serviceInstanceId) {
+          targetBucket.serviceIds.add(rec.serviceInstanceId);
+        }
+      }
+    }
+
+    let peakWeekLabel: string | null = null;
+    let peakWeekCount = 0;
+
+    const weeks = buckets.map((b) => {
+      const totalCheckins = b.records.length;
+      const uniqueSet = new Set(b.records.map((r) => r.personId));
+      const uniqueAttendees = uniqueSet.size;
+      const lateCount = b.records.filter((r) => r.late).length;
+      const onTimeCount = Math.max(0, totalCheckins - lateCount);
+      const autoProximityCount = b.records.filter(
+        (r) => r.method === 'geofence' || r.method === 'beacon'
+      ).length;
+      const assistedDoorCount = Math.max(0, totalCheckins - autoProximityCount);
+      const engagementRatePct =
+        activeMemberBaseline > 0
+          ? Math.min(100, Math.round((uniqueAttendees / activeMemberBaseline) * 100))
+          : 0;
+
+      if (totalCheckins > peakWeekCount) {
+        peakWeekCount = totalCheckins;
+        peakWeekLabel = b.shortLabel;
+      }
+
+      return {
+        weekKey: b.weekKey,
+        startDate: b.startDate,
+        endDate: b.endDate,
+        shortLabel: b.shortLabel,
+        fullRangeLabel: b.fullRangeLabel,
+        isCurrentWeek: b.isCurrentWeek,
+        totalCheckins,
+        uniqueAttendees,
+        onTimeCount,
+        lateCount,
+        autoProximityCount,
+        assistedDoorCount,
+        servicesCount: b.serviceIds.size,
+        engagementRatePct,
+      };
+    });
+
+    const totalCheckins30d = windowHistoricalRecords.length;
+    const averageWeeklyAttendance =
+      weeks.length > 0 ? Math.round((totalCheckins30d / weeks.length) * 10) / 10 : 0;
+
+    return res.status(200).json({
+      windowDays: 30,
+      startDate: startDateIso,
+      endDate: endDateIso,
+      totalCheckins30d,
+      uniqueAttendees30d: uniquePeople30d.size,
+      averageWeeklyAttendance,
+      peakWeekLabel,
+      peakWeekCount,
+      weeks,
+      historicalRecords: windowHistoricalRecords,
       timestamp: new Date().toISOString(),
     });
   }

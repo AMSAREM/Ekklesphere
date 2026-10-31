@@ -39,6 +39,7 @@ export const AppHeader: React.FC = () => {
     followupTasks,
     members,
     checkInPerson,
+    attendanceRecords,
     totalCheckedInCount,
     expectedAttendance,
     attendancePercentage,
@@ -65,6 +66,12 @@ export const AppHeader: React.FC = () => {
   }, [isMobileSearchOpen]);
 
   const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
+  const checkedInMemberIds = new Set(attendanceRecords.map((r) => r.personId));
+  const checkedInMembersCount = members.filter((m) => checkedInMemberIds.has(m.id)).length;
+  const headerAbsenteeCount =
+    members.length > 0
+      ? Math.max(0, members.length - checkedInMembersCount)
+      : Math.max(0, expectedAttendance - totalCheckedInCount);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -314,16 +321,17 @@ export const AppHeader: React.FC = () => {
             <Search className="w-4 h-4" />
           </button>
 
-          {/* Live Attendance Tally (Large screens) */}
+          {/* Live Attendance & Absentee Tally (Large screens) */}
           {currentUser && (
-            <div className="hidden 2xl:flex items-center gap-1.5 text-xs text-[#666A86] dark:text-[#A9ACC8] px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/5 border border-[#E9EBF5] dark:border-white/5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="font-medium">Attendance:</span>
-              <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums">
-                {totalCheckedInCount}/{expectedAttendance}
+            <div className="hidden 2xl:flex items-center gap-2 text-xs text-[#666A86] dark:text-[#A9ACC8] px-3 py-1 rounded-xl bg-slate-100 dark:bg-white/5 border border-[#E9EBF5] dark:border-white/5 tabular-nums">
+              <span>Present:</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                {totalCheckedInCount}
               </span>
-              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
-                ({attendancePercentage}%)
+              <span aria-hidden="true">·</span>
+              <span>Absent:</span>
+              <span className="font-bold text-rose-600 dark:text-rose-400 font-mono">
+                {headerAbsenteeCount}
               </span>
             </div>
           )}

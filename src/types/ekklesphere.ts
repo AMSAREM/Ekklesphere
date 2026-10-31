@@ -244,6 +244,37 @@ export interface LiveTelemetrySummary {
   recentSignals: LiveTelemetrySignal[];
 }
 
+export interface WeeklyAttendanceBucket {
+  weekKey: string;
+  startDate: string;
+  endDate: string;
+  shortLabel: string;
+  fullRangeLabel: string;
+  isCurrentWeek: boolean;
+  totalCheckins: number;
+  uniqueAttendees: number;
+  onTimeCount: number;
+  lateCount: number;
+  autoProximityCount: number;
+  assistedDoorCount: number;
+  servicesCount: number;
+  engagementRatePct: number;
+}
+
+export interface ThirtyDayAttendanceTrendResponse {
+  windowDays: number;
+  startDate: string;
+  endDate: string;
+  totalCheckins30d: number;
+  uniqueAttendees30d: number;
+  averageWeeklyAttendance: number;
+  peakWeekLabel: string | null;
+  peakWeekCount: number;
+  weeks: WeeklyAttendanceBucket[];
+  historicalRecords: AttendanceRecord[];
+  timestamp: string;
+}
+
 export interface FollowupTask {
   id: string;
   personId: string;

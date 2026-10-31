@@ -1305,8 +1305,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const currentService = services.find((s) => s.id === activeServiceId) || services[0] || LIVE_DEFAULT_SERVICE;
 
-  // Real-time attendance metrics (zero synthetic baseline)
-  const totalCheckedInCount = attendanceRecords.length;
+  // Real-time attendance metrics scoped to the active service (zero synthetic baseline)
+  const activeServiceAttendanceRecords = attendanceRecords.filter(
+    (r) =>
+      r.serviceInstanceId === currentService.id ||
+      (!r.serviceInstanceId && services.length <= 1)
+  );
+  const totalCheckedInCount = activeServiceAttendanceRecords.length;
   const expectedAttendance =
     currentService.expectedAttendance > 0 ? currentService.expectedAttendance : members.length;
   const attendancePercentage =
@@ -1326,9 +1331,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     confidence: number = 90,
     note?: string
   ): boolean => {
-    const existing = attendanceRecords.find((r) => r.personId === personId);
+    const existing = attendanceRecords.find(
+      (r) => r.personId === personId && r.serviceInstanceId === activeServiceId
+    );
     if (existing) {
-      return false; // Already checked in
+      return false; // Already checked in for this service
     }
 
     const person = members.find((m) => m.id === personId);
@@ -1403,11 +1410,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const removeCheckIn = (personId: string) => {
-    setAttendanceRecords((prev) => prev.filter((r) => r.personId !== personId));
-    fetch(`/api/live-checkins/${encodeURIComponent(personId)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch((err) => console.warn('Could not remove check-in on server:', err));
+    setAttendanceRecords((prev) =>
+      prev.filter(
+        (r) => !(r.personId === personId && (!r.serviceInstanceId || r.serviceInstanceId === activeServiceId))
+      )
+    );
+    fetch(
+      `/api/live-checkins/${encodeURIComponent(personId)}?serviceId=${encodeURIComponent(activeServiceId)}`,
+      {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      }
+    ).catch((err) => console.warn('Could not remove check-in on server:', err));
     const person = members.find((m) => m.id === personId);
     showToast(`Check-in removed for ${person?.firstName || 'Member'}`);
   };
@@ -1867,8 +1881,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (serverData && Array.isArray(serverData.liveCheckins)) {
         setAttendanceRecords((prev) => {
           const offlineQueued = prev.filter((r) => r.waitingToSync);
-          const serverIds = new Set(serverData.liveCheckins.map((r: AttendanceRecord) => r.personId));
-          const remainingOffline = offlineQueued.filter((r) => !serverIds.has(r.personId));
+          const serverKeys = new Set(
+            serverData.liveCheckins.map(
+              (r: AttendanceRecord) => `${r.serviceInstanceId || ''}::${r.personId}`
+            )
+          );
+          const remainingOffline = offlineQueued.filter(
+            (r) => !serverKeys.has(`${r.serviceInstanceId || ''}::${r.personId}`)
+          );
           return [...remainingOffline, ...serverData.liveCheckins];
         });
       }

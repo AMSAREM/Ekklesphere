@@ -310,17 +310,21 @@ export const UsherTool: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col justify-between">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-[#5B5F7A] dark:text-[#A9ACC8]">
-            Expected Seating
+        <button
+          type="button"
+          onClick={() => setFilterMode('unchecked')}
+          className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] hover:border-rose-400/50 rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col justify-between text-left transition-colors cursor-pointer"
+        >
+          <span className="text-[11px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+            Absentee Count
           </span>
           <span className="text-3xl sm:text-4xl font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] tracking-tight tabular-nums mt-1">
-            {expectedAttendance}
+            {members.length > 0 ? uncheckedMembers.length : Math.max(0, expectedAttendance - totalCheckedInCount)}
           </span>
-          <span className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] mt-2">
-            Remaining: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{Math.max(0, expectedAttendance - totalCheckedInCount)} seats</b>
+          <span className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] mt-2 tabular-nums">
+            Expected seating: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{expectedAttendance}</b>
           </span>
-        </div>
+        </button>
 
         <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col justify-between">
           <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">

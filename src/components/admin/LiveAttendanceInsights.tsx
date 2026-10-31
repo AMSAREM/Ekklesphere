@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   RefreshCw,
   Download,
@@ -15,6 +15,7 @@ import { AttendanceRecord, CheckinMethod, Person } from '../../types/ekklesphere
 interface LiveAttendanceInsightsProps {
   onOpenAddMember?: () => void;
   onOpenImportModal?: () => void;
+  initialTableTab?: 'checked_in' | 'unarrived' | 'at_risk';
 }
 
 interface VelocityBucket {
@@ -91,6 +92,7 @@ const CHANNEL_META: Array<{
 export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
   onOpenAddMember,
   onOpenImportModal,
+  initialTableTab = 'checked_in',
 }) => {
   const {
     services,
@@ -113,12 +115,16 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
 
   const [scopeMode, setScopeMode] = useState<'active' | 'all'>('active');
   const [groupDimension, setGroupDimension] = useState<'group' | 'department' | 'demographics'>('group');
-  const [tableTab, setTableTab] = useState<'checked_in' | 'unarrived' | 'at_risk'>('checked_in');
+  const [tableTab, setTableTab] = useState<'checked_in' | 'unarrived' | 'at_risk'>(initialTableTab);
   const [methodFilter, setMethodFilter] = useState<'all' | 'geofence' | 'beacon' | 'usher' | 'manual'>('all');
   const [tableSearch, setTableSearch] = useState('');
   const [quickMemberId, setQuickMemberId] = useState('');
   const [quickMethod, setQuickMethod] = useState<CheckinMethod>('usher');
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    setTableTab(initialTableTab);
+  }, [initialTableTab]);
 
   const memberById = useMemo(() => {
     const map = new Map<string, Person>();
@@ -679,11 +685,11 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
 
       {/* 4-Column Full-Width KPI Strip */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* KPI 1: Sanctuary Turnout */}
+        {/* KPI 1: Attendance Count */}
         <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
           <div>
             <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-              Sanctuary Turnout
+              Attendance Count
             </p>
             <div className="mt-2 flex items-baseline gap-2 tabular-nums">
               <span className="text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
@@ -708,7 +714,38 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
           </div>
         </div>
 
-        {/* KPI 2: Punctuality & Peak Flow */}
+        {/* KPI 2: Absentee Count */}
+        <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+          <div>
+            <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+              Absentee Count
+            </p>
+            <div className="mt-2 flex items-baseline gap-2 tabular-nums">
+              <span className="text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                {members.length > 0 ? unarrivedMembers.length : Math.max(0, expectedCount - totalCheckedIn)}
+              </span>
+              <span className="text-sm text-[#666A86] dark:text-[#A9ACC8]">
+                {members.length > 0
+                  ? `of ${members.length} members`
+                  : `of ${expectedCount} expected`}
+              </span>
+            </div>
+          </div>
+          <div className="mt-4 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between text-xs">
+            <span className="text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+              {atRiskAbsentees.length} repeat ({absenteeThreshold}+ missed)
+            </span>
+            <button
+              type="button"
+              onClick={() => setTableTab('unarrived')}
+              className="font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+            >
+              View absentees
+            </button>
+          </div>
+        </div>
+
+        {/* KPI 3: Punctuality & Peak Flow */}
         <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
           <div>
             <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
@@ -731,7 +768,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
           </div>
         </div>
 
-        {/* KPI 3: Automated vs Assisted */}
+        {/* KPI 4: Automated vs Assisted */}
         <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
           <div>
             <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
@@ -747,39 +784,10 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-            <span>Consent opt-in</span>
+            <span>Visitors present: {checkedInVisitorsCount}</span>
             <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-              {autoCheckinOptedInCount}/{members.length} ({optInPercentage}%)
+              {autoCheckinOptedInCount}/{members.length} opt-in
             </span>
-          </div>
-        </div>
-
-        {/* KPI 4: Visitors & Pastoral Watch */}
-        <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
-          <div>
-            <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-              Visitors & Absence Watch
-            </p>
-            <div className="mt-2 flex items-baseline gap-2 tabular-nums">
-              <span className="text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                {atRiskAbsentees.length}
-              </span>
-              <span className="text-sm text-[#666A86] dark:text-[#A9ACC8]">
-                at-risk · {checkedInVisitorsCount} {checkedInVisitorsCount === 1 ? 'visitor' : 'visitors'} present
-              </span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between text-xs">
-            <span className="text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-              Threshold: {absenteeThreshold}+ missed
-            </span>
-            <button
-              type="button"
-              onClick={() => setTableTab('at_risk')}
-              className="font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
-            >
-              Review watchlist
-            </button>
           </div>
         </div>
       </section>
@@ -1129,7 +1137,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
               }`}
             >
-              Checked-In Feed ({totalCheckedIn})
+              Attendance ({totalCheckedIn})
             </button>
             <button
               type="button"
@@ -1140,7 +1148,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
               }`}
             >
-              Not Yet Arrived ({unarrivedMembers.length})
+              Absentees ({unarrivedMembers.length})
             </button>
             <button
               type="button"
@@ -1151,7 +1159,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                   : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
               }`}
             >
-              At-Risk Absentees ({atRiskAbsentees.length})
+              Repeat Absentees ({atRiskAbsentees.length})
             </button>
           </div>
 

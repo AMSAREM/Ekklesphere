@@ -543,4 +543,67 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.callerRole).toBe('super_admin');
     });
   });
+
+  describe('30-Day Weekly Attendance Trend Analytics', () => {
+    it('REJECTS unauthenticated GET /api/attendance/weekly-trend with 401', async () => {
+      const res = await request(app).get('/api/attendance/weekly-trend');
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized');
+    });
+
+    it('REJECTS member role calling GET /api/attendance/weekly-trend with 403', async () => {
+      const res = await request(app)
+        .get('/api/attendance/weekly-trend')
+        .set('Authorization', `Bearer ${memberToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('forbidden');
+    });
+
+    it('PERMITS pastor and aggregates multi-week check-ins over the last 30 days', async () => {
+      const tenDaysAgo = new Date();
+      tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+      const tenDaysAgoIso = tenDaysAgo.toISOString();
+
+      await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${usherToken}`)
+        .send({
+          personId: 'm-trend-1',
+          personName: 'Yaw Boateng',
+          serviceInstanceId: 'svc-prev-week',
+          method: 'geofence',
+          checkedInIso: tenDaysAgoIso,
+          late: false,
+        });
+
+      await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${usherToken}`)
+        .send({
+          personId: 'm-trend-1',
+          personName: 'Yaw Boateng',
+          serviceInstanceId: 'svc-curr-week',
+          method: 'usher',
+          checkedInIso: new Date().toISOString(),
+          late: true,
+        });
+
+      const res = await request(app)
+        .get('/api/attendance/weekly-trend')
+        .set('Authorization', `Bearer ${pastorToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.windowDays).toBe(30);
+      expect(Array.isArray(res.body.weeks)).toBe(true);
+      expect(res.body.weeks.length).toBeGreaterThanOrEqual(4);
+      expect(res.body.totalCheckins30d).toBeGreaterThanOrEqual(2);
+      expect(res.body.weeks[res.body.weeks.length - 1].isCurrentWeek).toBe(true);
+
+      // Clean up test check-in entries
+      await request(app)
+        .delete('/api/live-checkins/m-trend-1')
+        .set('Authorization', `Bearer ${adminToken}`);
+    });
+  });
 });
+

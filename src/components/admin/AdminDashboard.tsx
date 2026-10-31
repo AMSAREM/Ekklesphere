@@ -43,6 +43,7 @@ import { SystemSettingsPanel } from './SystemSettingsPanel';
 import { MemberDirectoryTable } from './MemberDirectoryTable';
 import { ImportMembersModal } from './ImportMembersModal';
 import { LiveAttendanceInsights } from './LiveAttendanceInsights';
+import { WeeklyAttendanceTrendChart } from './WeeklyAttendanceTrendChart';
 import { Person } from '../../types/ekklesphere';
 
 export const AdminDashboard: React.FC = () => {
@@ -90,6 +91,7 @@ export const AdminDashboard: React.FC = () => {
   // Active sub-navigation tabs inside Admin
   const [activeTab, setActiveTab] = useState<'dashboard' | 'insights' | 'workflows' | 'members' | 'integrations' | 'proximity' | 'settings'>('dashboard');
   const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages' | 'settings'>('dashboard');
+  const [insightsInitialTab, setInsightsInitialTab] = useState<'checked_in' | 'unarrived' | 'at_risk'>('checked_in');
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // Sync activeTab with adminSubTab from header
@@ -109,8 +111,17 @@ export const AdminDashboard: React.FC = () => {
   }, [adminSubTab]);
 
   const checkedInMemberIds = React.useMemo(
-    () => new Set(attendanceRecords.map((r) => r.personId)),
-    [attendanceRecords]
+    () =>
+      new Set(
+        attendanceRecords
+          .filter(
+            (r) =>
+              r.serviceInstanceId === currentService.id ||
+              (!r.serviceInstanceId && services.length <= 1)
+          )
+          .map((r) => r.personId)
+      ),
+    [attendanceRecords, currentService.id, services.length]
   );
 
   const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
@@ -228,20 +239,37 @@ export const AdminDashboard: React.FC = () => {
         r.serviceInstanceId === currentService.id ||
         (!r.serviceInstanceId && services.length <= 1)
     );
-    const total = scoped.length;
+    const attendanceCount = scoped.length;
     const late = scoped.filter((r) => r.late).length;
-    const onTime = Math.max(0, total - late);
-    const punctualityPct = total > 0 ? Math.round((onTime / total) * 100) : 0;
+    const onTime = Math.max(0, attendanceCount - late);
+    const punctualityPct = attendanceCount > 0 ? Math.round((onTime / attendanceCount) * 100) : 0;
     const autoCount = scoped.filter((r) => r.method === 'geofence' || r.method === 'beacon').length;
-    const assistedCount = Math.max(0, total - autoCount);
+    const assistedCount = Math.max(0, attendanceCount - autoCount);
     const threshold = Math.max(1, systemSettings.absenteeThresholdServices || 2);
     const checkedIds = new Set(scoped.map((r) => r.personId));
+    const checkedInMembersCount = members.filter((m) => checkedIds.has(m.id)).length;
+    const absenteeBaseline = members.length > 0 ? members.length : expectedAttendance;
+    const absenteeCount =
+      members.length > 0
+        ? Math.max(0, members.length - checkedInMembersCount)
+        : Math.max(0, expectedAttendance - attendanceCount);
+    const absenteePct =
+      absenteeBaseline > 0 ? Math.min(100, Math.round((absenteeCount / absenteeBaseline) * 100)) : 0;
+    const attendancePct =
+      expectedAttendance > 0
+        ? Math.min(100, Math.round((attendanceCount / expectedAttendance) * 100))
+        : 0;
     const atRiskCount = members.filter(
       (m) => !checkedIds.has(m.id) && (m.consecutiveAbsences || 0) >= threshold
     ).length;
 
     return {
-      total,
+      total: attendanceCount,
+      attendanceCount,
+      attendancePct,
+      absenteeCount,
+      absenteePct,
+      absenteeBaseline,
       onTime,
       late,
       punctualityPct,
@@ -249,7 +277,14 @@ export const AdminDashboard: React.FC = () => {
       assistedCount,
       atRiskCount,
     };
-  }, [attendanceRecords, currentService.id, services.length, systemSettings.absenteeThresholdServices, members]);
+  }, [
+    attendanceRecords,
+    currentService.id,
+    services.length,
+    systemSettings.absenteeThresholdServices,
+    members,
+    expectedAttendance,
+  ]);
 
   const handleQuickArrivalCheckin = () => {
     setActiveTab('workflows');
@@ -548,7 +583,9 @@ export const AdminDashboard: React.FC = () => {
               </svg>
               <div>
                 <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Check people in</b>
-                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">Counts arrivals live</small>
+                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block tabular-nums">
+                  {liveInsightsPreview.attendanceCount} present today
+                </small>
               </div>
             </button>
 
@@ -564,7 +601,9 @@ export const AdminDashboard: React.FC = () => {
               </svg>
               <div>
                 <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Follow up</b>
-                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">No one drifts away</small>
+                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block tabular-nums">
+                  {liveInsightsPreview.absenteeCount} absentees
+                </small>
               </div>
             </button>
 
@@ -586,69 +625,152 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </section>
 
-          {/* Live Attendance Insights Summary Strip */}
-          <section className="my-4 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55]">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+          {/* Attendance Overview & 30-Day Engagement Bento Row (2 cols + 4 cols = 6-col Dashboard Grid) */}
+          <div className="grid grid-cols-1 lg:grid-cols-6 gap-4 sm:gap-5 my-4 sm:my-5 items-stretch">
+            {/* Live Service Attendance & Absentee Card */}
+            <section className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
               <div>
-                <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Live Attendance Insights
-                </h2>
-                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                  {currentService.name}
-                  {currentService.date ? ` · ${formatServiceDate(currentService.date)}` : ''} ·{' '}
-                  {currentService.startsAt}–{currentService.endsAt}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('insights');
-                  setActiveModule('attendance');
-                  setAdminSubTab('insights');
-                }}
-                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 self-start sm:self-auto whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <PieChart className="w-3.5 h-3.5" />
-                <span>Open Full Insights</span>
-              </button>
-            </div>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-snug">
+                      Service Attendance
+                    </h2>
+                    <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] truncate tabular-nums">
+                      {currentService.name}
+                      {currentService.date ? ` · ${formatServiceDate(currentService.date)}` : ''} ·{' '}
+                      {currentService.startsAt}–{currentService.endsAt}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInsightsInitialTab('checked_in');
+                      setActiveTab('insights');
+                      setActiveModule('attendance');
+                      setAdminSubTab('insights');
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white text-xs font-bold transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <PieChart className="w-3.5 h-3.5" />
+                    <span>Insights</span>
+                  </button>
+                </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-4 tabular-nums">
-              <div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
-                  Session Turnout
-                </span>
-                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
-                  {liveInsightsPreview.total} / {expectedAttendance} ({attendancePercentage}%)
-                </span>
+                {/* Present vs Absent Interactive Split */}
+                <div className="grid grid-cols-2 divide-x divide-[#E9EBF5] dark:divide-[#2D2D55] my-5 tabular-nums">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInsightsInitialTab('checked_in');
+                      setActiveTab('insights');
+                      setActiveModule('attendance');
+                      setAdminSubTab('insights');
+                    }}
+                    className="pr-3 sm:pr-4 text-left group cursor-pointer"
+                  >
+                    <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] group-hover:text-[#6D5CF2] transition-colors block">
+                      Attendance Count
+                    </span>
+                    <span className="text-3xl sm:text-4xl font-bold text-[#4FBF98] leading-tight mt-1 block">
+                      {liveInsightsPreview.attendanceCount}
+                    </span>
+                    <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 block">
+                      {liveInsightsPreview.attendancePct}% present · {expectedAttendance} exp.
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInsightsInitialTab('unarrived');
+                      setActiveTab('insights');
+                      setActiveModule('attendance');
+                      setAdminSubTab('insights');
+                    }}
+                    className="pl-3 sm:pl-4 text-left group cursor-pointer"
+                  >
+                    <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] group-hover:text-[#6D5CF2] transition-colors block">
+                      Absentee Count
+                    </span>
+                    <span className="text-3xl sm:text-4xl font-bold text-[#EF5A6F] leading-tight mt-1 block">
+                      {liveInsightsPreview.absenteeCount}
+                    </span>
+                    <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 block">
+                      {members.length > 0
+                        ? `${liveInsightsPreview.absenteePct}% of ${members.length} roster`
+                        : `${liveInsightsPreview.absenteePct}% unarrived`}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Live Turnout Split Bar */}
+                <div className="mb-2">
+                  <div className="h-2 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden flex">
+                    <div
+                      className="h-full bg-[#4FBF98] transition-all duration-300"
+                      style={{ width: `${liveInsightsPreview.attendancePct}%` }}
+                    />
+                    {(members.length > 0 || expectedAttendance > 0) &&
+                      liveInsightsPreview.absenteePct > 0 && (
+                        <div
+                          className="h-full bg-[#EF5A6F]/80 transition-all duration-300"
+                          style={{
+                            width: `${Math.min(
+                              100 - liveInsightsPreview.attendancePct,
+                              liveInsightsPreview.absenteePct
+                            )}%`,
+                          }}
+                        />
+                      )}
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1.5 tabular-nums">
+                    <span>
+                      {members.length} {members.length === 1 ? 'member' : 'members'} on roster
+                    </span>
+                    <span>
+                      {liveInsightsPreview.atRiskCount > 0
+                        ? `${liveInsightsPreview.atRiskCount} repeat absentees`
+                        : '0 repeat absentees'}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
-                  On-Time Punctuality
-                </span>
-                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
-                  {liveInsightsPreview.punctualityPct}% ({liveInsightsPreview.onTime} on time ·{' '}
-                  {liveInsightsPreview.late} late)
-                </span>
+
+              {/* Aligned Footer: Punctuality & Arrival Split */}
+              <div className="grid grid-cols-2 gap-3 pt-3 mt-2 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs tabular-nums">
+                <div>
+                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
+                    On-Time Rate
+                  </span>
+                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    {liveInsightsPreview.punctualityPct}%
+                    <span className="ml-1 font-normal text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                      ({liveInsightsPreview.onTime}/{liveInsightsPreview.attendanceCount})
+                    </span>
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
+                    Auto / Door & QR
+                  </span>
+                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    {liveInsightsPreview.autoCount} / {liveInsightsPreview.assistedCount}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
-                  Channel Split
-                </span>
-                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
-                  {liveInsightsPreview.autoCount} auto · {liveInsightsPreview.assistedCount} assisted
-                </span>
-              </div>
-              <div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] block">
-                  Care & GPS Signals
-                </span>
-                <span className="text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-0.5 block">
-                  {liveInsightsPreview.atRiskCount} at-risk · {telemetrySummary.accepted} GPS verified
-                </span>
-              </div>
-            </div>
-          </section>
+            </section>
+
+            {/* 30-Day Weekly Attendance Trend (Recharts Bar Chart - 4 cols on desktop) */}
+            <WeeklyAttendanceTrendChart
+              onOpenInsights={() => {
+                setInsightsInitialTab('checked_in');
+                setActiveTab('insights');
+                setActiveModule('attendance');
+                setAdminSubTab('insights');
+              }}
+              onQuickCheckin={handleQuickArrivalCheckin}
+            />
+          </div>
 
           {/* Cards Grid: Responsive across mobile (1 col), tablet (2 cols), desktop (6 cols) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
@@ -968,7 +1090,7 @@ export const AdminDashboard: React.FC = () => {
                 </span>
               </div>
 
-              {/* Readiness Row 3: Live Session Check-ins */}
+              {/* Readiness Row 3: Live Session Check-ins & Absentees */}
               <div className="p-3 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
                   <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live Service Check-ins</b>
@@ -976,17 +1098,17 @@ export const AdminDashboard: React.FC = () => {
                     {currentService.name} ({currentService.date ? `${formatServiceDate(currentService.date)} · ` : ''}{currentService.startsAt}{currentService.endsAt ? ` – ${currentService.endsAt}` : ''})
                   </em>
                 </div>
-                <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
-                  <span>{attendancePercentage}%</span>
+                <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px] tabular-nums">
+                  <span>{liveInsightsPreview.attendancePct}%</span>
                   <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
                     <div
                       className="h-full bg-[#6D5CF2] rounded-full transition-all"
-                      style={{ width: `${attendancePercentage}%` }}
+                      style={{ width: `${liveInsightsPreview.attendancePct}%` }}
                     />
                   </div>
                 </div>
                 <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold tabular-nums">
-                  {totalCheckedInCount} checked in
+                  {liveInsightsPreview.attendanceCount} present · {liveInsightsPreview.absenteeCount} absent
                 </span>
               </div>
             </section>
@@ -1024,13 +1146,22 @@ export const AdminDashboard: React.FC = () => {
 
             {/* 6. Metrics & Live Premise Status */}
             <div className="md:col-span-1 lg:col-span-2 flex flex-col gap-4">
-              {/* Row with two Circular Progress Rings */}
+              {/* Row with two Circular Progress Rings: Attendance Count & Absentee Count */}
               <div className="grid grid-cols-2 gap-3">
-                {/* Ring 1: Attendance */}
-                <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col items-center text-center">
+                {/* Ring 1: Attendance Count */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInsightsInitialTab('checked_in');
+                    setActiveTab('insights');
+                    setActiveModule('attendance');
+                    setAdminSubTab('insights');
+                  }}
+                  className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/40 transition-colors flex flex-col items-center text-center cursor-pointer"
+                >
                   <div className="relative w-16 h-16 mb-2">
                     <svg className="w-16 h-16 -rotate-90" viewBox="0 0 60 60">
-                      <circle cx="30" cy="30" r="25" fill="none" stroke="#EFEDFF" strokeWidth="6" />
+                      <circle cx="30" cy="30" r="25" fill="none" className="stroke-[#EFEDFF] dark:stroke-[#2A2A55]" strokeWidth="6" />
                       <circle
                         cx="30"
                         cy="30"
@@ -1039,25 +1170,36 @@ export const AdminDashboard: React.FC = () => {
                         stroke="#4FBF98"
                         strokeWidth="6"
                         strokeLinecap="round"
-                        strokeDasharray={`${(157 * attendancePercentage) / 100} 157`}
+                        strokeDasharray={`${(157 * liveInsightsPreview.attendancePct) / 100} 157`}
                       />
                     </svg>
                     <span className="absolute inset-0 flex items-center justify-center font-bold text-xs tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      {attendancePercentage}%
+                      {liveInsightsPreview.attendancePct}%
                     </span>
                   </div>
                   <small className="text-[10px] font-bold text-[#6D5CF2] tracking-wider uppercase">ATTENDANCE</small>
-                  <b className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA] truncate max-w-full">{currentService.name}</b>
+                  <b className="text-sm text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums">
+                    {liveInsightsPreview.attendanceCount} present
+                  </b>
                   <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                    {totalCheckedInCount} of {expectedAttendance}
+                    of {expectedAttendance} expected
                   </span>
-                </div>
+                </button>
 
-                {/* Ring 2: Auto Check-In Opt-In */}
-                <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col items-center text-center">
+                {/* Ring 2: Absentee Count */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInsightsInitialTab('unarrived');
+                    setActiveTab('insights');
+                    setActiveModule('attendance');
+                    setAdminSubTab('insights');
+                  }}
+                  className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/40 transition-colors flex flex-col items-center text-center cursor-pointer"
+                >
                   <div className="relative w-16 h-16 mb-2">
                     <svg className="w-16 h-16 -rotate-90" viewBox="0 0 60 60">
-                      <circle cx="30" cy="30" r="25" fill="none" stroke="#EFEDFF" strokeWidth="6" />
+                      <circle cx="30" cy="30" r="25" fill="none" className="stroke-[#EFEDFF] dark:stroke-[#2A2A55]" strokeWidth="6" />
                       <circle
                         cx="30"
                         cy="30"
@@ -1066,19 +1208,21 @@ export const AdminDashboard: React.FC = () => {
                         stroke="#EF5A6F"
                         strokeWidth="6"
                         strokeLinecap="round"
-                        strokeDasharray={`${(157 * optInPercentage) / 100} 157`}
+                        strokeDasharray={`${(157 * liveInsightsPreview.absenteePct) / 100} 157`}
                       />
                     </svg>
                     <span className="absolute inset-0 flex items-center justify-center font-bold text-xs tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      {optInPercentage}%
+                      {liveInsightsPreview.absenteePct}%
                     </span>
                   </div>
-                  <small className="text-[10px] font-bold text-[#6D5CF2] tracking-wider uppercase">AUTO CHECK-IN</small>
-                  <b className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Opt-in rate</b>
+                  <small className="text-[10px] font-bold text-[#EF5A6F] tracking-wider uppercase">ABSENTEES</small>
+                  <b className="text-sm text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums">
+                    {liveInsightsPreview.absenteeCount} absent
+                  </b>
                   <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                    {manualCheckinCount} manual
+                    of {members.length > 0 ? `${members.length} members` : `${expectedAttendance} expected`}
                   </span>
-                </div>
+                </button>
               </div>
 
               {/* Live Premise & Geofence Card */}
@@ -1128,6 +1272,7 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'insights' && (
         <div className="mt-4">
           <LiveAttendanceInsights
+            initialTableTab={insightsInitialTab}
             onOpenAddMember={() => {
               setEditingMember(null);
               setIsAddMemberOpen(true);
