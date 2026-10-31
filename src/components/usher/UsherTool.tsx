@@ -270,7 +270,7 @@ export const UsherTool: React.FC = () => {
           >
             {services.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}
+                {s.name}{s.date ? ` (${s.date} · ${s.startsAt})` : ` (${s.startsAt})`}
               </option>
             ))}
           </select>

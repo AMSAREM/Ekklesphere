@@ -306,12 +306,27 @@ const DEFAULT_PRIMARY_LICENSE: SystemLicense = {
   ],
 };
 
+const formatLocalDateIso = (d: Date = new Date()): string => {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const formatDisplayDateLabel = (isoDate?: string): string => {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate || '';
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return isoDate;
+  return dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+};
+
 const LIVE_DEFAULT_SERVICE: ServiceInstance = {
   id: 'svc-live-main',
   serviceId: 'svc-live-main',
   campusId: '00000000-0000-0000-0000-000000000001',
   name: 'Main Worship Service',
-  date: new Date().toISOString().split('T')[0],
+  date: formatLocalDateIso(),
   startsAt: '08:00',
   endsAt: '10:30',
   status: 'open',
@@ -1834,21 +1849,54 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const parseTimeDisplay = (raw: unknown, fallback: string): string => {
+    if (typeof raw !== 'string' || !raw.trim()) return fallback;
+    const trimmed = raw.trim();
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+      const [h, m] = trimmed.split(':');
+      return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+    }
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
+    }
+    return fallback;
+  };
+
   const mapDbEventToService = (ev: any): ServiceInstance => {
-    const rawStart = ev.starts_at || ev.start_time;
-    const rawEnd = ev.ends_at || ev.end_time;
-    const startStr = rawStart
-      ? new Date(rawStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-      : '08:00';
-    const endStr = rawEnd
-      ? new Date(rawEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-      : '10:30';
-    const dateStr =
-      typeof ev.date === 'string' && ev.date
-        ? ev.date
-        : typeof ev.starts_at === 'string' && ev.starts_at.includes('T')
-        ? ev.starts_at.split('T')[0]
-        : new Date().toISOString().split('T')[0];
+    const rawStart = ev.start_time || ev.starts_at;
+    const rawEnd = ev.end_time || ev.ends_at;
+    const startStr = parseTimeDisplay(rawStart, '08:00');
+    const endStr = parseTimeDisplay(rawEnd, '10:30');
+
+    let dateStr = '';
+    if (typeof rawStart === 'string' && rawStart.includes('T')) {
+      const parsedStart = new Date(rawStart);
+      if (!Number.isNaN(parsedStart.getTime())) {
+        dateStr = formatLocalDateIso(parsedStart);
+      }
+    }
+    if (!dateStr && typeof ev.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.date)) {
+      dateStr = ev.date;
+    }
+    if (!dateStr) {
+      dateStr = formatLocalDateIso();
+    }
+
+    let expectedCount = Number(ev.expected_attendance) || 0;
+    if (!expectedCount && typeof ev.description === 'string') {
+      const match = ev.description.match(/Expected attendance:\s*(\d+)/i);
+      if (match) expectedCount = Number(match[1]) || 0;
+    }
+
+    const mappedStatus: ServiceInstance['status'] =
+      ev.status === 'closed' || ev.status === 'completed'
+        ? 'closed'
+        : ev.status === 'cancelled'
+        ? 'cancelled'
+        : ev.status === 'scheduled' || ev.status === 'draft'
+        ? 'scheduled'
+        : 'open';
 
     return {
       id: ev.id,
@@ -1858,8 +1906,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       date: dateStr,
       startsAt: startStr,
       endsAt: endStr,
-      status: ev.status === 'closed' ? 'closed' : ev.status === 'draft' ? 'scheduled' : 'open',
-      expectedAttendance: Number(ev.expected_attendance) || 0,
+      status: mappedStatus,
+      expectedAttendance: expectedCount,
     };
   };
 
@@ -1907,13 +1955,38 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     expectedAttendance?: number;
     dwellMinutes?: number;
   }): Promise<void> => {
-    const serviceDate = params.date || new Date().toISOString().split('T')[0];
+    const serviceDate =
+      params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date.trim())
+        ? params.date.trim()
+        : formatLocalDateIso();
+    const startClock = params.startsAt || '08:00';
+    const endClock = params.endsAt || '10:30';
+
+    const [yyyy, mm, dd] = serviceDate.split('-').map(Number);
+    const [sh, sm] = startClock.split(':').map((v) => Number(v) || 0);
+    const [eh, em] = endClock.split(':').map((v) => Number(v) || 0);
+
+    const localStart = new Date(yyyy, mm - 1, dd, sh, sm, 0, 0);
+    let localEnd = new Date(yyyy, mm - 1, dd, eh, em, 0, 0);
+    if (localEnd.getTime() <= localStart.getTime()) {
+      localEnd = new Date(localEnd.getTime() + 24 * 60 * 60 * 1000);
+    }
+
     let created: ServiceInstance | null = null;
+    let serverErrorMsg: string | null = null;
+
     try {
       const res = await fetch('/api/events', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ ...params, date: serviceDate }),
+        body: JSON.stringify({
+          ...params,
+          date: serviceDate,
+          startsAt: startClock,
+          endsAt: endClock,
+          startTimeIso: localStart.toISOString(),
+          endTimeIso: localEnd.toISOString(),
+        }),
       });
 
       if (res.ok) {
@@ -1921,11 +1994,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         created = {
           ...mapDbEventToService(data),
           date: serviceDate,
+          startsAt: startClock,
+          endsAt: endClock,
           expectedAttendance: params.expectedAttendance ?? 0,
         };
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        serverErrorMsg = errBody?.message || `Failed to save service (HTTP ${res.status})`;
       }
     } catch {
-      // offline or serverless fallback
+      // network offline fallback allowed below
+    }
+
+    if (serverErrorMsg) {
+      throw new Error(serverErrorMsg);
     }
 
     if (!created) {
@@ -1936,9 +2018,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         campusId: '00000000-0000-0000-0000-000000000001',
         name: params.name || 'Worship Service',
         date: serviceDate,
-        startsAt: params.startsAt || '08:00',
-        endsAt: params.endsAt || '10:30',
-        status: 'open',
+        startsAt: startClock,
+        endsAt: endClock,
+        status: serviceDate > formatLocalDateIso() ? 'scheduled' : 'open',
         expectedAttendance: params.expectedAttendance ?? 0,
       };
     }
@@ -1974,7 +2056,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       localStorage.setItem('ekklesphere_active_service_id', created.id);
     } catch {}
 
-    showToast(`Scheduled "${created.name}" for ${created.date} (${created.startsAt}${created.endsAt ? ` – ${created.endsAt}` : ''})`);
+    showToast(
+      `Scheduled "${created.name}" for ${formatDisplayDateLabel(created.date)} (${created.startsAt}${created.endsAt ? ` – ${created.endsAt}` : ''})`
+    );
   };
 
   useEffect(() => {

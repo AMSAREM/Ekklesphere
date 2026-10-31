@@ -889,4 +889,16 @@ create index if not exists idx_fk_donations_tenant on public.donations (tenant_i
 create index if not exists idx_fk_donations_person on public.donations (person_id);
 create index if not exists idx_fk_donations_fund on public.donations (fund_id);
 
+-- Ensure primary live organization exists without conflicting on id or slug
+insert into public.organizations (
+  id, name, slug, timezone
+) values (
+  'e0000000-0000-0000-0000-000000000001',
+  'PIWC KWADASO',
+  'primary-church',
+  'Africa/Accra'
+) on conflict do nothing;
+
+notify pgrst, 'reload schema';
+
 

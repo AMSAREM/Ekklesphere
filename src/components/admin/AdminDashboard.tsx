@@ -119,11 +119,29 @@ export const AdminDashboard: React.FC = () => {
   // Notifications clear state
   const [notificationsCleared, setNotificationsCleared] = useState(false);
 
+  const getLocalIsoDate = (d: Date = new Date()): string => {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const formatServiceDate = (isoDate?: string, includeYear: boolean = false): string => {
+    if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate || '';
+    const [y, m, d] = isoDate.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    if (Number.isNaN(dt.getTime())) return isoDate;
+    return dt.toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      ...(includeYear ? { year: 'numeric' } : {}),
+    });
+  };
+
   // Calendar week & day selector (live current week)
   const [weekOffset, setWeekOffset] = useState<number>(0);
-  const [selectedDateIso, setSelectedDateIso] = useState<string>(
-    () => new Date().toISOString().split('T')[0]
-  );
+  const [selectedDateIso, setSelectedDateIso] = useState<string>(() => getLocalIsoDate());
 
   // Modals
   const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
@@ -133,15 +151,19 @@ export const AdminDashboard: React.FC = () => {
 
   // Schedule new service form state
   const [newServiceName, setNewServiceName] = useState('Sunday Main Service');
-  const [newServiceDate, setNewServiceDate] = useState<string>(
-    () => new Date().toISOString().split('T')[0]
-  );
+  const [newServiceDate, setNewServiceDate] = useState<string>(() => getLocalIsoDate());
   const [newServiceTime, setNewServiceTime] = useState('08:00');
   const [newServiceEndTime, setNewServiceEndTime] = useState('10:30');
   const [newServiceExpected, setNewServiceExpected] = useState('');
   const [newServiceDwell, setNewServiceDwell] = useState(String(systemSettings.dwellTimeMinutes || 5));
   const [isCreatingService, setIsCreatingService] = useState(false);
-  const [showAllServicesInCalendar, setShowAllServicesInCalendar] = useState(false);
+
+  // Pre-fill service date from selected calendar date when opening Schedule New Service modal
+  useEffect(() => {
+    if (isAddServiceOpen) {
+      setNewServiceDate(selectedDateIso || getLocalIsoDate());
+    }
+  }, [isAddServiceOpen, selectedDateIso]);
 
   // New assignment form state
   const [newAssignMemberId, setNewAssignMemberId] = useState('');
@@ -175,7 +197,7 @@ export const AdminDashboard: React.FC = () => {
       return {
         name,
         date: d.getDate(),
-        iso: d.toISOString().split('T')[0],
+        iso: getLocalIsoDate(d),
         fullDate: d,
       };
     });
@@ -211,15 +233,21 @@ export const AdminDashboard: React.FC = () => {
       showToast('Please enter a service name');
       return;
     }
+    if (!newServiceDate) {
+      showToast('Please select a service date');
+      return;
+    }
     setIsCreatingService(true);
     try {
       await addService({
         name: newServiceName.trim(),
+        date: newServiceDate,
         startsAt: newServiceTime || '08:00',
         endsAt: newServiceEndTime || '10:30',
         expectedAttendance: Number(newServiceExpected) || 0,
         dwellMinutes: Number(newServiceDwell) || systemSettings.dwellTimeMinutes || 5,
       });
+      setSelectedDateIso(newServiceDate);
       setIsAddServiceOpen(false);
     } catch (err: any) {
       showToast(err?.message || 'Could not schedule service');
@@ -662,14 +690,23 @@ export const AdminDashboard: React.FC = () => {
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">{weekRangeLabel}</h2>
                   <div className="flex items-center gap-1">
                     <button
+                      onClick={() => setIsAddServiceOpen(true)}
+                      className="px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-[11px] font-bold hover:opacity-90 transition-opacity flex items-center gap-1 cursor-pointer mr-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Schedule
+                    </button>
+                    <button
                       onClick={() => setWeekOffset((w) => w - 1)}
-                      className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5"
+                      className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                      aria-label="Previous week"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => setWeekOffset((w) => w + 1)}
-                      className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5"
+                      className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                      aria-label="Next week"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>
@@ -678,54 +715,79 @@ export const AdminDashboard: React.FC = () => {
 
                 {/* 7-day selector */}
                 <div className="grid grid-cols-7 gap-1 text-center mb-4">
-                  {weekDays.map((d) => (
-                    <button
-                      key={d.iso}
-                      onClick={() => setSelectedDateIso(d.iso)}
-                      className={`flex flex-col items-center py-1.5 rounded-xl transition-all ${
-                        selectedDateIso === d.iso
-                          ? 'bg-[#6D5CF2] text-white shadow-sm font-bold'
-                          : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
-                      }`}
-                    >
-                      <span className="text-[10px] uppercase font-semibold">{d.name}</span>
-                      <b className="text-xs">{d.date}</b>
-                    </button>
-                  ))}
+                  {weekDays.map((d) => {
+                    const hasServiceOnDay = services.some((s) => s.date === d.iso);
+                    const isSelected = selectedDateIso === d.iso;
+                    return (
+                      <button
+                        key={d.iso}
+                        onClick={() => setSelectedDateIso(d.iso)}
+                        className={`flex flex-col items-center py-1.5 rounded-xl transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#6D5CF2] text-white shadow-sm font-bold'
+                            : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
+                        }`}
+                      >
+                        <span className="text-[10px] uppercase font-semibold">{d.name}</span>
+                        <b className="text-xs">{d.date}</b>
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full mt-0.5 ${
+                            hasServiceOnDay
+                              ? isSelected
+                                ? 'bg-white'
+                                : 'bg-[#6D5CF2]'
+                              : 'bg-transparent'
+                          }`}
+                        />
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Live scheduled services list */}
-                <div className="space-y-2">
-                  {services.map((svc) => (
-                    <button
-                      key={svc.id}
-                      type="button"
-                      onClick={() => setActiveServiceId(svc.id)}
-                      className={`w-full text-left bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-all ${
-                        svc.id === activeServiceId
-                          ? 'border-[#6D5CF2]'
-                          : 'border-[#E9EBF5] dark:border-[#2D2D55]'
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
-                        <CalendarIcon className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                          {svc.name}
-                        </b>
-                        <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                          {svc.startsAt} - {svc.endsAt} · {systemSettings.campusName}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                <div className="space-y-2 max-h-[210px] overflow-y-auto pr-0.5">
+                  {services.map((svc) => {
+                    const isSelectedDay = svc.date === selectedDateIso;
+                    return (
+                      <button
+                        key={svc.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveServiceId(svc.id);
+                          if (svc.date) setSelectedDateIso(svc.date);
+                        }}
+                        className={`w-full text-left bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-all cursor-pointer ${
+                          svc.id === activeServiceId
+                            ? 'border-[#6D5CF2] ring-1 ring-[#6D5CF2]/30'
+                            : isSelectedDay
+                            ? 'border-[#CBC6F7] dark:border-[#3B3B72]'
+                            : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
+                          <CalendarIcon className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                            {svc.name}
+                          </b>
+                          <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block truncate">
+                            {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
+                            {svc.startsAt} - {svc.endsAt} · {systemSettings.campusName}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="pt-3 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#666A86] dark:text-[#A9ACC8] flex justify-between items-center">
+              <div className="pt-3 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#666A86] dark:text-[#A9ACC8] flex justify-between items-center gap-2">
                 <span>Active Service:</span>
-                <span className="font-bold text-[#6D5CF2]">{currentService.name}</span>
+                <span className="font-bold text-[#6D5CF2] truncate">
+                  {currentService.name}
+                  {currentService.date ? ` (${formatServiceDate(currentService.date)})` : ''}
+                </span>
               </div>
             </section>
 
@@ -814,7 +876,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="min-w-0">
                   <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live Service Check-ins</b>
                   <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
-                    {currentService.name} ({currentService.startsAt}{currentService.endsAt ? ` – ${currentService.endsAt}` : ''})
+                    {currentService.name} ({currentService.date ? `${formatServiceDate(currentService.date)} · ` : ''}{currentService.startsAt}{currentService.endsAt ? ` – ${currentService.endsAt}` : ''})
                   </em>
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px]">
@@ -1105,61 +1167,88 @@ export const AdminDashboard: React.FC = () => {
             </div>
             <div className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Service Name</label>
+                <label htmlFor="new-service-name" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Service Name
+                </label>
                 <input
+                  id="new-service-name"
                   type="text"
                   value={newServiceName}
                   onChange={(e) => setNewServiceName(e.target.value)}
                   placeholder="e.g. Sunday First Service"
-                  className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                  className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                />
+              </div>
+              <div>
+                <label htmlFor="new-service-date" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Service Date
+                </label>
+                <input
+                  id="new-service-date"
+                  type="date"
+                  value={newServiceDate}
+                  onChange={(e) => setNewServiceDate(e.target.value)}
+                  className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums"
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Start Time</label>
+                  <label htmlFor="new-service-start" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Start Time
+                  </label>
                   <input
+                    id="new-service-start"
                     type="time"
                     value={newServiceTime}
                     onChange={(e) => setNewServiceTime(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                    className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">End Time</label>
+                  <label htmlFor="new-service-end" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    End Time
+                  </label>
                   <input
+                    id="new-service-end"
                     type="time"
                     value={newServiceEndTime}
                     onChange={(e) => setNewServiceEndTime(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                    className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums"
                   />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Expected Attendance</label>
+                  <label htmlFor="new-service-expected" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Expected Attendance
+                  </label>
                   <input
+                    id="new-service-expected"
                     type="number"
                     min="0"
                     value={newServiceExpected}
                     onChange={(e) => setNewServiceExpected(e.target.value)}
                     placeholder="Optional"
-                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                    className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">Dwell Rule (Minutes)</label>
+                  <label htmlFor="new-service-dwell" className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Dwell Rule (Minutes)
+                  </label>
                   <input
+                    id="new-service-dwell"
                     type="number"
                     min="1"
                     value={newServiceDwell}
                     onChange={(e) => setNewServiceDwell(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                    className="w-full min-h-[44px] p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums"
                   />
                 </div>
               </div>
               <div>
                 <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
-                  Geofence auto check-in operates from {newServiceTime || '08:00'} to {newServiceEndTime || '10:30'} ({newServiceDwell || systemSettings.dwellTimeMinutes} min dwell inside {systemSettings.innerGeofenceMeters}m perimeter).
+                  Scheduled for <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{formatServiceDate(newServiceDate, true)}</b> · Geofence auto check-in operates from {newServiceTime || '08:00'} to {newServiceEndTime || '10:30'} ({newServiceDwell || systemSettings.dwellTimeMinutes} min dwell inside {systemSettings.innerGeofenceMeters}m perimeter).
                 </span>
               </div>
             </div>

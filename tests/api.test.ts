@@ -327,14 +327,22 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.error).toBe('forbidden');
     });
 
-    it('PERMITS pastor or admin creating church service events', async () => {
+    it('PERMITS pastor or admin creating church service events with scheduled date', async () => {
       const res = await request(app)
         .post('/api/events')
         .set('Authorization', `Bearer ${pastorToken}`)
-        .send({ name: 'Friday Revival Night', startsAt: '18:30', endsAt: '21:00' });
+        .send({
+          name: 'Friday Revival Night',
+          date: '2026-11-13',
+          startsAt: '18:30',
+          endsAt: '21:00',
+        });
 
       expect(res.status).toBe(201);
       expect(res.body.name).toBe('Friday Revival Night');
+      expect(res.body.date).toBe('2026-11-13');
+      expect(res.body.start_time).toContain('2026-11-13T18:30:00');
+      expect(res.body.end_time).toContain('2026-11-13T21:00:00');
     });
 
     it('REJECTS member viewing entire church roster with 403 Forbidden', async () => {

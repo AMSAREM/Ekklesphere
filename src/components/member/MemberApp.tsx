@@ -343,14 +343,28 @@ export const MemberApp: React.FC = () => {
   };
 
   const eventsList = services.map((svc) => {
+    let parsedDate: Date | null = null;
+    if (svc.date && /^\d{4}-\d{2}-\d{2}$/.test(svc.date)) {
+      const [y, m, d] = svc.date.split('-').map(Number);
+      const candidate = new Date(y, m - 1, d);
+      if (!Number.isNaN(candidate.getTime())) parsedDate = candidate;
+    } else if (svc.startsAt && svc.startsAt.includes('T')) {
+      const candidate = new Date(svc.startsAt);
+      if (!Number.isNaN(candidate.getTime())) parsedDate = candidate;
+    }
+
     const startObj = new Date(svc.startsAt);
     const endObj = new Date(svc.endsAt);
     const isValidStart = !Number.isNaN(startObj.getTime());
     const isValidEnd = !Number.isNaN(endObj.getTime());
-    const dateDay = isValidStart
+    const dateDay = parsedDate
+      ? parsedDate.toLocaleDateString('en-GB', { weekday: 'short' })
+      : isValidStart
       ? startObj.toLocaleDateString('en-GB', { weekday: 'short' })
       : 'Sun';
-    const dateNum = isValidStart
+    const dateNum = parsedDate
+      ? parsedDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+      : isValidStart
       ? startObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
       : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const startTimeStr = isValidStart
@@ -365,7 +379,7 @@ export const MemberApp: React.FC = () => {
       dateDay,
       dateNum,
       title: svc.name,
-      timeVenue: `${startTimeStr} – ${endTimeStr}, ${systemSettings.campusName}`,
+      timeVenue: `${ parsedDate ? `${dateNum} · ` : '' }${startTimeStr} – ${endTimeStr}, ${systemSettings.campusName}`,
       category: svc.status === 'open' ? 'Open Check-In' : 'Scheduled Service',
       desc: `${systemSettings.churchName} gathering at ${systemSettings.campusName}.`,
     };

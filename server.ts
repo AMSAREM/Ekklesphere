@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -16,7 +17,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = 3000;
-const LIVE_STATE_PATH = path.join(__dirname, '.live_campus_state.json');
+const LIVE_STATE_PATH = path.join(os.tmpdir(), 'ekklesphere_live_campus_state.json');
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 const PRIMARY_ORGANIZATION_ID = 'e0000000-0000-0000-0000-000000000001';
 
@@ -1095,15 +1096,61 @@ app.get(['/attendance/sites', '/api/attendance/sites'], (_req: Request, res: Res
 // CHURCH WORSHIP SERVICES & EVENTS
 // =========================================================================
 
+function parseExpectedAttendanceFromDescription(desc: unknown): number {
+  if (typeof desc !== 'string') return 0;
+  const match = desc.match(/Expected attendance:\s*(\d+)/i);
+  return match ? Number(match[1]) || 0 : 0;
+}
+
+function normalizeEventRow(row: Record<string, any>): Record<string, any> {
+  const startRaw = row.start_time || row.starts_at || null;
+  const endRaw = row.end_time || row.ends_at || null;
+  let dateStr = typeof row.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.date) ? row.date : '';
+  if (!dateStr && typeof startRaw === 'string' && startRaw.includes('T')) {
+    dateStr = startRaw.split('T')[0];
+  }
+  if (!dateStr) {
+    dateStr = new Date().toISOString().split('T')[0];
+  }
+
+  const expected =
+    typeof row.expected_attendance === 'number'
+      ? row.expected_attendance
+      : parseExpectedAttendanceFromDescription(row.description);
+
+  return {
+    ...row,
+    date: dateStr,
+    start_time: startRaw,
+    end_time: endRaw,
+    starts_at: startRaw,
+    ends_at: endRaw,
+    expected_attendance: expected,
+  };
+}
+
+function buildIsoTimestamp(dateStr: string, timeOrIso: string): Date {
+  if (timeOrIso.includes('T')) {
+    const parsed = new Date(timeOrIso);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  const timeMatch = timeOrIso.match(/^(\d{1,2}):(\d{2})/);
+  const hh = timeMatch ? String(Math.min(23, Math.max(0, Number(timeMatch[1])))).padStart(2, '0') : '08';
+  const mm = timeMatch ? String(Math.min(59, Math.max(0, Number(timeMatch[2])))).padStart(2, '0') : '00';
+  const candidate = new Date(`${dateStr}T${hh}:${mm}:00.000Z`);
+  return Number.isNaN(candidate.getTime()) ? new Date() : candidate;
+}
+
 app.get(['/api/v1/events', '/api/events'], async (_req: Request, res: Response) => {
-  if (supabase) {
+  const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+  if (supabase && !isTestEnv) {
     try {
       const { data, error } = await supabase
         .from('events')
         .select('*')
         .order('start_time', { ascending: true });
       if (!error && Array.isArray(data) && data.length > 0) {
-        return res.json(data);
+        return res.json(data.map(normalizeEventRow));
       }
     } catch {
       // fallback to memory
@@ -1111,7 +1158,7 @@ app.get(['/api/v1/events', '/api/events'], async (_req: Request, res: Response) 
   }
 
   if (inMemoryEventsList.length > 0) {
-    return res.json(inMemoryEventsList);
+    return res.json(inMemoryEventsList.map(normalizeEventRow));
   }
 
   const todayIso = new Date().toISOString().split('T')[0];
@@ -1121,15 +1168,19 @@ app.get(['/api/v1/events', '/api/events'], async (_req: Request, res: Response) 
       id: 'svc-sun-1',
       name: 'Sunday First Service (English)',
       date: todayIso,
+      start_time: `${todayIso}T07:00:00.000Z`,
+      end_time: `${todayIso}T09:00:00.000Z`,
       starts_at: '07:00',
       ends_at: '09:00',
-      status: 'open',
+      status: 'active',
       dwell_min: 5,
     },
     {
       id: 'svc-sun-2',
       name: 'Sunday Second Service (Twi / Multilingual)',
       date: todayIso,
+      start_time: `${todayIso}T09:30:00.000Z`,
+      end_time: `${todayIso}T11:45:00.000Z`,
       starts_at: '09:30',
       ends_at: '11:45',
       status: 'scheduled',
@@ -1142,45 +1193,101 @@ app.post(
   ['/api/v1/events', '/api/events'],
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   async (req: Request, res: Response) => {
-    const name = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : 'Worship Service';
-    const rawDate = typeof req.body?.date === 'string' && req.body.date.trim()
-      ? req.body.date.trim()
-      : new Date().toISOString().split('T')[0];
-    const rawStartsAt = typeof req.body?.startsAt === 'string' ? req.body.startsAt.trim() : '08:00';
-    const rawEndsAt = typeof req.body?.endsAt === 'string' ? req.body.endsAt.trim() : '10:30';
-    const dwellMin = Number.isFinite(Number(req.body?.dwellMinutes)) ? Math.max(1, Number(req.body.dwellMinutes)) : 5;
-    const expectedAttendance = Number.isFinite(Number(req.body?.expectedAttendance)) ? Math.max(0, Number(req.body.expectedAttendance)) : 0;
+    const name =
+      typeof req.body?.name === 'string' && req.body.name.trim()
+        ? req.body.name.trim()
+        : 'Worship Service';
+    const todayIso = new Date().toISOString().split('T')[0];
+    const rawDate =
+      typeof req.body?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date.trim())
+        ? req.body.date.trim()
+        : todayIso;
+    const rawStartsAt = typeof req.body?.startsAt === 'string' && req.body.startsAt.trim() ? req.body.startsAt.trim() : '08:00';
+    const rawEndsAt = typeof req.body?.endsAt === 'string' && req.body.endsAt.trim() ? req.body.endsAt.trim() : '10:30';
+    const dwellMin = Number.isFinite(Number(req.body?.dwellMinutes))
+      ? Math.max(1, Number(req.body.dwellMinutes))
+      : 5;
+    const expectedAttendance = Number.isFinite(Number(req.body?.expectedAttendance))
+      ? Math.max(0, Number(req.body.expectedAttendance))
+      : 0;
 
-    const newService = {
+    let startDateObj: Date;
+    if (typeof req.body?.startTimeIso === 'string' && !Number.isNaN(new Date(req.body.startTimeIso).getTime())) {
+      startDateObj = new Date(req.body.startTimeIso);
+    } else {
+      startDateObj = buildIsoTimestamp(rawDate, rawStartsAt);
+    }
+
+    let endDateObj: Date;
+    if (typeof req.body?.endTimeIso === 'string' && !Number.isNaN(new Date(req.body.endTimeIso).getTime())) {
+      endDateObj = new Date(req.body.endTimeIso);
+    } else if (req.body?.endsAt) {
+      endDateObj = buildIsoTimestamp(rawDate, rawEndsAt);
+    } else {
+      endDateObj = new Date(startDateObj.getTime() + 90 * 60 * 1000);
+    }
+
+    if (endDateObj.getTime() <= startDateObj.getTime()) {
+      endDateObj = new Date(endDateObj.getTime() + 24 * 60 * 60 * 1000);
+    }
+
+    const computedStartIso = startDateObj.toISOString();
+    const computedEndIso = endDateObj.toISOString();
+    const dbStatus = rawDate > todayIso ? 'scheduled' : 'active';
+    const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+
+    if (supabase && !isTestEnv) {
+      const { data: inserted, error } = await supabase
+        .from('events')
+        .insert({
+          organization_id: req.user?.tenant_id || PRIMARY_ORGANIZATION_ID,
+          name,
+          description: expectedAttendance > 0 ? `Expected attendance: ${expectedAttendance}` : null,
+          start_time: computedStartIso,
+          end_time: computedEndIso,
+          dwell_min: dwellMin,
+          status: dbStatus,
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('[Ekklesphere] Failed to insert event into Supabase:', error.message);
+        return res.status(500).json({
+          error: 'database_error',
+          message: `Failed to save scheduled service: ${error.message}`,
+        });
+      }
+
+      if (inserted) {
+        const normalized = normalizeEventRow({
+          ...inserted,
+          date: rawDate,
+          expected_attendance: expectedAttendance,
+        });
+        inMemoryEventsList.push(normalized);
+        saveLiveState();
+        return res.status(201).json(normalized);
+      }
+    }
+
+    const newService = normalizeEventRow({
       id: `svc-${Date.now()}`,
+      organization_id: req.user?.tenant_id || PRIMARY_ORGANIZATION_ID,
       name,
       date: rawDate,
-      starts_at: rawStartsAt,
-      ends_at: rawEndsAt,
+      start_time: computedStartIso,
+      end_time: computedEndIso,
+      starts_at: computedStartIso,
+      ends_at: computedEndIso,
       dwell_min: dwellMin,
-      status: 'open',
+      status: dbStatus,
       site_id: PRIMARY_CAMPUS_SITE_ID,
       expected_attendance: expectedAttendance,
-    };
+    });
 
     inMemoryEventsList.push(newService);
     saveLiveState();
-
-    if (supabase) {
-      try {
-        await supabase.from('events').insert({
-          name,
-          date: rawDate,
-          starts_at: rawStartsAt,
-          ends_at: rawEndsAt,
-          dwell_min: dwellMin,
-          status: 'open',
-          expected_attendance: expectedAttendance,
-        });
-      } catch {
-        // ignore
-      }
-    }
 
     return res.status(201).json(newService);
   }
