@@ -140,9 +140,9 @@ export const DEFAULT_LANDING_CMS: LandingPageConfig = {
   heroTitle: 'Next-Gen Presence Radar & Sovereign Church Management',
   heroSubtitle:
     'Real-time automated geofence attendance, multi-role pastoral dashboards, usher door check-in station, and personal congregation mobile passes.',
-  announcementBadge: 'PIWC KWADASO Live System Deployed & Geofence Active',
+  announcementBadge: 'Ekklesphere Sovereign Geofence Radar Live',
   isAnnouncementActive: true,
-  contactSalesEmail: 'admin@piwckwadaso.org',
+  contactSalesEmail: 'contact@ekklesphere.platform',
   demoEnabled: false,
   showcaseHeadline: 'Transforming Sanctuary Operations with Sovereign Geofence Radar',
   featuredStats: {
@@ -338,24 +338,31 @@ class PlatformStore {
     const oneYearOut = new Date(now.getTime() + 365 * DAY_MS).toISOString().slice(0, 10);
     const graceOut = new Date(now.getTime() + (365 + GRACE_PERIOD_DAYS) * DAY_MS).toISOString().slice(0, 10);
 
+    if (!this.isTestRuntime) {
+      // In live environment, zero demo or mock organizations are seeded.
+      // Creator will provision the new church organization and issue its license.
+      // If Supabase is configured, existing churches are loaded directly from Postgres.
+      return;
+    }
+
     const primaryOrg: TenantChurch = {
       id: PRIMARY_ORGANIZATION_ID,
-      name: 'PIWC KWADASO',
-      slug: 'piwc-kwadaso',
+      name: 'Test Anchor Sanctuary',
+      slug: 'test-sanctuary',
       orgType: 'church',
-      campusCode: 'PIWC-01',
-      city: 'Kumasi',
+      campusCode: 'TEST-01',
+      city: 'Accra',
       country: 'Ghana',
-      seniorPastor: 'Pastor in Charge',
+      seniorPastor: 'Lead Pastor',
       contactName: 'Church Administrator',
-      contactEmail: 'admin@piwckwadaso.org',
+      contactEmail: 'admin@ekklesphere.church',
       contactPhone: '+233240000000',
       status: 'active',
       memberCount: 0,
       maxCapacity: 2500,
       sitesCount: 1,
       sitesLimit: 15,
-      licenseKey: 'EKKLE-PIWC-KWADASO-ENT-2026',
+      licenseKey: 'EKKLE-TEST-SANCTUARY-2026',
       licenseTier: 'cathedral_enterprise',
       licenseStatus: 'active',
       renewalDate: oneYearOut,
@@ -371,7 +378,7 @@ class PlatformStore {
 
     const primaryLicense: SystemLicense = {
       id: 'c0000000-0000-4000-8000-000000000001',
-      key: 'EKKLE-PIWC-KWADASO-ENT-2026',
+      key: 'EKKLE-TEST-SANCTUARY-2026',
       tier: 'cathedral_enterprise',
       tenantId: PRIMARY_ORGANIZATION_ID,
       organizationId: PRIMARY_ORGANIZATION_ID,
@@ -386,7 +393,7 @@ class PlatformStore {
       billingCycle: 'annual',
       annualCostUSD: 1200,
       overrides: {},
-      notes: 'Primary anchor sanctuary license',
+      notes: 'Test suite anchor sanctuary license',
       enabledFeatures: enabledFeatureLabelsFromFlags(DEFAULT_PLANS.cathedral_enterprise.featureFlags),
     };
     this.licenses.set(primaryLicense.id, primaryLicense);
@@ -394,31 +401,31 @@ class PlatformStore {
     const defaultSite: RegisteredSiteRecord = {
       id: PRIMARY_CAMPUS_SITE_ID,
       organization_id: PRIMARY_ORGANIZATION_ID,
-      name: 'PIWC KWADASO',
-      address: 'Kwadaso Estate, Kumasi, Ghana',
-      lat: 6.6833,
-      lng: -1.65,
+      name: 'Test Campus Premise',
+      address: 'Central Sanctuary, Accra, Ghana',
+      lat: 5.6037,
+      lng: -0.187,
       radius_m: 60,
       outer_radius_m: 300,
       dwell_min: 5,
       active: true,
       updated_at: now.toISOString(),
-      updated_by: 'System Baseline',
+      updated_by: 'System Test Baseline',
     };
     this.sitesByOrg.set(PRIMARY_ORGANIZATION_ID, [defaultSite]);
     this.premiseByOrg.set(PRIMARY_ORGANIZATION_ID, {
       organizationId: PRIMARY_ORGANIZATION_ID,
-      churchName: 'PIWC KWADASO',
-      campusName: 'PIWC KWADASO',
-      campusAddress: 'Kwadaso Estate, Kumasi, Ghana',
-      lat: 6.6833,
-      lng: -1.65,
+      churchName: 'Test Anchor Sanctuary',
+      campusName: 'Test Campus Premise',
+      campusAddress: 'Central Sanctuary, Accra, Ghana',
+      lat: 5.6037,
+      lng: -0.187,
       accuracyM: 5,
       innerGeofenceMeters: 60,
       outerGeofenceMeters: 300,
       dwellTimeMinutes: 5,
       updatedAt: now.toISOString(),
-      updatedBy: 'System Baseline',
+      updatedBy: 'System Test Baseline',
     });
 
     const defaultFlags: PlatformFeatureFlag[] = [

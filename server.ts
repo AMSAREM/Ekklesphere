@@ -157,7 +157,12 @@ app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
   const rawEmail =
     typeof req.body?.email === 'string' && req.body.email.trim()
       ? req.body.email.trim().toLowerCase()
-      : 'member@piwckwadaso.org';
+      : '';
+
+  if (!rawEmail) {
+    return res.status(400).json({ error: 'missing_email', message: 'Email address is required.' });
+  }
+
   const rawName =
     typeof req.body?.name === 'string' && req.body.name.trim()
       ? req.body.name.trim()
@@ -181,6 +186,9 @@ app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
     ? (requestedRole as ChurchRole)
     : 'member';
 
+  const orgs = await platformStore.listOrganisations();
+  const activeOrgId = orgs[0]?.id || PRIMARY_ORGANIZATION_ID;
+
   const id =
     typeof req.body?.id === 'string' && req.body.id.trim()
       ? req.body.id.trim()
@@ -191,8 +199,8 @@ app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
     email: rawEmail,
     role,
     name: rawName,
-    organization_id: PRIMARY_ORGANIZATION_ID,
-    tenant_id: PRIMARY_ORGANIZATION_ID,
+    organization_id: activeOrgId,
+    tenant_id: activeOrgId,
     campus_id: PRIMARY_CAMPUS_SITE_ID,
     is_creator: role === 'creator' || role === 'super_admin',
     auth_provider: 'session_jwt',
@@ -201,15 +209,15 @@ app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
   return res.status(200).json({
     token,
     role,
-    organizationId: PRIMARY_ORGANIZATION_ID,
+    organizationId: activeOrgId,
     isCreator: role === 'creator' || role === 'super_admin',
     user: {
       id,
       email: rawEmail,
       name: rawName,
       role,
-      organization_id: PRIMARY_ORGANIZATION_ID,
-      tenant_id: PRIMARY_ORGANIZATION_ID,
+      organization_id: activeOrgId,
+      tenant_id: activeOrgId,
     },
   });
 });
@@ -219,20 +227,33 @@ app.post('/api/auth/creator-session', async (req: Request, res: Response) => {
   const rawEmail =
     typeof req.body?.email === 'string' && req.body.email.trim()
       ? req.body.email.trim().toLowerCase()
-      : 'elenaamoako70@gmail.com';
+      : (process.env.CREATOR_EMAIL || '').trim().toLowerCase();
+
+  if (!rawEmail) {
+    return res.status(400).json({
+      error: 'missing_email',
+      message: 'Creator email address is required.',
+    });
+  }
 
   const rawName =
     typeof req.body?.name === 'string' && req.body.name.trim()
       ? req.body.name.trim()
-      : 'Platform Creator';
+      : rawEmail
+          .split('@')[0]
+          .replace(/[._-]+/g, ' ')
+          .replace(/\b\w/g, (c: string) => c.toUpperCase()) || 'Platform Creator';
+
+  const orgs = await platformStore.listOrganisations();
+  const activeOrgId = orgs[0]?.id || PRIMARY_ORGANIZATION_ID;
 
   const token = signToken({
     id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
     email: rawEmail,
     role: 'creator',
     name: rawName,
-    organization_id: PRIMARY_ORGANIZATION_ID,
-    tenant_id: PRIMARY_ORGANIZATION_ID,
+    organization_id: activeOrgId,
+    tenant_id: activeOrgId,
     campus_id: PRIMARY_CAMPUS_SITE_ID,
     is_creator: true,
     auth_provider: 'session_jwt',
@@ -241,15 +262,15 @@ app.post('/api/auth/creator-session', async (req: Request, res: Response) => {
   return res.status(200).json({
     token,
     role: 'creator',
-    organizationId: PRIMARY_ORGANIZATION_ID,
+    organizationId: activeOrgId,
     isCreator: true,
     user: {
       id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
       email: rawEmail,
       name: rawName,
       role: 'creator',
-      organization_id: PRIMARY_ORGANIZATION_ID,
-      tenant_id: PRIMARY_ORGANIZATION_ID,
+      organization_id: activeOrgId,
+      tenant_id: activeOrgId,
       is_creator: true,
     },
   });

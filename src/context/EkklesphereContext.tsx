@@ -34,8 +34,8 @@ import { pushNotificationService } from '../services/pushNotificationService';
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
-  churchName: 'PIWC KWADASO',
-  campusName: 'PIWC KWADASO',
+  churchName: '',
+  campusName: '',
   campusAddress: '',
   campusLatitude: null,
   campusLongitude: null,
@@ -47,7 +47,7 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   timezone: 'Africa/Accra (GMT)',
   currency: 'GHS (Ghana Cedi)',
   outerGeofenceMeters: 300,
-  innerGeofenceMeters: 50,
+  innerGeofenceMeters: 100,
   dwellTimeMinutes: 5,
   serviceWindowBeforeMinutes: 45,
   serviceWindowAfterMinutes: 30,
@@ -272,9 +272,9 @@ export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
   heroTitle: 'Next-Gen Presence Radar & Sovereign Church Management',
   heroSubtitle:
     'Real-time automated geofence attendance, multi-role pastoral dashboards, usher door check-in station, and personal congregation mobile passes.',
-  announcementBadge: 'PIWC KWADASO Live System Deployed & Geofence Active',
+  announcementBadge: 'Ekklesphere Sovereign Geofence Radar Live',
   isAnnouncementActive: true,
-  contactSalesEmail: 'admin@piwckwadaso.org',
+  contactSalesEmail: 'contact@ekklesphere.platform',
   demoEnabled: false,
   showcaseHeadline: 'Transforming Sanctuary Operations with Sovereign Geofence Radar',
   featuredStats: {
@@ -283,59 +283,6 @@ export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
     proximityAccuracy: '100m Dwell',
     networkUptime: '99.98%',
   },
-};
-
-const DEFAULT_PRIMARY_TENANT: TenantChurch = {
-  id: 'e0000000-0000-0000-0000-000000000001',
-  name: 'PIWC KWADASO',
-  slug: 'piwc-kwadaso',
-  campusCode: 'PIWC-01',
-  city: 'Kumasi',
-  country: 'Ghana',
-  seniorPastor: 'Pastor in Charge',
-  contactEmail: 'admin@piwckwadaso.org',
-  contactPhone: '+233 24 000 0000',
-  status: 'active',
-  memberCount: 0,
-  maxCapacity: 1500,
-  licenseKey: 'EKKLE-PIWC-KWADASO-PRO-2026',
-  licenseTier: 'cathedral_enterprise',
-  renewalDate: '2027-12-31',
-  billingCycle: 'annual',
-  geofenceRadiusMeters: 300,
-  features: {
-    bleRadar: true,
-    smsGateway: true,
-    biometrics: true,
-    gdprPrivacyVault: true,
-    multiCampus: true,
-    mobileGivingMoMo: true,
-    customDomain: true,
-    exportAuditLogs: true,
-  },
-  createdAt: '2026-01-01T00:00:00.000Z',
-};
-
-const DEFAULT_PRIMARY_LICENSE: SystemLicense = {
-  id: 'lic-live-01',
-  key: 'EKKLE-PIWC-KWADASO-PRO-2026',
-  tier: 'cathedral_enterprise',
-  tenantId: 'e0000000-0000-0000-0000-000000000001',
-  tenantName: 'PIWC KWADASO',
-  seatsLimit: 1500,
-  status: 'active',
-  issuedDate: '2026-01-01',
-  expiresDate: '2027-12-31',
-  billingCycle: 'annual',
-  annualCostUSD: 1200,
-  enabledFeatures: [
-    'Geofence Radar v2',
-    'Door Usher Headcount',
-    'GhanaPost GPS & 28-Field Registry',
-    'Mobile Giving MoMo',
-    'Custom Domain & Multi-Campus',
-    'Audit Trail & Consent Vault',
-  ],
 };
 
 const formatLocalDateIso = (d: Date = new Date()): string => {
@@ -456,13 +403,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const setViewMode = (mode: AppViewMode, actingUser?: AuthUser | null) => {
     const userToCheck = actingUser !== undefined ? actingUser : currentUser;
+    const creatorEnvEmail = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_CREATOR_EMAIL : '')?.trim().toLowerCase();
     const isCreatorAllowed =
       userToCheck?.role === 'super_admin' ||
       userToCheck?.role === 'creator' ||
       Boolean(userToCheck?.is_creator) ||
-      userToCheck?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-      userToCheck?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
-      userToCheck?.email?.toLowerCase() === 'elenamends@gmail.com';
+      Boolean(creatorEnvEmail && userToCheck?.email?.toLowerCase() === creatorEnvEmail);
 
     if (mode === 'creator' && !isCreatorAllowed) {
       showToast('Access Denied: Creator console requires Super Admin or Creator role.');
@@ -498,7 +444,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return headers;
   };
 
-  // Multi-Tenant Platform Management (clean live test defaults)
+  // Multi-Tenant Platform Management (clean live environment)
   const [tenants, setTenants] = useState<TenantChurch[]>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_tenants');
@@ -510,7 +456,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
               t &&
               !t.id.includes('demo') &&
               !t.slug.includes('demo') &&
-              !t.name.toLowerCase().includes('demo')
+              !t.name.toLowerCase().includes('demo') &&
+              !t.name.toLowerCase().includes('kwadaso')
           );
           if (clean.length > 0) return clean;
         }
@@ -518,7 +465,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } catch {
       // fallback
     }
-    return [DEFAULT_PRIMARY_TENANT];
+    return [];
   });
 
   const [licenses, setLicenses] = useState<SystemLicense[]>(() => {
@@ -532,7 +479,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
               l &&
               !l.id.includes('demo') &&
               !l.key.includes('DEMO') &&
-              !l.tenantName.toLowerCase().includes('demo')
+              !l.tenantName.toLowerCase().includes('demo') &&
+              !l.tenantName.toLowerCase().includes('kwadaso')
           );
           if (clean.length > 0) return clean;
         }
@@ -540,7 +488,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } catch {
       // fallback
     }
-    return [DEFAULT_PRIMARY_LICENSE];
+    return [];
   });
 
   const [landingConfig, setLandingConfig] = useState<LandingPageConfig>(() => {

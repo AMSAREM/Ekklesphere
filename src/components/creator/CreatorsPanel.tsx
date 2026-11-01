@@ -55,6 +55,7 @@ import {
   Mail,
   Shield,
   KeyRound,
+  ChevronDown,
 } from 'lucide-react';
 import type {
   ConsoleAlert,
@@ -1324,6 +1325,8 @@ export const CreatorsPanel: React.FC = () => {
     { id: 'profile', label: 'Profile & Sign Out', icon: User },
   ];
 
+  const activeModuleItem = moduleItems.find((m) => m.id === activeTab) || moduleItems[0];
+
   return (
     <div className="min-h-screen w-full flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200 overflow-x-clip">
       {/* 1. PERSISTENT AUDITED SUPPORT ACCESS BANNER ("View as Organisation Admin") */}
@@ -1351,17 +1354,6 @@ export const CreatorsPanel: React.FC = () => {
       {/* 2. CONSOLE TOP HEADER - STICKY, FIXED & OPTIMISED */}
       <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-3 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 shadow-xs transition-colors duration-150 transform-gpu shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          {/* Mobile Menu Toggle Button */}
-          <button
-            type="button"
-            onClick={() => setIsMobileDrawerOpen(true)}
-            className="md:hidden p-2 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer shrink-0"
-            aria-label="Open Modules Menu"
-            title="Open Modules Menu"
-          >
-            <Menu className="w-5 h-5 text-[#6D5CF2]" />
-          </button>
-
           {/* Desktop Sidebar Collapse Toggle */}
           <button
             type="button"
@@ -1461,38 +1453,76 @@ export const CreatorsPanel: React.FC = () => {
         </div>
       </header>
 
-      {/* 3. MOBILE HORIZONTAL NAVIGATION CAROUSEL (Sticky beneath header on mobile) */}
-      <nav aria-label="Mobile Module Selector" className="md:hidden sticky top-14 sm:top-16 z-30 bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-3 py-2 overflow-x-auto scrollbar-none flex items-center gap-1.5 shadow-xs">
-        {moduleItems.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
+      {/* 3. MOBILE MODULE NAVIGATION BAR (Zero-scrolling, adaptive for all viewports) */}
+      <nav
+        aria-label="Creator Console Modules"
+        className="md:hidden sticky top-14 sm:top-16 z-30 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-3 sm:px-4 py-2 shadow-xs transition-colors duration-150"
+      >
+        <div className="w-full flex items-center justify-between gap-2">
+          {/* Active Module Selector Button */}
+          <div className="relative flex-1 min-w-0">
             <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id);
-                if (tab.id !== 'organisations') setSelectedOrgId(null);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
-                isActive
-                  ? 'bg-[#6D5CF2] text-white shadow-sm'
-                  : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
-              }`}
+              type="button"
+              onClick={() => setIsMobileDrawerOpen(true)}
+              aria-label="Open Navigation Menu"
+              title="Open Console Modules Menu"
+              className="w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl bg-slate-100/90 dark:bg-white/[0.06] hover:bg-slate-200/90 dark:hover:bg-white/10 border border-[#D8DAE8]/70 dark:border-white/10 text-left transition-all duration-150 cursor-pointer group active:scale-[0.99] min-h-[40px]"
             >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-              {typeof tab.count === 'number' && tab.count > 0 && (
-                <span
-                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    isActive ? 'bg-white/30 text-white' : 'bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  {tab.count}
-                </span>
-              )}
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-[#6D5CF2] text-white flex items-center justify-center shadow-xs shrink-0 group-hover:bg-[#5b4be0] transition-colors">
+                  <Menu className="w-4 h-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-[10px] uppercase font-extrabold text-[#6D5CF2] dark:text-[#A594FD] block leading-none">
+                    Module
+                  </span>
+                  <span className="font-extrabold text-xs sm:text-[13px] text-[#1D1B3A] dark:text-white truncate block mt-0.5">
+                    {activeModuleItem.label}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {typeof activeModuleItem.count === 'number' && activeModuleItem.count > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#6D5CF2]/15 text-[#6D5CF2] dark:bg-[#6D5CF2]/30 dark:text-[#A594FD]">
+                    {activeModuleItem.count}
+                  </span>
+                )}
+                <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-white/10 text-[#6D5CF2] dark:text-[#A594FD] text-xs font-extrabold group-hover:bg-[#6D5CF2] group-hover:text-white transition-all shadow-2xs">
+                  <span>Modules</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </div>
+              </div>
             </button>
-          );
-        })}
+          </div>
+
+          {/* Quick Shortcuts for primary modules on viewports with room (no overflow/scroll) */}
+          <div className="hidden xs:flex items-center gap-1 shrink-0">
+            {moduleItems.slice(0, 2).map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    if (tab.id !== 'organisations') setSelectedOrgId(null);
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[40px] select-none active:scale-95 ${
+                    isActive
+                      ? 'bg-[#6D5CF2] text-white shadow-xs'
+                      : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
+                  }`}
+                  title={tab.label}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">{tab.label.split(' ')[0]}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </nav>
 
       {/* 4. MOBILE DRAWER OVERLAY */}
@@ -4467,6 +4497,11 @@ export const CreatorsPanel: React.FC = () => {
                   Save Flag
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: SIGN OUT CONFIRMATION */}
       {isSignOutConfirmOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
