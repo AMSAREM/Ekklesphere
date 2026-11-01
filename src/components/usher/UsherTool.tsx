@@ -16,8 +16,11 @@ import {
   Phone,
   UserCheck,
   Settings,
+  Camera,
+  CameraOff,
 } from 'lucide-react';
 import { getCanonicalMemberId, findMemberByScannedId } from '../member/DigitalMemberCard';
+import { CameraQrScanner } from '../common/CameraQrScanner';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -58,6 +61,7 @@ export const UsherTool: React.FC = () => {
   } | null>(null);
 
   const [scannedIdInput, setScannedIdInput] = useState('');
+  const [isCameraActive, setIsCameraActive] = useState(false);
 
   const isMemberCheckedInForService = (personId: string) =>
     attendanceRecords.some(
@@ -169,18 +173,26 @@ export const UsherTool: React.FC = () => {
           </span>
         </div>
 
-        {/* 2. Quick Scan */}
+        {/* 2. Camera Scanner */}
         <div className="relative group w-full flex justify-center">
           <button
-            onClick={handleScanClick}
-            aria-label="Scan Member QR Pass"
-            className="w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 text-white/80 hover:text-white hover:bg-white/15 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+            onClick={() => {
+              setIsCameraActive((prev) => !prev);
+              document.getElementById('usher-scanner-card')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            aria-label="Camera Scanner"
+            aria-current={isCameraActive ? 'page' : undefined}
+            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+              isCameraActive
+                ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
+                : 'text-white/80 hover:text-white hover:bg-white/15'
+            }`}
           >
-            <QrCode className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Scan</span>
+            <Camera className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Camera</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
-            <span>Scan Arrival</span>
+            <span>{isCameraActive ? 'Stop Camera' : 'Camera Scanner'}</span>
           </span>
         </div>
 
@@ -419,19 +431,50 @@ export const UsherTool: React.FC = () => {
         {/* Left Column (5 cols on lg): Scanner, Quick Check-in & Visitor Registration */}
         <div className="lg:col-span-5 space-y-4">
           {/* Main High-Contrast Scanner Viewfinder */}
-          <div className="bg-[#1B1B3A] dark:bg-[#151528] text-white rounded-3xl p-5 border border-indigo-900/30 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[260px]">
-            {/* Viewfinder Graphic Overlay */}
-            <div className="relative border-2 border-dashed border-[#6C5CE7]/60 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 bg-black/20 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-[#6C5CE7]/20 flex items-center justify-center text-[#6C5CE7] dark:text-[#8C7DFF]">
-                <QrCode className="w-8 h-8 animate-pulse" />
+          <div
+            id="usher-scanner-card"
+            className="bg-[#1B1B3A] dark:bg-[#151528] text-white rounded-3xl p-4 sm:p-5 border border-indigo-900/30 shadow-lg relative overflow-hidden flex flex-col justify-between"
+          >
+            {/* Viewfinder: Live Camera or Standby Card */}
+            {isCameraActive ? (
+              <div className="relative aspect-4/3 w-full rounded-2xl overflow-hidden shadow-inner mb-3">
+                <CameraQrScanner
+                  onScan={(code) => {
+                    const matched = findMemberByScannedId(members, code);
+                    if (matched) {
+                      triggerCheckIn(matched.id);
+                      showToast(`Checked in ${matched.firstName} ${matched.lastName}!`);
+                    } else {
+                      showToast(`Scanned Code: "${code}" (No matching member pass found)`);
+                    }
+                  }}
+                  isActive={isCameraActive}
+                  className="w-full h-full"
+                  reticleSize="sm"
+                  instructionsText="Point at member pass"
+                />
               </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Digital Member Pass Scanner</h3>
-                <p className="text-xs text-white/70 max-w-xs mt-0.5">
-                  Hold smartphone pass or printed member barcode up to camera
-                </p>
+            ) : (
+              <div className="relative border-2 border-dashed border-[#6C5CE7]/60 rounded-2xl p-5 sm:p-6 flex flex-col items-center justify-center gap-3 bg-black/20 text-center mb-3">
+                <div className="w-14 h-14 rounded-2xl bg-[#6C5CE7]/20 flex items-center justify-center text-[#6C5CE7] dark:text-[#8C7DFF]">
+                  <QrCode className="w-8 h-8 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Digital Member Pass Scanner</h3>
+                  <p className="text-xs text-white/70 max-w-xs mt-0.5">
+                    Activate camera scanner to scan QR passes & barcodes automatically
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCameraActive(true)}
+                  className="mt-1 px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Activate Camera Scanner</span>
+                </button>
               </div>
-            </div>
+            )}
 
             {/* Direct Member ID / QR Wedge Scanner Input */}
             <form
@@ -446,7 +489,7 @@ export const UsherTool: React.FC = () => {
                   showToast(`No member found with ID "${scannedIdInput.trim()}"`);
                 }
               }}
-              className="pt-3 flex items-center gap-2"
+              className="pt-1 flex items-center gap-2"
             >
               <input
                 type="text"
@@ -467,13 +510,37 @@ export const UsherTool: React.FC = () => {
             {/* Scan Action Buttons */}
             <div className="pt-3 flex flex-col sm:flex-row gap-2">
               <button
-                onClick={handleScanClick}
-                className="flex-1 min-h-[44px] py-3 px-4 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98] whitespace-nowrap"
+                type="button"
+                onClick={() => setIsCameraActive((prev) => !prev)}
+                className={`flex-1 min-h-[44px] py-3 px-4 rounded-2xl text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98] whitespace-nowrap cursor-pointer ${
+                  isCameraActive
+                    ? 'bg-rose-600 hover:bg-rose-500'
+                    : 'bg-[#6C5CE7] hover:bg-[#5b4be0]'
+                }`}
               >
-                <QrCode className="w-4 h-4 shrink-0" />
-                <span>Check In Next Member</span>
+                {isCameraActive ? (
+                  <>
+                    <CameraOff className="w-4 h-4 shrink-0" />
+                    <span>Stop Camera</span>
+                  </>
+                ) : (
+                  <>
+                    <Camera className="w-4 h-4 shrink-0" />
+                    <span>Activate Camera Scanner</span>
+                  </>
+                )}
               </button>
               <button
+                type="button"
+                onClick={handleScanClick}
+                className="min-h-[44px] py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap"
+                title="Quick check in next member"
+              >
+                <UserCheck className="w-4 h-4 shrink-0" />
+                <span>Next</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setIsVisitorSheetOpen(true)}
                 className="min-h-[44px] py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap"
               >

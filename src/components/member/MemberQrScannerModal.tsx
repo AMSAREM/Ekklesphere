@@ -22,6 +22,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Person } from '../../types/ekklesphere';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { getCanonicalMemberId, findMemberByScannedId } from './DigitalMemberCard';
+import { CameraQrScanner } from '../common/CameraQrScanner';
 
 interface MemberQrScannerModalProps {
   isOpen: boolean;
@@ -127,6 +128,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   const handleResetScanner = () => {
     setScannedMember(null);
     setIsScanning(true);
+  };
+
+  const handleDecodedString = (decodedText: string) => {
+    const targetMember = findMemberByScannedId(members, decodedText);
+    if (targetMember) {
+      handleProcessScan(targetMember);
+    } else {
+      showToast(`Scanned Code: "${decodedText}" (No matching member pass found)`);
+    }
   };
 
   // Filter registered members for badge verification
@@ -241,101 +251,16 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 </select>
               </div>
 
-              {/* CAMERA VIEWFINDER HUD */}
-              <div className="relative aspect-4/3 w-full rounded-3xl overflow-hidden bg-black border-2 border-white/15 shadow-2xl flex items-center justify-center">
-                {/* Lens Feed Background */}
-                <div
-                  className={`absolute inset-0 bg-gradient-to-br from-[#121124] via-[#1A1833] to-[#0A0914] ${
-                    flashlightOn ? 'brightness-125 saturate-150' : 'brightness-100'
-                  } transition-all duration-300`}
-                >
-                  {/* Subtle Grid texture for camera sensor simulation */}
-                  <div
-                    className="absolute inset-0 opacity-15"
-                    style={{
-                      backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.2) 1px, transparent 0)',
-                      backgroundSize: '24px 24px',
-                    }}
-                  />
-                  {flashlightOn && (
-                    <div className="absolute inset-0 bg-radial from-amber-200/20 via-transparent to-transparent pointer-events-none" />
-                  )}
-                </div>
-
-                {/* Top Camera Controls Overlay */}
-                <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-20">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-[10px] font-mono text-emerald-400">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
-                    <span>CAMERA ACTIVE (1080p · {facingMode === 'environment' ? 'BACK' : 'FRONT'})</span>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setFlashlightOn(!flashlightOn)}
-                      className={`p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer ${
-                        flashlightOn
-                          ? 'bg-amber-400 text-black border-amber-300 shadow-lg shadow-amber-400/50'
-                          : 'bg-black/60 text-white/80 border-white/10 hover:text-white'
-                      }`}
-                      title={flashlightOn ? 'Flashlight On' : 'Turn on Flashlight'}
-                    >
-                      <Flashlight className="w-4 h-4" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}
-                      className="p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white/80 hover:text-white transition-all cursor-pointer"
-                      title="Flip Camera Lens"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* RETICLE TARGET VIEWFINDER BOX */}
-                <div className="relative w-48 h-48 sm:w-56 sm:h-56 z-10 flex items-center justify-center">
-                  {/* Four Corner Reticles */}
-                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-[#6D5CF2] rounded-tl-xl" />
-                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-[#6D5CF2] rounded-tr-xl" />
-                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-[#6D5CF2] rounded-bl-xl" />
-                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-[#6D5CF2] rounded-br-xl" />
-
-                  {/* Animated Laser Scanning Line */}
-                  {isScanning && !scannedMember && (
-                    <div
-                      className="absolute left-2 right-2 h-0.5 bg-gradient-to-r from-transparent via-[#59C3C3] to-transparent shadow-[0_0_12px_#59C3C3] animate-pulse"
-                      style={{
-                        animation: 'scanSweep 2.2s ease-in-out infinite alternate',
-                      }}
-                    />
-                  )}
-
-                  {/* Center QR watermark silhouette */}
-                  <div className="opacity-20 flex flex-col items-center justify-center text-white pointer-events-none">
-                    <QrCode className="w-20 h-20" />
-                  </div>
-
-                  {/* Scanning Status Badge */}
-                  <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
-                    <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md text-[11px] font-bold text-white/90 border border-white/10 flex items-center gap-1.5">
-                      <Scan className="w-3 h-3 text-[#6D5CF2]" />
-                      <span>Align member QR code inside square</span>
-                    </span>
-                  </div>
-                </div>
-
-                {/* Bottom Trigger Action Bar */}
-                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-20">
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    Auto-detects Ekklesphere Badges
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-mono">
-                    {systemSettings.campusName}
-                  </span>
-                </div>
-              </div>
+              {/* LIVE HARDWARE CAMERA VIEWFINDER */}
+              <CameraQrScanner
+                onScan={handleDecodedString}
+                soundEnabled={soundEnabled}
+                onToggleSound={() => setSoundEnabled(!soundEnabled)}
+                isActive={activeMode === 'scanner' && isScanning && !scannedMember}
+                className="aspect-4/3 w-full"
+                reticleSize="md"
+                instructionsText={`Align member QR pass for ${fellowshipContext}`}
+              />
 
               {/* SCAN RESULT CONFIRMATION CARD (when a member is scanned) */}
               {scannedMember && (

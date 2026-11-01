@@ -68,7 +68,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
     expect(res.body.user).toBeDefined();
   });
 
-  it('POST /api/dev/preview-session is disabled (404) in production or returns session in dev', async () => {
+  it('POST /api/dev/preview-session is permanently disabled (404) for security', async () => {
     const res = await request(app)
       .post('/api/dev/preview-session')
       .send({
@@ -77,14 +77,8 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
         name: 'New Member',
       });
 
-    if (process.env.NODE_ENV === 'production') {
-      expect(res.status).toBe(404);
-      expect(res.body.error).toBe('not_found');
-    } else {
-      expect(res.status).toBe(200);
-      expect(res.body.token).toBeDefined();
-      expect(res.body.role).toBe('member');
-    }
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('not_found');
   });
 
   describe('Church Premise GPS Role-Level Security', () => {
