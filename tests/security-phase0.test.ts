@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
-import { signToken, type ChurchRole } from '../lib/auth';
+import { signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
 import { platformStore } from '../src/server/platformStore';
 
 describe('Phase 0 Security Remediation Suite', () => {
@@ -11,7 +11,7 @@ describe('Phase 0 Security Remediation Suite', () => {
     email: 'creator@ekklesphere.platform',
     role: 'creator',
     name: 'Platform Creator',
-    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    organization_id: TEST_ANCHOR_ORGANIZATION_ID,
     is_creator: true,
   });
 
@@ -20,7 +20,7 @@ describe('Phase 0 Security Remediation Suite', () => {
     email: 'admin@ekklesphere.church',
     role: 'admin',
     name: 'Church Administrator',
-    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    organization_id: TEST_ANCHOR_ORGANIZATION_ID,
     is_creator: false,
   });
 
@@ -29,7 +29,7 @@ describe('Phase 0 Security Remediation Suite', () => {
     email: 'elena@ekklesphere.church',
     role: 'member',
     name: 'Elena Mends',
-    organization_id: 'e0000000-0000-0000-0000-000000000001',
+    organization_id: TEST_ANCHOR_ORGANIZATION_ID,
     is_creator: false,
   });
 

@@ -19,16 +19,27 @@ export async function requireActiveLicense(
     return;
   }
 
-  const orgId = (req.organizationId || req.tenant_id || PRIMARY_ORGANIZATION_ID).toLowerCase();
+  const orgId = (req.organizationId || req.tenant_id || '').toLowerCase();
 
   // Platform creators operating in read-only support-grant mode or platform mode may inspect state
   if (isCreatorClaim(req.user)) {
-    const evalForCreator = await platformStore.evaluateOrganizationLicense(orgId);
-    res.setHeader('x-license-status', evalForCreator.status);
-    if (evalForCreator.tier) {
-      res.setHeader('x-license-tier', evalForCreator.tier);
+    if (orgId) {
+      const evalForCreator = await platformStore.evaluateOrganizationLicense(orgId);
+      res.setHeader('x-license-status', evalForCreator.status);
+      if (evalForCreator.tier) {
+        res.setHeader('x-license-tier', evalForCreator.tier);
+      }
     }
     next();
+    return;
+  }
+
+  if (!orgId) {
+    res.status(403).json({
+      error: 'unassigned_organization',
+      code: 'NO_ORGANIZATION_FOUND',
+      message: 'No active church organization associated with this session.',
+    });
     return;
   }
 

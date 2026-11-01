@@ -78,7 +78,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span>Role-Based Access Gateway</span>
                 <span className="text-white/60">·</span>
-                <span className="text-emerald-300">{systemSettings.churchName || 'PIWC KWADASO'}</span>
+                <span className="text-emerald-300">{systemSettings.churchName || 'Ekklesphere Sanctuary'}</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
                 Role-Based Church Management
@@ -159,7 +159,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                 </span>
               </h3>
               <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                Authenticate with your Google account to access {systemSettings.churchName || 'PIWC KWADASO'} portals.
+                Authenticate with your Google account to access {systemSettings.churchName || 'Ekklesphere'} portals.
               </p>
             </div>
           </div>
@@ -406,7 +406,7 @@ export const UnifiedAuthScreen: React.FC = () => {
             <div className="max-w-lg mx-auto space-y-5">
               <div className="text-center space-y-1">
                 <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Register as a Member of {systemSettings.churchName || 'PIWC KWADASO'}
+                  Register as a Member of {systemSettings.churchName || 'the Congregation'}
                 </h2>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                   Join the congregation database to enable your automated proximity pass, event check-in, and online giving.

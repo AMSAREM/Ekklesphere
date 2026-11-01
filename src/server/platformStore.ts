@@ -9,6 +9,8 @@ import { randomUUID, createHash } from 'crypto';
 import {
   PRIMARY_CAMPUS_SITE_ID,
   PRIMARY_ORGANIZATION_ID,
+  TEST_ANCHOR_ORGANIZATION_ID,
+  TEST_CAMPUS_SITE_ID,
   type ActiveSupportGrantContext,
   type AuthUserPayload,
   type ChurchRole,
@@ -345,8 +347,11 @@ class PlatformStore {
       return;
     }
 
+    const testOrgId = TEST_ANCHOR_ORGANIZATION_ID;
+    const testSiteId = TEST_CAMPUS_SITE_ID;
+
     const primaryOrg: TenantChurch = {
-      id: PRIMARY_ORGANIZATION_ID,
+      id: testOrgId,
       name: 'Test Anchor Sanctuary',
       slug: 'test-sanctuary',
       orgType: 'church',
@@ -374,14 +379,14 @@ class PlatformStore {
       features: { ...DEFAULT_PLANS.cathedral_enterprise.featureFlags },
       createdAt: '2026-01-01T00:00:00.000Z',
     };
-    this.orgs.set(PRIMARY_ORGANIZATION_ID, primaryOrg);
+    this.orgs.set(testOrgId, primaryOrg);
 
     const primaryLicense: SystemLicense = {
       id: 'c0000000-0000-4000-8000-000000000001',
       key: 'EKKLE-TEST-SANCTUARY-2026',
       tier: 'cathedral_enterprise',
-      tenantId: PRIMARY_ORGANIZATION_ID,
-      organizationId: PRIMARY_ORGANIZATION_ID,
+      tenantId: testOrgId,
+      organizationId: testOrgId,
       tenantName: primaryOrg.name,
       seatsLimit: 2500,
       sitesLimit: 15,
@@ -399,8 +404,8 @@ class PlatformStore {
     this.licenses.set(primaryLicense.id, primaryLicense);
 
     const defaultSite: RegisteredSiteRecord = {
-      id: PRIMARY_CAMPUS_SITE_ID,
-      organization_id: PRIMARY_ORGANIZATION_ID,
+      id: testSiteId,
+      organization_id: testOrgId,
       name: 'Test Campus Premise',
       address: 'Central Sanctuary, Accra, Ghana',
       lat: 5.6037,
@@ -412,9 +417,9 @@ class PlatformStore {
       updated_at: now.toISOString(),
       updated_by: 'System Test Baseline',
     };
-    this.sitesByOrg.set(PRIMARY_ORGANIZATION_ID, [defaultSite]);
-    this.premiseByOrg.set(PRIMARY_ORGANIZATION_ID, {
-      organizationId: PRIMARY_ORGANIZATION_ID,
+    this.sitesByOrg.set(testOrgId, [defaultSite]);
+    this.premiseByOrg.set(testOrgId, {
+      organizationId: testOrgId,
       churchName: 'Test Anchor Sanctuary',
       campusName: 'Test Campus Premise',
       campusAddress: 'Central Sanctuary, Accra, Ghana',
@@ -490,7 +495,7 @@ class PlatformStore {
     );
 
     // Resolve organization membership and church role strictly from public.members
-    let resolvedOrgId = PRIMARY_ORGANIZATION_ID;
+    let resolvedOrgId = '';
     let resolvedRole: ChurchRole = isCreator ? 'creator' : 'member';
     let resolvedName =
       (typeof sbUser.user_metadata?.full_name === 'string' && sbUser.user_metadata.full_name) ||
@@ -518,13 +523,18 @@ class PlatformStore {
       if (dbName) resolvedName = dbName;
     }
 
+    if (!resolvedOrgId) {
+      const orgs = await this.listOrganisations();
+      resolvedOrgId = orgs[0]?.id || '';
+    }
+
     return {
       id: sbUser.id,
       email,
       role: resolvedRole,
       organization_id: resolvedOrgId,
       tenant_id: resolvedOrgId,
-      campus_id: PRIMARY_CAMPUS_SITE_ID,
+      campus_id: undefined,
       name: resolvedName,
       is_creator: isCreator,
       auth_provider: 'supabase',
@@ -551,7 +561,7 @@ class PlatformStore {
 
       if (row) {
         return {
-          organizationId: String(row.organization_id || PRIMARY_ORGANIZATION_ID).toLowerCase(),
+          organizationId: String(row.organization_id || '').toLowerCase(),
           role: mapSupabaseRoleToChurchRole(row.role),
           name:
             row.full_name ||
@@ -576,8 +586,9 @@ class PlatformStore {
       }
     }
 
+    const orgs = await this.listOrganisations();
     return {
-      organizationId: PRIMARY_ORGANIZATION_ID,
+      organizationId: orgs[0]?.id || '',
       role: 'member',
     };
   }
@@ -856,10 +867,7 @@ class PlatformStore {
   }> {
     const orgId = organizationId.toLowerCase();
     const existingSites = await this.getSitesForOrg(orgId);
-    const targetSiteId =
-      params.siteId ||
-      existingSites[0]?.id ||
-      (orgId === PRIMARY_ORGANIZATION_ID ? PRIMARY_CAMPUS_SITE_ID : randomUUID());
+    const targetSiteId = params.siteId || existingSites[0]?.id || randomUUID();
 
     const isNewSite = !existingSites.some((s) => s.id === targetSiteId);
     if (isNewSite) {
@@ -2116,8 +2124,8 @@ class PlatformStore {
         return data.map((row) => {
           const tier = (row.tier || row.plan_id || 'grace_starter') as LicenseTier;
           const plan = DEFAULT_PLANS[tier] || DEFAULT_PLANS.grace_starter;
-          const overrides: LicenseOverrides = row.overrides || {};
-          const orgId = String(row.tenant_id || row.organization_id || PRIMARY_ORGANIZATION_ID).toLowerCase();
+          const orgId = String(row.tenant_id || row.organization_id || '').toLowerCase();
+          const overrides = (row.overrides || {}) as LicenseOverrides;
           return {
             id: String(row.id),
             key: String(row.key || row.license_key),

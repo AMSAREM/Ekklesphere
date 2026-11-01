@@ -27,6 +27,18 @@ export function registerSupportGrantLookup(lookup: SupportGrantLookup | null): v
   supportGrantLookup = lookup;
 }
 
+export type UserOrganizationResolver = (
+  user: import('../../lib/auth.ts').AuthUserPayload
+) => Promise<string | null>;
+
+let userOrganizationResolver: UserOrganizationResolver | null = null;
+
+export function registerUserOrganizationResolver(
+  resolver: UserOrganizationResolver | null
+): void {
+  userOrganizationResolver = resolver;
+}
+
 /**
  * PHASE 0 REMEDIATION (#4):
  * Never populate `req.organizationId` or `req.tenant_id` from unverified client headers
@@ -84,11 +96,18 @@ export async function enforceOrganizationScope(
     return;
   }
 
-  const verifiedOrgId = (
-    req.user.organization_id ||
-    req.user.tenant_id ||
-    PRIMARY_ORGANIZATION_ID
-  ).toLowerCase();
+  let verifiedOrgId = (req.user.organization_id || req.user.tenant_id || '').toLowerCase();
+
+  if (!verifiedOrgId && userOrganizationResolver) {
+    try {
+      const resolved = await userOrganizationResolver(req.user);
+      if (resolved && UUID_REGEX.test(resolved.trim())) {
+        verifiedOrgId = resolved.trim().toLowerCase();
+        req.user.organization_id = verifiedOrgId;
+        req.user.tenant_id = verifiedOrgId;
+      }
+    } catch {}
+  }
 
   // Check if Creator is using an audited read-only Support Grant ("View as Organisation Admin")
   const supportGrantHeader = req.headers['x-support-grant-id'];
@@ -143,6 +162,14 @@ export async function enforceOrganizationScope(
   const requestedOrgId = extractClientRequestedOrgId(req);
 
   if (!isCreatorClaim(req.user)) {
+    if (!verifiedOrgId) {
+      res.status(403).json({
+        error: 'unassigned_organization',
+        code: 'NO_ORGANIZATION_MEMBERSHIP',
+        message: 'Your account is not assigned to an active church organization in the database.',
+      });
+      return;
+    }
     if (requestedOrgId && requestedOrgId !== verifiedOrgId) {
       res.status(403).json({
         error: 'cross_organization_forbidden',
@@ -158,9 +185,12 @@ export async function enforceOrganizationScope(
     return;
   }
 
-  // Creators accessing tenant routes without a support grant operate on their own verified org
-  req.organizationId = verifiedOrgId;
-  req.tenant_id = verifiedOrgId;
-  res.setHeader('x-organization-id', verifiedOrgId);
+  // Creators may target a specific organisation if provided, otherwise their verified org
+  const effectiveOrgId = requestedOrgId || verifiedOrgId;
+  req.organizationId = effectiveOrgId;
+  req.tenant_id = effectiveOrgId;
+  if (effectiveOrgId) {
+    res.setHeader('x-organization-id', effectiveOrgId);
+  }
   next();
 }

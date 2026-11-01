@@ -134,7 +134,7 @@ class PushNotificationService {
         personName: personName || undefined,
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         subscribedAt: new Date().toISOString(),
-        tenantId: tenantId || 'e0000000-0000-0000-0000-000000000001',
+        tenantId: tenantId || '',
       };
 
       // Persist in localStorage for quick client retrieval

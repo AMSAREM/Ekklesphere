@@ -166,20 +166,10 @@ const DEFAULT_SUMMARY: ConsoleDashboardSummary = {
       mockAttempts: [0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0][i] || 0,
     };
   }),
-  topOrganisations: [
-    {
-      id: 'e0000000-0000-0000-0000-000000000001',
-      name: 'PIWC KWADASO',
-      city: 'Kumasi',
-      tier: 'cathedral_enterprise',
-      checkins30d: 412,
-      seatsUsed: 142,
-      seatsLimit: 2500,
-    },
-  ],
+  topOrganisations: [],
   inactiveOrganisations: [],
   nearOrOverLimits: [],
-  openAlertsCount: 1,
+  openAlertsCount: 0,
   storageBackend: 'supabase',
   generatedAt: new Date().toISOString(),
 };
@@ -188,9 +178,9 @@ const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
   heroTitle: 'Next-Gen Presence Radar & Sovereign Church Management',
   heroSubtitle:
     'Real-time automated geofence attendance, multi-role pastoral dashboards, usher door check-in station, and personal congregation mobile passes.',
-  announcementBadge: 'PIWC KWADASO Live System Deployed & Geofence Active',
+  announcementBadge: 'Ekklesphere Sovereign Geofence Radar Live',
   isAnnouncementActive: true,
-  contactSalesEmail: 'admin@piwckwadaso.org',
+  contactSalesEmail: 'contact@ekklesphere.platform',
   demoEnabled: false,
   showcaseHeadline: 'Transforming Sanctuary Operations with Sovereign Geofence Radar',
   featuredStats: {
@@ -199,65 +189,6 @@ const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
     proximityAccuracy: '100m Dwell',
     networkUptime: '99.98%',
   },
-};
-
-const DEFAULT_PRIMARY_TENANT: TenantChurch = {
-  id: 'e0000000-0000-0000-0000-000000000001',
-  name: 'PIWC KWADASO',
-  slug: 'piwc-kwadaso',
-  orgType: 'church',
-  campusCode: 'PIWC-KWA',
-  city: 'Kumasi',
-  country: 'Ghana',
-  seniorPastor: 'Pastor in Charge',
-  contactName: 'Church Administrator',
-  contactEmail: 'admin@piwckwadaso.org',
-  contactPhone: '+233 24 000 0000',
-  status: 'active',
-  memberCount: 142,
-  maxCapacity: 2500,
-  licenseKey: 'EKKLE-PIWC-KWADASO-PRO-2026',
-  licenseTier: 'cathedral_enterprise',
-  licenseStatus: 'active',
-  renewalDate: '2027-12-31',
-  billingCycle: 'annual',
-  geofenceRadiusMeters: 300,
-  geofenceConfigured: true,
-  smsConfigured: true,
-  pushConfigured: true,
-  features: {
-    bleRadar: true,
-    smsGateway: true,
-    biometrics: true,
-    gdprPrivacyVault: true,
-    multiCampus: true,
-    mobileGivingMoMo: true,
-    customDomain: true,
-    exportAuditLogs: true,
-  },
-  createdAt: '2026-01-01T00:00:00.000Z',
-};
-
-const DEFAULT_PRIMARY_LICENSE: SystemLicense = {
-  id: 'lic-live-01',
-  key: 'EKKLE-PIWC-KWADASO-PRO-2026',
-  tier: 'cathedral_enterprise',
-  tenantId: 'e0000000-0000-0000-0000-000000000001',
-  tenantName: 'PIWC KWADASO',
-  seatsLimit: 2500,
-  status: 'active',
-  issuedDate: '2026-01-01',
-  expiresDate: '2027-12-31',
-  billingCycle: 'annual',
-  annualCostUSD: 1200,
-  enabledFeatures: [
-    'Geofence Radar v2',
-    'Door Usher Headcount',
-    'GhanaPost GPS & 28-Field Registry',
-    'Mobile Giving MoMo',
-    'Custom Domain & Multi-Campus',
-    'Audit Trail & Consent Vault',
-  ],
 };
 
 const DEFAULT_FEATURE_FLAGS: PlatformFeatureFlag[] = [
@@ -326,48 +257,20 @@ const DEFAULT_FEATURE_FLAGS: PlatformFeatureFlag[] = [
   },
 ];
 
-const DEFAULT_ALERTS: ConsoleAlert[] = [
-  {
-    id: 'alert-01',
-    organizationId: 'e0000000-0000-0000-0000-000000000001',
-    organizationName: 'PIWC KWADASO',
-    alertType: 'limit_exceeded',
-    severity: 'info',
-    status: 'open',
-    title: 'Sanctuary Geofence Active & Calibrated',
-    message: 'Inner ring (100m) and Outer perimeter (300m) active. GPS anti-spoofing filter enabled.',
-    metadata: {},
-    createdAt: new Date().toISOString(),
-  },
-];
+const DEFAULT_ALERTS: ConsoleAlert[] = [];
 
-const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [
-  {
-    id: 'ann-01',
-    title: 'PIWC KWADASO Production Sanctuary Platform Live',
-    body: 'Automated proximity attendance, usher door station, and Act 843 compliance active across all services.',
-    severity: 'info',
-    targetTiers: ['grace_starter', 'ministry_pro', 'cathedral_enterprise'],
-    targetOrganizationIds: [],
-    active: true,
-    startsAt: new Date().toISOString(),
-    expiresAt: null,
-    createdAt: new Date().toISOString(),
-  },
-];
+const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [];
 
 export const CreatorsPanel: React.FC = () => {
   const { currentUser, setViewMode, showToast, logout } = useEkklesphere();
 
-  // Authentication Guard: allows creator, super_admin, and verified platform administrator emails
+  // Authentication Guard: allows verified creator and super_admin login with no bypass
   const isAuthorized =
-    !currentUser ||
-    currentUser?.role === 'super_admin' ||
-    currentUser?.role === 'creator' ||
-    Boolean(currentUser?.is_creator) ||
-    currentUser?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-    currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
-    currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
+    Boolean(currentUser) &&
+    (currentUser?.role === 'super_admin' ||
+      currentUser?.role === 'creator' ||
+      Boolean(currentUser?.is_creator) ||
+      currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase());
 
   // Active Console Navigation Tab (All 12 Modules including Creator Profile & Sign Out)
   type ConsoleTab =
@@ -413,14 +316,14 @@ export const CreatorsPanel: React.FC = () => {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // Core Data States initialized with realistic models so they NEVER render blank
+  // Core Data States loaded live from Supabase database
   const [summary, setSummary] = useState<ConsoleDashboardSummary | null>(DEFAULT_SUMMARY);
-  const [organisations, setOrganisations] = useState<TenantChurch[]>([DEFAULT_PRIMARY_TENANT]);
-  const [licenses, setLicenses] = useState<SystemLicense[]>([DEFAULT_PRIMARY_LICENSE]);
+  const [organisations, setOrganisations] = useState<TenantChurch[]>([]);
+  const [licenses, setLicenses] = useState<SystemLicense[]>([]);
   const [plans, setPlans] = useState<ConsolePlan[]>(DEFAULT_PLANS_LIST);
   const [usageDaily, setUsageDaily] = useState<UsageDailyAggregate[]>([]);
-  const [alerts, setAlerts] = useState<ConsoleAlert[]>(DEFAULT_ALERTS);
-  const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>(DEFAULT_ANNOUNCEMENTS);
+  const [alerts, setAlerts] = useState<ConsoleAlert[]>([]);
+  const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const [featureFlags, setFeatureFlags] = useState<PlatformFeatureFlag[]>(DEFAULT_FEATURE_FLAGS);
   const [dataRequests, setDataRequests] = useState<DataPrivacyRequest[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -572,31 +475,9 @@ export const CreatorsPanel: React.FC = () => {
     if (token) return token;
 
     try {
-      const res = await fetch('/api/auth/creator-session', {
+      const res = await fetch('/api/auth/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
-          role: 'creator',
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.token) {
-          localStorage.setItem('ekklesphere_token', data.token);
-          return data.token;
-        }
-      }
-    } catch {}
-
-    try {
-      const res = await fetch('/api/dev/preview-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
-          role: 'creator',
-        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -670,23 +551,23 @@ export const CreatorsPanel: React.FC = () => {
         ]);
 
         if (dashRes) setSummary(dashRes);
-        if (orgsRes?.organisations && orgsRes.organisations.length > 0) {
+        if (Array.isArray(orgsRes?.organisations)) {
           setOrganisations(orgsRes.organisations);
         }
-        if (licsRes?.licenses && licsRes.licenses.length > 0) {
+        if (Array.isArray(licsRes?.licenses)) {
           setLicenses(licsRes.licenses);
         }
-        if (plansRes?.plans && plansRes.plans.length > 0) {
+        if (Array.isArray(plansRes?.plans) && plansRes.plans.length > 0) {
           setPlans(plansRes.plans);
         }
         if (usageRes?.usage) setUsageDaily(usageRes.usage);
-        if (alertsRes?.alerts && alertsRes.alerts.length > 0) {
+        if (Array.isArray(alertsRes?.alerts)) {
           setAlerts(alertsRes.alerts);
         }
-        if (annRes?.announcements && annRes.announcements.length > 0) {
+        if (Array.isArray(annRes?.announcements)) {
           setAnnouncements(annRes.announcements);
         }
-        if (ffRes?.featureFlags && ffRes.featureFlags.length > 0) {
+        if (Array.isArray(ffRes?.featureFlags) && ffRes.featureFlags.length > 0) {
           setFeatureFlags(ffRes.featureFlags);
         }
         if (drRes?.dataRequests) setDataRequests(drRes.dataRequests);
@@ -724,55 +605,43 @@ export const CreatorsPanel: React.FC = () => {
           const data = await res.json();
           setSelectedOrgDetail(data);
         } else {
-          // Provide instant fallback payload for PIWC Kwadaso
-          const targetOrg = organisations.find((o) => o.id === orgId) || DEFAULT_PRIMARY_TENANT;
-          setSelectedOrgDetail({
-            organisation: targetOrg,
-            license: licenses[0] || DEFAULT_PRIMARY_LICENSE,
-            evaluation: {
-              allowed: true,
-              code: 'LICENSE_OK',
-              httpStatus: 200,
-              status: 'active',
-              tier: targetOrg.licenseTier,
-              organizationId: targetOrg.id,
-              seatsUsed: targetOrg.memberCount,
-              seatsLimit: targetOrg.maxCapacity,
-              sitesUsed: targetOrg.sitesCount || 1,
-              sitesLimit: targetOrg.sitesLimit || 15,
-              monthlyCheckinsLimit: 100000,
-              expiresDate: targetOrg.renewalDate,
-              graceEndsDate: null,
-              inGracePeriod: false,
-              daysRemaining: 365,
-              graceDaysRemaining: null,
-              message: 'License is valid and verified.',
-            },
-            payments: [],
-            usageDaily: [],
-            usersSummary: {
-              totalMembersCount: targetOrg.memberCount,
-              visitorsCount: 8,
-              optedInProximityCount: Math.round(targetOrg.memberCount * 0.65),
-              staffByRole: { admin: 3, pastor: 2, usher: 6 },
-              staffAccounts: [
-                { id: 'u1', role: 'admin', status: 'active', joinedAt: '2026-01-15' },
-                { id: 'u2', role: 'pastor', status: 'active', joinedAt: '2026-01-15' },
-              ],
-            },
-            sites: [
-              {
-                id: 'site-1',
-                name: 'Main Worship Auditorium',
-                lat: 6.6885,
-                lng: -1.6644,
-                radius_m: 100,
-                outer_radius_m: 300,
-                active: true,
+          const targetOrg = organisations.find((o) => o.id === orgId) || null;
+          if (targetOrg) {
+            setSelectedOrgDetail({
+              organisation: targetOrg,
+              license: licenses.find((l) => (l.organizationId || l.tenantId) === orgId) || null,
+              evaluation: {
+                allowed: true,
+                code: 'LICENSE_OK',
+                httpStatus: 200,
+                status: 'active',
+                tier: targetOrg.licenseTier,
+                organizationId: targetOrg.id,
+                seatsUsed: targetOrg.memberCount,
+                seatsLimit: targetOrg.maxCapacity,
+                sitesUsed: targetOrg.sitesCount || 1,
+                sitesLimit: targetOrg.sitesLimit || 15,
+                monthlyCheckinsLimit: 100000,
+                expiresDate: targetOrg.renewalDate,
+                graceEndsDate: null,
+                inGracePeriod: false,
+                daysRemaining: 365,
+                graceDaysRemaining: null,
+                message: 'License is valid and verified.',
               },
-            ],
-            audit: [],
-          });
+              payments: [],
+              usageDaily: [],
+              usersSummary: {
+                totalMembersCount: targetOrg.memberCount,
+                visitorsCount: 0,
+                optedInProximityCount: Math.round(targetOrg.memberCount * 0.65),
+                staffByRole: { admin: 1 },
+                staffAccounts: [],
+              },
+              sites: [],
+              audit: [],
+            });
+          }
         }
       } catch {
         showToast('Loaded local organisation profile.');
@@ -1231,13 +1100,13 @@ export const CreatorsPanel: React.FC = () => {
 
   // Active models (with fallbacks so views are NEVER empty)
   const activeSummary = summary || DEFAULT_SUMMARY;
-  const activeOrganisations = organisations.length > 0 ? organisations : [DEFAULT_PRIMARY_TENANT];
-  const activeLicenses = licenses.length > 0 ? licenses : [DEFAULT_PRIMARY_LICENSE];
+  const activeOrganisations = organisations;
+  const activeLicenses = licenses;
   const activePlans = plans.length > 0 ? plans : DEFAULT_PLANS_LIST;
   const activeLandingCms = landingCms || DEFAULT_LANDING_CONFIG;
   const activeFeatureFlags = featureFlags.length > 0 ? featureFlags : DEFAULT_FEATURE_FLAGS;
-  const activeAlerts = alerts.length > 0 ? alerts : DEFAULT_ALERTS;
-  const activeAnnouncements = announcements.length > 0 ? announcements : DEFAULT_ANNOUNCEMENTS;
+  const activeAlerts = alerts;
+  const activeAnnouncements = announcements;
 
   // Filtered lists
   const filteredOrganisations = useMemo(() => {
@@ -2789,12 +2658,9 @@ export const CreatorsPanel: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-white/5">
                   {filteredUsage.length === 0 ? (
                     <tr>
-                      <td className="py-2.5 px-3 font-bold">2026-10-31</td>
-                      <td className="py-2.5 px-3 font-sans font-medium">PIWC KWADASO</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-600 dark:text-emerald-400">156</td>
-                      <td className="py-2.5 px-3 text-amber-500">2</td>
-                      <td className="py-2.5 px-3 text-rose-500">1</td>
-                      <td className="py-2.5 px-3 text-rose-600 font-bold">1</td>
+                      <td colSpan={6} className="py-6 text-center text-slate-400 font-sans">
+                        No telemetry check-in records logged for this filter window.
+                      </td>
                     </tr>
                   ) : (
                     filteredUsage.map((u, i) => (
@@ -3079,22 +2945,8 @@ export const CreatorsPanel: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-white/5">
                   {dataRequests.length === 0 ? (
                     <tr>
-                      <td className="py-3 px-3 uppercase font-bold text-[#6D5CF2]">EXPORT</td>
-                      <td className="py-3 px-3 font-sans font-medium">PIWC KWADASO</td>
-                      <td className="py-3 px-3">member@piwckwadaso.org</td>
-                      <td className="py-3 px-3">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600">
-                          PENDING
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">{new Date(Date.now() + 25 * 86400000).toLocaleDateString()}</td>
-                      <td className="py-3 px-3 text-right font-sans">
-                        <button
-                          onClick={() => showToast('Data export initiated')}
-                          className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-600 font-bold text-xs hover:bg-amber-500/20 cursor-pointer"
-                        >
-                          Start
-                        </button>
+                      <td colSpan={6} className="py-6 text-center text-slate-400 font-sans">
+                        No active Act 843 data privacy export or erasure requests.
                       </td>
                     </tr>
                   ) : (

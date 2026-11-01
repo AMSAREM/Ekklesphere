@@ -193,10 +193,8 @@ export const AppHeader: React.FC = () => {
           {currentUser &&
             (currentUser.role === 'super_admin' ||
               currentUser.role === 'creator' ||
-              currentUser.is_creator ||
-              currentUser.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-              currentUser.email?.toLowerCase() === 'elenamends@gmail.com' ||
-              currentUser.email?.toLowerCase() === 'elenaamoako70@gmail.com') && (
+              Boolean(currentUser.is_creator) ||
+              currentUser.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase()) && (
               <button
                 onClick={() => setViewMode(viewMode === 'creator' ? 'app' : 'creator')}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${

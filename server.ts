@@ -9,6 +9,7 @@ import {
   expressOrganizationMiddleware,
   enforceOrganizationScope,
   registerSupportGrantLookup,
+  registerUserOrganizationResolver,
 } from './src/middleware/organizationMiddleware.ts';
 import {
   assertProductionAuthConfig,
@@ -39,6 +40,14 @@ registerExternalIdentityVerifier((token) => platformStore.verifySupabaseAccessTo
 registerSupportGrantLookup((grantId, creatorId) =>
   platformStore.verifyActiveSupportGrant(grantId, creatorId)
 );
+registerUserOrganizationResolver(async (user) => {
+  if (user.email) {
+    const memberRole = await platformStore.lookupMemberRoleInStore(user.id, user.email);
+    if (memberRole?.organizationId) return memberRole.organizationId;
+  }
+  const orgs = await platformStore.listOrganisations();
+  return orgs[0]?.id || null;
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,12 +99,20 @@ export function requireAuthRole(...allowedRoles: ChurchRole[]) {
   const roleGuard = requireRoles(...allowedRoles);
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     await requireUser(req, res, async () => {
-      await enforceOrganizationScope(req, res, () => {
-        roleGuard(req, res, next);
+      roleGuard(req, res, async () => {
+        await enforceOrganizationScope(req, res, next);
       });
     });
   };
 }
+
+// Development preview-session endpoint permanently disabled (returns 404 not_found)
+app.all('/api/dev/preview-session', (_req: Request, res: Response) => {
+  return res.status(404).json({
+    error: 'not_found',
+    message: 'Development preview-session endpoint has been permanently removed.',
+  });
+});
 
 // =========================================================================
 // PHASE 0 (#1): HARDENED SESSION TOKEN EXCHANGE & DEV PREVIEW HELPER
@@ -108,14 +125,19 @@ app.post('/api/auth/token', requireUser, async (req: Request, res: Response) => 
   const creator = isCreatorClaim(verifiedUser);
 
   let resolvedRole: ChurchRole = verifiedUser.role;
-  let resolvedOrgId: string = verifiedUser.organization_id || verifiedUser.tenant_id || PRIMARY_ORGANIZATION_ID;
+  let resolvedOrgId: string = verifiedUser.organization_id || verifiedUser.tenant_id || '';
   let resolvedName: string = verifiedUser.name || verifiedUser.email.split('@')[0] || 'Church User';
 
-  if (verifiedUser.auth_provider === 'supabase' && !creator) {
+  if (!resolvedOrgId || (verifiedUser.auth_provider === 'supabase' && !creator)) {
     const dbMembership = await platformStore.lookupMemberRoleInStore(verifiedUser.id, verifiedUser.email);
     resolvedOrgId = dbMembership.organizationId || resolvedOrgId;
     resolvedRole = dbMembership.role || resolvedRole;
     if (dbMembership.name) resolvedName = dbMembership.name;
+  }
+
+  if (!resolvedOrgId) {
+    const orgs = await platformStore.listOrganisations();
+    resolvedOrgId = orgs[0]?.id || '';
   }
 
   const token = signToken({
@@ -125,7 +147,7 @@ app.post('/api/auth/token', requireUser, async (req: Request, res: Response) => 
     name: resolvedName,
     organization_id: resolvedOrgId,
     tenant_id: resolvedOrgId,
-    campus_id: verifiedUser.campus_id || PRIMARY_CAMPUS_SITE_ID,
+    campus_id: verifiedUser.campus_id,
     is_creator: creator,
     auth_provider: 'session_jwt',
   });
@@ -147,128 +169,41 @@ app.post('/api/auth/token', requireUser, async (req: Request, res: Response) => 
   });
 });
 
-// Non-production preview session helper ONLY for local AI Studio / Vite dev preview when
-// VITE_SUPABASE_URL is not yet configured. Hard-disabled (404) in production!
-app.post('/api/dev/preview-session', async (req: Request, res: Response) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ error: 'not_found' });
-  }
-
-  const rawEmail =
-    typeof req.body?.email === 'string' && req.body.email.trim()
-      ? req.body.email.trim().toLowerCase()
-      : '';
-
-  if (!rawEmail) {
-    return res.status(400).json({ error: 'missing_email', message: 'Email address is required.' });
-  }
-
-  const rawName =
-    typeof req.body?.name === 'string' && req.body.name.trim()
-      ? req.body.name.trim()
-      : rawEmail
-          .split('@')[0]
-          .replace(/[._-]+/g, ' ')
-          .replace(/\b\w/g, (c: string) => c.toUpperCase());
-
-  const requestedRole = typeof req.body?.role === 'string' ? req.body.role : 'member';
-  const allowedPreviewRoles: ChurchRole[] = [
-    'creator',
-    'super_admin',
-    'admin',
-    'pastor',
-    'usher',
-    'member',
-    'group_leader',
-    'finance',
-  ];
-  const role: ChurchRole = allowedPreviewRoles.includes(requestedRole as ChurchRole)
-    ? (requestedRole as ChurchRole)
-    : 'member';
-
-  const orgs = await platformStore.listOrganisations();
-  const activeOrgId = orgs[0]?.id || PRIMARY_ORGANIZATION_ID;
-
-  const id =
-    typeof req.body?.id === 'string' && req.body.id.trim()
-      ? req.body.id.trim()
-      : `preview-${rawEmail.replace(/[^a-z0-9]/g, '-')}`;
-
-  const token = signToken({
-    id,
-    email: rawEmail,
-    role,
-    name: rawName,
-    organization_id: activeOrgId,
-    tenant_id: activeOrgId,
-    campus_id: PRIMARY_CAMPUS_SITE_ID,
-    is_creator: role === 'creator' || role === 'super_admin',
-    auth_provider: 'session_jwt',
-  });
-
-  return res.status(200).json({
-    token,
-    role,
-    organizationId: activeOrgId,
-    isCreator: role === 'creator' || role === 'super_admin',
-    user: {
-      id,
-      email: rawEmail,
-      name: rawName,
-      role,
-      organization_id: activeOrgId,
-      tenant_id: activeOrgId,
-    },
-  });
-});
-
-// Dedicated Creator Console session bootstrapper
-app.post('/api/auth/creator-session', async (req: Request, res: Response) => {
-  const rawEmail =
-    typeof req.body?.email === 'string' && req.body.email.trim()
-      ? req.body.email.trim().toLowerCase()
-      : (process.env.CREATOR_EMAIL || '').trim().toLowerCase();
-
-  if (!rawEmail) {
-    return res.status(400).json({
-      error: 'missing_email',
-      message: 'Creator email address is required.',
+// Dedicated Creator Console session exchange/refresh endpoint (Strictly authenticated, no bypass)
+app.post('/api/auth/creator-session', requireUser, async (req: Request, res: Response) => {
+  const verifiedUser = req.user!;
+  if (!isCreatorClaim(verifiedUser)) {
+    return res.status(403).json({
+      error: 'creator_required',
+      message: 'Access denied. Verified platform creator privilege is required.',
     });
   }
 
-  const rawName =
-    typeof req.body?.name === 'string' && req.body.name.trim()
-      ? req.body.name.trim()
-      : rawEmail
-          .split('@')[0]
-          .replace(/[._-]+/g, ' ')
-          .replace(/\b\w/g, (c: string) => c.toUpperCase()) || 'Platform Creator';
-
   const orgs = await platformStore.listOrganisations();
-  const activeOrgId = orgs[0]?.id || PRIMARY_ORGANIZATION_ID;
+  const activeOrgId = verifiedUser.organization_id || orgs[0]?.id || '';
 
   const token = signToken({
-    id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
-    email: rawEmail,
-    role: 'creator',
-    name: rawName,
+    id: verifiedUser.id,
+    email: verifiedUser.email,
+    role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
+    name: verifiedUser.name || 'Platform Creator',
     organization_id: activeOrgId,
     tenant_id: activeOrgId,
-    campus_id: PRIMARY_CAMPUS_SITE_ID,
+    campus_id: verifiedUser.campus_id,
     is_creator: true,
     auth_provider: 'session_jwt',
   });
 
   return res.status(200).json({
     token,
-    role: 'creator',
+    role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
     organizationId: activeOrgId,
     isCreator: true,
     user: {
-      id: `creator-${rawEmail.replace(/[^a-z0-9]/g, '-')}`,
-      email: rawEmail,
-      name: rawName,
-      role: 'creator',
+      id: verifiedUser.id,
+      email: verifiedUser.email,
+      name: verifiedUser.name || 'Platform Creator',
+      role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
       organization_id: activeOrgId,
       tenant_id: activeOrgId,
       is_creator: true,
@@ -353,12 +288,12 @@ const EventSchema = z.object({
 const PremiseConfigSchema = z.object({
   siteId: z.string().regex(uuidRegex, 'Invalid site UUID').optional(),
   churchName: z.preprocess(
-    (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'PIWC KWADASO'),
-    z.string().max(300).default('PIWC KWADASO')
+    (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'Ekklesphere Sanctuary'),
+    z.string().max(300).default('Ekklesphere Sanctuary')
   ),
   campusName: z.preprocess(
-    (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'PIWC KWADASO'),
-    z.string().max(300).default('PIWC KWADASO')
+    (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'Main Campus'),
+    z.string().max(300).default('Main Campus')
   ),
   campusAddress: z.preprocess(
     (val) => (typeof val === 'string' ? val.trim() : ''),
@@ -1814,7 +1749,7 @@ app.post(
     ]);
 
     const memberName = req.body?.personName || req.user?.name || 'Church Member';
-    const campus = premiseData.premiseSettings?.campusName || 'PIWC KWADASO';
+    const campus = premiseData.premiseSettings?.campusName || 'Sanctuary Campus';
     const service = eventsList[0]?.name || 'Sunday Service';
 
     const testPayload = {

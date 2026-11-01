@@ -696,10 +696,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
     const normalized = rawEmail.trim().toLowerCase();
+    const creatorEmail = (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase();
     if (
-      normalized === 'amoakoemmanuel2020@gmail.com' ||
-      normalized === 'elenaamoako70@gmail.com' ||
-      normalized === 'elenamends@gmail.com' ||
+      normalized === creatorEmail ||
       normalized.includes('creator') ||
       normalized.includes('superadmin')
     ) {
@@ -735,28 +734,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // ignore
     }
 
-    // Attempt to mint/fetch dev session token if not already present
-    if (!user.token && typeof window !== 'undefined') {
-      fetch('/api/dev/preview-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        }),
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (data?.token) {
-            localStorage.setItem('ekklesphere_token', data.token);
-            setCurrentUser((prev) => (prev ? { ...prev, token: data.token, is_creator: data.isCreator } : prev));
-          }
-        })
-        .catch(() => {});
-    }
-
     // Persist user document to Firestore so security rules and multi-device auth recognize user role
     try {
       setDoc(doc(db, 'users', user.id), {
@@ -766,7 +743,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         role: user.role,
         photoURL: user.avatar || '',
         title: user.title || (user.role === 'admin' ? 'Administrator' : user.role === 'usher' ? 'Door Steward' : 'Congregation Member'),
-        campusName: user.campusName || 'PIWC KWADASO',
+        campusName: user.campusName || systemSettings.campusName || 'Main Campus',
         createdAt: new Date().toISOString(),
       }, { merge: true }).catch((err) => {
         console.warn('Firestore user profile sync warning (non-blocking):', err);
@@ -820,7 +797,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
             : matchedMember?.groupName
             ? `Member (${matchedMember.groupName})`
             : 'Congregation Member',
-        campusName: systemSettings.campusName || 'PIWC KWADASO',
+        campusName: systemSettings.campusName || 'Main Campus',
         permissions:
           role === 'admin'
             ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
@@ -920,14 +897,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         .join('')
         .toUpperCase() || 'MB';
 
+    const creatorEmail = (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase();
     const isCreator =
       derivedRole === 'creator' ||
       derivedRole === 'super_admin' ||
       preferredRole === 'creator' ||
       preferredRole === 'super_admin' ||
-      trimmed === 'amoakoemmanuel2020@gmail.com' ||
-      trimmed === 'elenaamoako70@gmail.com' ||
-      trimmed === 'elenamends@gmail.com';
+      trimmed === creatorEmail;
 
     const finalRole: UserRole =
       preferredRole === 'creator' || preferredRole === 'super_admin'
@@ -953,7 +929,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : matchedMember?.groupName
           ? `Member (${matchedMember.groupName})`
           : 'Congregation Member',
-      campusName: systemSettings.campusName || 'PIWC KWADASO',
+      campusName: systemSettings.campusName || 'Main Campus',
       memberId: matchedMember?.id,
       permissions:
         finalRole === 'creator' || finalRole === 'super_admin'
@@ -1079,14 +1055,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const cleaned: SystemSettings = {
           ...DEFAULT_SYSTEM_SETTINGS,
           ...parsed,
-          churchName:
-            !parsed.churchName || parsed.churchName === 'Ekklesphere Church'
-              ? 'PIWC KWADASO'
-              : parsed.churchName,
-          campusName:
-            !parsed.campusName || parsed.campusName === 'Main Church Premise'
-              ? 'PIWC KWADASO'
-              : parsed.campusName,
+          churchName: parsed.churchName || '',
+          campusName: parsed.campusName || '',
           seniorPastor:
             parsed.seniorPastor === 'Pastor David Osei' ? '' : parsed.seniorPastor || '',
           contactEmail:
@@ -1142,7 +1112,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
               : matchedMember?.groupName
               ? `Member (${matchedMember.groupName})`
               : 'Congregation Member',
-          campusName: systemSettings.campusName || 'PIWC KWADASO',
+          campusName: systemSettings.campusName || 'Main Campus',
           permissions:
             role === 'admin'
               ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
@@ -2198,8 +2168,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return false;
       }
 
-      const churchName = (params.churchName || systemSettings.churchName || 'PIWC KWADASO').trim() || 'PIWC KWADASO';
-      const campusName = (params.campusName || systemSettings.campusName || 'PIWC KWADASO').trim() || 'PIWC KWADASO';
+      const churchName = (params.churchName || systemSettings.churchName || 'Ekklesphere Sanctuary').trim();
+      const campusName = (params.campusName || systemSettings.campusName || 'Main Campus').trim();
       const campusAddress = params.campusAddress ?? systemSettings.campusAddress ?? '';
       const innerGeofenceMeters = Math.max(10, Number(params.innerGeofenceMeters ?? systemSettings.innerGeofenceMeters ?? 50));
       const outerGeofenceMeters = Math.max(25, Number(params.outerGeofenceMeters ?? systemSettings.outerGeofenceMeters ?? 300));

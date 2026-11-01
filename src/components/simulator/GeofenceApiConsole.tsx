@@ -285,8 +285,8 @@ export const GeofenceApiConsole: React.FC = () => {
         lat: liveCoords.lat,
         lng: liveCoords.lng,
         accuracyM: liveCoords.accuracy,
-        churchName: systemSettings.churchName || 'PIWC KWADASO',
-        campusName: systemSettings.campusName || 'PIWC KWADASO',
+        churchName: systemSettings.churchName || 'Ekklesphere Sanctuary',
+        campusName: systemSettings.campusName || 'Main Campus',
         innerGeofenceMeters: calibratedRadius,
         outerGeofenceMeters: Math.max(calibratedRadius * 2, systemSettings.outerGeofenceMeters || 300),
       });
@@ -328,8 +328,8 @@ export const GeofenceApiConsole: React.FC = () => {
         lat: parsedLat,
         lng: parsedLng,
         accuracyM: null,
-        churchName: systemSettings.churchName || 'PIWC KWADASO',
-        campusName: systemSettings.campusName || 'PIWC KWADASO',
+        churchName: systemSettings.churchName || 'Ekklesphere Sanctuary',
+        campusName: systemSettings.campusName || 'Main Campus',
         innerGeofenceMeters: calibratedRadius,
         outerGeofenceMeters: Math.max(calibratedRadius * 2, systemSettings.outerGeofenceMeters || 300),
       });

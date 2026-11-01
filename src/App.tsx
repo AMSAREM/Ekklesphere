@@ -21,9 +21,7 @@ const EkklesphereMain: React.FC = () => {
       (currentUser?.role === 'super_admin' ||
         currentUser?.role === 'creator' ||
         Boolean(currentUser?.is_creator) ||
-        currentUser?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
-        currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
-        currentUser?.email?.toLowerCase() === 'elenamends@gmail.com');
+        currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase());
 
     if (!isCreatorAllowed) {
       return (

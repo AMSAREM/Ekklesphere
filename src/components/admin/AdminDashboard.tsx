@@ -193,7 +193,7 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     setBroadcastBody(
-      `Welcome to ${systemSettings.churchName || 'PIWC KWADASO'}! Service begins at ${currentService.startsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
+      `Welcome to ${systemSettings.churchName || 'Ekklesphere Sanctuary'}! Service begins at ${currentService.startsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
     );
   }, [systemSettings.churchName, currentService.startsAt]);
 

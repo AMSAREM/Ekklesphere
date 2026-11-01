@@ -3,8 +3,10 @@ import type { Request, Response, NextFunction } from 'express';
 import { randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 
-export const PRIMARY_ORGANIZATION_ID = 'e0000000-0000-0000-0000-000000000001';
-export const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
+export const PRIMARY_ORGANIZATION_ID = '';
+export const PRIMARY_CAMPUS_SITE_ID = '';
+export const TEST_ANCHOR_ORGANIZATION_ID = 'a0000000-0000-4000-8000-000000000001';
+export const TEST_CAMPUS_SITE_ID = 'b0000000-0000-4000-8000-000000000001';
 
 export type ChurchRole =
   | 'super_admin'
@@ -130,12 +132,12 @@ export function signToken(
   expiresIn: string | number = '24h'
 ): string {
   const secret = getJwtSecret();
-  const orgId = payload.organization_id || payload.tenant_id || PRIMARY_ORGANIZATION_ID;
+  const orgId = payload.organization_id || payload.tenant_id;
   const normalizedPayload: Omit<AuthUserPayload, 'iat' | 'exp'> = {
     ...payload,
     organization_id: orgId,
     tenant_id: orgId,
-    campus_id: payload.campus_id || PRIMARY_CAMPUS_SITE_ID,
+    campus_id: payload.campus_id,
     is_creator:
       payload.is_creator === true ||
       payload.role === 'creator' ||
@@ -151,12 +153,12 @@ export function signToken(
 export function verifyToken(token: string): AuthUserPayload {
   const secret = getJwtSecret();
   const decoded = jwt.verify(token, secret) as AuthUserPayload;
-  const orgId = decoded.organization_id || decoded.tenant_id || PRIMARY_ORGANIZATION_ID;
+  const orgId = decoded.organization_id || decoded.tenant_id;
   return {
     ...decoded,
     organization_id: orgId,
     tenant_id: orgId,
-    campus_id: decoded.campus_id || PRIMARY_CAMPUS_SITE_ID,
+    campus_id: decoded.campus_id,
     is_creator:
       decoded.is_creator === true ||
       decoded.role === 'creator' ||
@@ -227,10 +229,10 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   try {
     const decoded = await resolveVerifiedUserFromToken(token);
     req.user = decoded;
-    const orgId = decoded.organization_id || decoded.tenant_id || PRIMARY_ORGANIZATION_ID;
+    const orgId = decoded.organization_id || decoded.tenant_id;
     req.organizationId = orgId;
     req.tenant_id = orgId;
-    req.campus_id = decoded.campus_id || PRIMARY_CAMPUS_SITE_ID;
+    req.campus_id = decoded.campus_id;
     next();
   } catch (err: any) {
     res.status(401).json({

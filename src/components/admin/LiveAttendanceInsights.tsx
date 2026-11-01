@@ -518,7 +518,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             Live Attendance Insights
           </h1>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-            <span>{systemSettings.campusName || 'PIWC KWADASO'}</span>
+            <span>{systemSettings.campusName || 'Main Campus'}</span>
             <span aria-hidden="true">·</span>
             <span>
               {scopeMode === 'all'
