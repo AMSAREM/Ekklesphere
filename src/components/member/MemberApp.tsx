@@ -1470,25 +1470,25 @@ export const MemberApp: React.FC = () => {
 
   return (
     <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] transition-all duration-200">
-      {/* Navigation Bar */}
+      {/* Navigation Bar - Responsive Floating Dock on Mobile & Signature Left Tab on Desktop */}
       <aside
         aria-label="Member Navigation"
-        className="fixed z-50 bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-auto max-w-[calc(100vw-24px)] lg:w-[64px] bg-[#6D5CF2] rounded-full lg:rounded-r-[28px] lg:rounded-l-none flex flex-row lg:flex-col items-center justify-around sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2.5 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 shadow-[0_16px_40px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200"
+        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-20px)] max-w-md lg:w-[64px] bg-[#6D5CF2]/95 dark:bg-[#5E4EE0]/95 backdrop-blur-xl rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-5 lg:flex lg:flex-col items-center justify-items-center sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-5 shadow-[0_12px_36px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200 select-none touch-manipulation"
       >
         {/* 1. Home */}
-        <div className="relative group">
+        <div className="relative group w-full flex justify-center">
           <button
             onClick={() => setActiveTab('home')}
             aria-label="Home"
             aria-current={activeTab === 'home' && !isQrSheetOpen ? 'page' : undefined}
-            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'home' && !isQrSheetOpen
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
-                : 'text-white/85 hover:text-white hover:bg-white/20'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
+                : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
-            <Home className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-none font-semibold">Home</span>
+            <Home className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Home</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Home</span>
@@ -1496,19 +1496,19 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 2. Services & Events */}
-        <div className="relative group">
+        <div className="relative group w-full flex justify-center">
           <button
             onClick={() => setActiveTab('events')}
             aria-label="Events"
             aria-current={activeTab === 'events' ? 'page' : undefined}
-            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'events'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
-                : 'text-white/85 hover:text-white hover:bg-white/20'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
+                : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
-            <Calendar className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-none font-semibold">Events</span>
+            <Calendar className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Events</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Events</span>
@@ -1516,19 +1516,19 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 3. Giving */}
-        <div className="relative group">
+        <div className="relative group w-full flex justify-center">
           <button
             onClick={() => setActiveTab('give')}
             aria-label="Give"
             aria-current={activeTab === 'give' ? 'page' : undefined}
-            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'give'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
-                : 'text-white/85 hover:text-white hover:bg-white/20'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
+                : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
-            <Heart className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-none font-semibold">Give</span>
+            <Heart className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Give</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Give</span>
@@ -1536,14 +1536,14 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 4. Scanner & Pass */}
-        <div className="relative group">
+        <div className="relative group w-full flex justify-center">
           <button
             onClick={() => setIsQrSheetOpen(true)}
             aria-label="Scan & Pass"
-            className="min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 text-white/85 hover:text-white hover:bg-white/20 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
+            className="w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 text-white/80 hover:text-white hover:bg-white/15 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95"
           >
-            <QrCode className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-none font-semibold">Scan</span>
+            <QrCode className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Scan</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Scan & Pass</span>
@@ -1551,19 +1551,19 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 5. Me (Digital Member Card & Profile) */}
-        <div className="relative group">
+        <div className="relative group w-full flex justify-center">
           <button
             onClick={() => setActiveTab('me')}
             aria-label="Me"
             aria-current={activeTab === 'me' ? 'page' : undefined}
-            className={`min-w-[48px] min-h-[44px] lg:min-w-0 lg:w-11 lg:h-11 px-2 lg:px-0 rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'me'
-                ? 'bg-white text-[#6D5CF2] shadow-[0_6px_14px_rgba(40,30,120,0.25)] font-bold'
-                : 'text-white/85 hover:text-white hover:bg-white/20'
+                ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
+                : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
-            <User className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-none font-semibold">Me</span>
+            <User className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Me</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Me</span>
