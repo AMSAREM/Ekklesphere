@@ -14,32 +14,25 @@ import { CreatorsPanel } from './components/creator/CreatorsPanel';
 const EkklesphereMain: React.FC = () => {
   const { currentUser, toastMessage, viewMode } = useEkklesphere();
 
-  // If Creator Console view is active
+  // If Creator Console view is active - only verified creator login can access
   if (viewMode === 'creator') {
     const isCreatorAllowed =
-      !currentUser ||
-      currentUser?.role === 'super_admin' ||
-      currentUser?.role === 'creator' ||
-      Boolean(currentUser?.is_creator) ||
-      currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
-      currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
+      Boolean(currentUser) &&
+      (currentUser?.role === 'super_admin' ||
+        currentUser?.role === 'creator' ||
+        Boolean(currentUser?.is_creator) ||
+        currentUser?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
+        currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
+        currentUser?.email?.toLowerCase() === 'elenamends@gmail.com');
+
     if (!isCreatorAllowed) {
       return (
-        <div className="min-h-screen w-full flex items-center justify-center bg-[#0D0D22] text-[#F2F2FA] p-4">
-          <div className="max-w-md w-full bg-[#171738] p-6 rounded-2xl border border-rose-500/30 text-center space-y-4">
-            <div className="w-12 h-12 rounded-xl bg-rose-500/10 text-rose-400 mx-auto flex items-center justify-center font-bold text-xl">
-              !
+        <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA]">
+          <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8 py-8 flex flex-col items-center justify-center">
+            <div className="max-w-md w-full mb-4 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs text-center font-medium">
+              The Creator Console is restricted to Platform Creators. Please log in with your Creator credentials below.
             </div>
-            <h2 className="text-lg font-bold">Access Restricted</h2>
-            <p className="text-xs text-zinc-400">
-              The Creators Panel is strictly restricted to platform <strong>super_admin</strong> and <strong>creator</strong> roles. Your current role is <span className="text-amber-400 font-semibold">{currentUser?.role || 'unauthenticated'}</span>.
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] transition-colors cursor-pointer"
-            >
-              Return to Safe Portal
-            </button>
+            <UnifiedAuthScreen />
           </div>
         </div>
       );

@@ -50,6 +50,11 @@ import {
   Menu,
   Filter,
   ArrowUpRight,
+  LogOut,
+  User,
+  Mail,
+  Shield,
+  KeyRound,
 } from 'lucide-react';
 import type {
   ConsoleAlert,
@@ -351,7 +356,7 @@ const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [
 ];
 
 export const CreatorsPanel: React.FC = () => {
-  const { currentUser, setViewMode, showToast } = useEkklesphere();
+  const { currentUser, setViewMode, showToast, logout } = useEkklesphere();
 
   // Authentication Guard: allows creator, super_admin, and verified platform administrator emails
   const isAuthorized =
@@ -359,10 +364,11 @@ export const CreatorsPanel: React.FC = () => {
     currentUser?.role === 'super_admin' ||
     currentUser?.role === 'creator' ||
     Boolean(currentUser?.is_creator) ||
+    currentUser?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
     currentUser?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
     currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
 
-  // Active Console Navigation Tab (All 11 Modules)
+  // Active Console Navigation Tab (All 12 Modules including Creator Profile & Sign Out)
   type ConsoleTab =
     | 'dashboard'
     | 'organisations'
@@ -374,7 +380,8 @@ export const CreatorsPanel: React.FC = () => {
     | 'feature_flags'
     | 'data_requests'
     | 'audit_log'
-    | 'landing_cms';
+    | 'landing_cms'
+    | 'profile';
 
   const [activeTab, setActiveTab] = useState<ConsoleTab>('dashboard');
 
@@ -517,6 +524,44 @@ export const CreatorsPanel: React.FC = () => {
     notes: '',
   });
 
+  // Profile & Sign Out State
+  const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
+  const [isTokenCopied, setIsTokenCopied] = useState(false);
+  const [isRefreshingToken, setIsRefreshingToken] = useState(false);
+
+  const handleCreatorSignOut = () => {
+    logout();
+    showToast('Signed out of Ekklesphere Creator Console');
+    setIsSignOutConfirmOpen(false);
+  };
+
+  const handleRefreshToken = async () => {
+    setIsRefreshingToken(true);
+    try {
+      const res = await fetch('/api/auth/creator-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
+          role: 'creator',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.token) {
+          localStorage.setItem('ekklesphere_token', data.token);
+          showToast('Creator session token successfully renewed!');
+        }
+      } else {
+        showToast('Unable to renew token. Please sign in again.');
+      }
+    } catch {
+      showToast('Network error renewing token.');
+    } finally {
+      setIsRefreshingToken(false);
+    }
+  };
+
   // Ensure a valid Creator Console token is available
   const ensureConsoleToken = useCallback(async (): Promise<string | null> => {
     let token =
@@ -530,7 +575,7 @@ export const CreatorsPanel: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: currentUser?.email || 'elenaamoako70@gmail.com',
+          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
           role: 'creator',
         }),
       });
@@ -548,7 +593,7 @@ export const CreatorsPanel: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: currentUser?.email || 'elenaamoako70@gmail.com',
+          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
           role: 'creator',
         }),
       });
@@ -572,6 +617,18 @@ export const CreatorsPanel: React.FC = () => {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
   }, [ensureConsoleToken]);
+
+  const safeFetchJson = async (url: string, headers: HeadersInit) => {
+    try {
+      const r = await fetch(url, { headers });
+      if (!r.ok) return null;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  };
 
   // Fetch all console data from server
   const loadConsoleData = useCallback(
@@ -597,18 +654,18 @@ export const CreatorsPanel: React.FC = () => {
           cmsRes,
           grantsRes,
         ] = await Promise.all([
-          fetch('/api/console/dashboard', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/organisations', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/licenses', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/plans', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch(`/api/console/usage?days=${usageDays}`, { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/alerts', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/announcements', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/feature-flags', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/data-requests', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch(`/api/console/audit-log?limit=${auditLimit}`, { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/landing-cms', { headers }).then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/console/support-grants', { headers }).then((r) => (r.ok ? r.json() : null)),
+          safeFetchJson('/api/console/dashboard', headers),
+          safeFetchJson('/api/console/organisations', headers),
+          safeFetchJson('/api/console/licenses', headers),
+          safeFetchJson('/api/console/plans', headers),
+          safeFetchJson(`/api/console/usage?days=${usageDays}`, headers),
+          safeFetchJson('/api/console/alerts', headers),
+          safeFetchJson('/api/console/announcements', headers),
+          safeFetchJson('/api/console/feature-flags', headers),
+          safeFetchJson('/api/console/data-requests', headers),
+          safeFetchJson(`/api/console/audit-log?limit=${auditLimit}`, headers),
+          safeFetchJson('/api/console/landing-cms', headers),
+          safeFetchJson('/api/console/support-grants', headers),
         ]);
 
         if (dashRes) setSummary(dashRes);
@@ -662,7 +719,7 @@ export const CreatorsPanel: React.FC = () => {
       try {
         const headers = await getConsoleHeaders();
         const res = await fetch(`/api/console/organisations/${orgId}`, { headers });
-        if (res.ok) {
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
           const data = await res.json();
           setSelectedOrgDetail(data);
         } else {
@@ -1264,6 +1321,7 @@ export const CreatorsPanel: React.FC = () => {
     },
     { id: 'audit_log', label: 'Audit Trail', icon: ShieldCheck },
     { id: 'landing_cms', label: 'Landing Page CMS', icon: Globe2 },
+    { id: 'profile', label: 'Profile & Sign Out', icon: User },
   ];
 
   return (
@@ -1319,14 +1377,6 @@ export const CreatorsPanel: React.FC = () => {
             )}
           </button>
 
-          <button
-            onClick={() => setViewMode('landing')}
-            className="p-2 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer shrink-0"
-            title="Return to Public Landing Page"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
           <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
             <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-[#6D5CF2] to-[#4F46E5] text-white flex items-center justify-center font-black shadow-md shadow-[#6D5CF2]/25 shrink-0">
               <Sliders className="w-4 h-4" />
@@ -1349,7 +1399,7 @@ export const CreatorsPanel: React.FC = () => {
         </div>
 
         {/* Global Action Bar */}
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button
             onClick={triggerManualRollup}
             disabled={refreshing}
@@ -1369,12 +1419,35 @@ export const CreatorsPanel: React.FC = () => {
             <span>Audit CSV</span>
           </a>
 
+          {/* Profile & Sign Out Page Trigger */}
           <button
-            onClick={() => setViewMode('landing')}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#E3E0FF] dark:hover:bg-[#28264A] transition-all cursor-pointer"
+            onClick={() => setActiveTab('profile')}
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+              activeTab === 'profile'
+                ? 'bg-[#6D5CF2] text-white border-[#6D5CF2] shadow-sm'
+                : 'bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] border-transparent hover:bg-[#E3E0FF] dark:hover:bg-[#28264A]'
+            }`}
+            title="Creator Profile & Sign Out"
           >
-            <Globe2 className="w-3.5 h-3.5" />
-            <span>Landing Page</span>
+            <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-[#6D5CF2] to-indigo-400 text-white flex items-center justify-center text-[9px] font-black shrink-0">
+              {currentUser?.initials || 'CR'}
+            </div>
+            <span className="hidden sm:inline">Profile</span>
+          </button>
+
+          {/* Direct Sign Out Button */}
+          <button
+            onClick={() => {
+              if (typeof window !== 'undefined' && window.confirm('Sign out of Ekklesphere Creator Console?')) {
+                logout();
+                showToast('Signed out of Creator Console');
+              }
+            }}
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 transition-all cursor-pointer"
+            title="Sign Out of Creator Console"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Sign Out</span>
           </button>
 
           <button
@@ -3269,6 +3342,283 @@ export const CreatorsPanel: React.FC = () => {
             </div>
           </form>
         )}
+
+        {/* ============================================================== */}
+        {/* MODULE 12: CREATOR PROFILE & SIGN OUT PAGE */}
+        {/* ============================================================== */}
+        {activeTab === 'profile' && (
+          <div className="space-y-6 max-w-5xl mx-auto pb-10">
+            {/* Top Identity Hero Card */}
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#1D1B3A] via-[#2A2356] to-[#6D5CF2] text-white p-6 sm:p-8 shadow-xl border border-white/10">
+              <div className="absolute right-0 top-0 -translate-y-8 translate-x-8 w-64 h-64 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
+              
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex items-start sm:items-center gap-4 sm:gap-6">
+                  {/* Avatar with Glow Ring */}
+                  <div className="relative shrink-0">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-[#6D5CF2] via-indigo-600 to-purple-800 text-white flex items-center justify-center font-black text-2xl sm:text-3xl shadow-xl shadow-black/30 border-2 border-white/20">
+                      {currentUser?.initials || 'CR'}
+                    </div>
+                    <span
+                      title="Verified Platform Master Key"
+                      className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-[#1D1B3A] flex items-center justify-center text-white"
+                    >
+                      <Check className="w-3 h-3 stroke-[3]" />
+                    </span>
+                  </div>
+
+                  {/* Profile Name & Roles */}
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white truncate">
+                        {currentUser?.name || 'Emmanuel Amoako'}
+                      </h2>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-extrabold border border-emerald-400/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Root Creator
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                      <span className="flex items-center gap-1 text-slate-200 font-medium">
+                        <Mail className="w-3.5 h-3.5 text-indigo-300" />
+                        <span>{currentUser?.email || 'amoakoemmanuel2020@gmail.com'}</span>
+                      </span>
+                      <span>•</span>
+                      <span className="text-indigo-200 font-bold">
+                        {currentUser?.title || 'Platform Creator & Owner'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                      <span className="px-2 py-0.5 rounded-lg bg-white/10 text-white/90 border border-white/15 font-semibold">
+                        Tier 0 Master Access
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 font-semibold">
+                        Ghana Act 843 Statutory Vault Admin
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Action Button */}
+                <div className="flex flex-col sm:flex-row md:flex-col items-stretch sm:items-center md:items-end gap-2 shrink-0">
+                  <button
+                    onClick={() => setIsSignOutConfirmOpen(true)}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-lg shadow-rose-900/40 transition-all hover:scale-[1.02] cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out of Session</span>
+                  </button>
+                  <span className="text-[11px] text-slate-300/80 text-center md:text-right">
+                    Secure fail-closed session
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Metrics Bar */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs">
+                <span className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider block mb-1">
+                  Churches Managed
+                </span>
+                <div className="text-2xl font-black text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-[#6D5CF2]" />
+                  <span>{activeOrganisations.length}</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 block">
+                  All active multi-tenants
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs">
+                <span className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider block mb-1">
+                  Active Licenses
+                </span>
+                <div className="text-2xl font-black text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                  <Key className="w-5 h-5 text-indigo-500" />
+                  <span>{activeLicenses.length}</span>
+                </div>
+                <span className="text-[10px] text-[#6D5CF2] font-bold mt-1 block">
+                  Enforced fail-closed
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs">
+                <span className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider block mb-1">
+                  Open Triage Alerts
+                </span>
+                <div className="text-2xl font-black text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                  <Bell className="w-5 h-5 text-amber-500" />
+                  <span>{activeAlerts.filter((a) => a.status === 'open').length}</span>
+                </div>
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mt-1 block">
+                  System health triage
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs">
+                <span className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider block mb-1">
+                  Storage Backend
+                </span>
+                <div className="text-base sm:text-lg font-black text-[#1D1B3A] dark:text-white flex items-center gap-1.5 truncate">
+                  <Database className="w-4 h-4 text-emerald-500 shrink-0" />
+                  <span className="truncate">Supabase SQL</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 block">
+                  + Firebase Auth
+                </span>
+              </div>
+            </div>
+
+            {/* Session Credentials & Cryptographic Scope Card */}
+            <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-white/5">
+                <div>
+                  <h3 className="text-base font-extrabold text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-[#6D5CF2]" />
+                    <span>Cryptographic Session & Access Scope</span>
+                  </h3>
+                  <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-0.5">
+                    Your authenticated Creator Bearer token authorizes platform provisioning, financial ledger modifications, and tenant governance.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRefreshToken}
+                  disabled={isRefreshingToken}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#E3E0FF] dark:hover:bg-[#28264A] transition-colors cursor-pointer shrink-0 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingToken ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingToken ? 'Renewing...' : 'Renew Token'}</span>
+                </button>
+              </div>
+
+              {/* Token Display */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Active Bearer JWT Token
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono text-xs text-slate-600 dark:text-slate-300 truncate select-all">
+                    {currentUser?.token
+                      ? `${currentUser.token.slice(0, 16)}••••••••••••••••••••••••••••••••••••${currentUser.token.slice(-12)}`
+                      : (typeof window !== 'undefined' && localStorage.getItem('ekklesphere_token'))
+                      ? `${(localStorage.getItem('ekklesphere_token') || '').slice(0, 16)}••••••••••••••••••••••••••••••••••••${(localStorage.getItem('ekklesphere_token') || '').slice(-12)}`
+                      : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.active-creator-session-bearer-verified'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const t =
+                        currentUser?.token ||
+                        (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : '') ||
+                        'active-creator-session-bearer-verified';
+                      if (typeof window !== 'undefined') {
+                        navigator.clipboard.writeText(t);
+                        setIsTokenCopied(true);
+                        showToast('Session token copied to clipboard!');
+                        setTimeout(() => setIsTokenCopied(false), 2500);
+                      }
+                    }}
+                    className="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-[#1D1B3A] dark:text-white transition-colors cursor-pointer shrink-0"
+                    title="Copy Full Token"
+                  >
+                    {isTokenCopied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Permissions Grid */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                  Authorized Governance Capabilities
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {[
+                    { label: 'Multi-Tenant Church Provisioning', scope: 'tenants:create_and_manage', desc: 'Create, configure, and isolate tenant schemas' },
+                    { label: 'License & Subscription Ledger', scope: 'licenses:issue_renew_revoke', desc: 'Control ARR, tiers, seats, and grace periods' },
+                    { label: 'Statutory Data Requests (Act 843)', scope: 'gdpr_vault:execute_exports', desc: 'Process 30-day statutory audit export & deletion' },
+                    { label: 'Usage Aggregates & Nightly Rollup', scope: 'usage:nightly_cron_trigger', desc: 'Execute daily aggregations and metric rollups' },
+                    { label: 'Platform Announcements & Radios', scope: 'broadcasts:publish_global', desc: 'Push broadcast alerts to all connected church apps' },
+                    { label: 'Feature Flags & BLE Geofence Engine', scope: 'features:toggle_enterprise', desc: 'Live runtime flag configuration across campuses' },
+                  ].map((perm, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 space-y-1"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-[#1D1B3A] dark:text-white">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        <span className="truncate">{perm.label}</span>
+                      </div>
+                      <div className="font-mono text-[10px] text-[#6D5CF2] dark:text-[#A594FD]">
+                        {perm.scope}
+                      </div>
+                      <p className="text-[11px] text-[#666A86] dark:text-[#8D92B5] leading-snug">
+                        {perm.desc}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Platform Cross-Portal Switcher Card */}
+            <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <h4 className="text-sm font-extrabold text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-[#6D5CF2]" />
+                  <span>Switch to Church Management Portals</span>
+                </h4>
+                <p className="text-xs text-[#666A86] dark:text-[#8D92B5]">
+                  Experience the member mobile pass, usher headcount station, and church administration as an executive pastor.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setViewMode('app')}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white font-bold text-xs shadow-md shadow-[#6D5CF2]/25 transition-all cursor-pointer shrink-0"
+              >
+                <span>Launch Church App</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* DANGER ZONE: Sign Out Section */}
+            <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-br from-rose-50/80 to-red-50/50 dark:from-rose-950/20 dark:to-red-950/10 border border-rose-200 dark:border-rose-900/50 shadow-xs space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/20">
+                  <LogOut className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-extrabold text-rose-900 dark:text-rose-200">
+                    Sign Out of Creator Console
+                  </h4>
+                  <p className="text-xs text-rose-700 dark:text-rose-300 mt-1 leading-relaxed">
+                    Terminating your session will immediately revoke your Creator Console access token, clear your active profile from local browser storage, and return you to the secure authentication gate. Any ongoing support view sessions will be cleanly closed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t border-rose-200/80 dark:border-rose-900/40">
+                <div className="text-xs text-rose-800 dark:text-rose-300 font-semibold">
+                  Account: <strong>{currentUser?.email || 'amoakoemmanuel2020@gmail.com'}</strong>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsSignOutConfirmOpen(true)}
+                  className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-900/30 transition-all hover:scale-[1.01] cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out of Creator Console</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* ============================================================== */}
@@ -4117,7 +4467,56 @@ export const CreatorsPanel: React.FC = () => {
                   Save Flag
                 </button>
               </div>
-            </form>
+      {/* MODAL: SIGN OUT CONFIRMATION */}
+      {isSignOutConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="max-w-md w-full bg-white dark:bg-[#181838] rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5 text-rose-600 dark:text-rose-400">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 flex items-center justify-center border border-rose-500/20">
+                  <LogOut className="w-5 h-5" />
+                </div>
+                <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                  Confirm Sign Out
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSignOutConfirmOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] leading-relaxed">
+              Are you sure you want to sign out of the Ekklesphere Creator Console? Your active session bearer token will be revoked and removed from local storage. You will need to re-enter your Creator credentials to regain access.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 text-[11px] space-y-1">
+              <div className="text-[#666A86] dark:text-[#8D92B5]">Active Creator Account:</div>
+              <div className="font-bold text-[#1D1B3A] dark:text-white truncate">
+                {currentUser?.email || 'amoakoemmanuel2020@gmail.com'}
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setIsSignOutConfirmOpen(false)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreatorSignOut}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md shadow-rose-900/30 transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Yes, Sign Out</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -240,16 +240,6 @@ export const UnifiedAuthScreen: React.FC = () => {
                 >
                   Copy Domain
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail('elenamends@gmail.com');
-                    loginWithCredentials('elenamends@gmail.com', '', 'admin');
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-sm transition-colors cursor-pointer"
-                >
-                  Sign in as Elena Mends
-                </button>
               </div>
             </div>
           </div>
@@ -265,80 +255,8 @@ export const UnifiedAuthScreen: React.FC = () => {
                   Sign In to Ekklesphere
                 </h2>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Enter your church credentials or use one-click quick login below.
+                  Enter your credentials below or continue with Google to access your church portal.
                 </p>
-              </div>
-
-              {/* 1-Click Fast Sign-In Options */}
-              <div className="bg-[#F8F9FE] dark:bg-[#1A1A3A] p-3.5 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] space-y-2">
-                <div className="flex items-center justify-between text-[11px] font-bold text-[#5B5F7A] dark:text-[#A9ACC8]">
-                  <span>Instant 1-Click Access</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Ready</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('elenamends@gmail.com');
-                      loginWithCredentials('elenamends@gmail.com', '', 'creator');
-                    }}
-                    className="p-2.5 rounded-xl bg-gradient-to-r from-[#6D5CF2]/15 to-[#8C7DFF]/15 hover:from-[#6D5CF2]/25 hover:to-[#8C7DFF]/25 border border-[#6D5CF2]/40 text-left transition-colors cursor-pointer col-span-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends (Platform Creator)</div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#6D5CF2] text-white">Full Console Access</span>
-                    </div>
-                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#A594FD] mt-0.5">Platform Owner · Multi-Tenant Licensing, Organizations & Analytics</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('elenamends@gmail.com');
-                      loginWithCredentials('elenamends@gmail.com', '', 'admin');
-                    }}
-                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-indigo-50 dark:hover:bg-indigo-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
-                  >
-                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends</div>
-                    <div className="text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF]">Church Administrator</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('elenamends@gmail.com');
-                      loginWithCredentials('elenamends@gmail.com', '', 'member');
-                    }}
-                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
-                  >
-                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Elena Mends</div>
-                    <div className="text-[10px] text-emerald-600 dark:text-emerald-400">Member Mobile</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('usher@church.org');
-                      loginWithCredentials('usher@church.org', '', 'usher');
-                    }}
-                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
-                  >
-                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Door Usher</div>
-                    <div className="text-[10px] text-amber-600 dark:text-amber-400">Usher Station</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginEmail('admin@church.org');
-                      loginWithCredentials('admin@church.org', '', 'admin');
-                    }}
-                    className="p-2 rounded-xl bg-white dark:bg-[#25254B] hover:bg-purple-50 dark:hover:bg-purple-950/50 border border-[#E3E5F2] dark:border-[#2D2D55] text-left transition-colors cursor-pointer"
-                  >
-                    <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">Lead Pastor</div>
-                    <div className="text-[10px] text-purple-600 dark:text-purple-400">Church Operations</div>
-                  </button>
-                </div>
               </div>
 
               {/* Google 1-Click Action */}

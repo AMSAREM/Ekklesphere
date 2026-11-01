@@ -454,12 +454,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return 'app';
   });
 
-  const setViewMode = (mode: AppViewMode) => {
+  const setViewMode = (mode: AppViewMode, actingUser?: AuthUser | null) => {
+    const userToCheck = actingUser !== undefined ? actingUser : currentUser;
     const isCreatorAllowed =
-      currentUser?.role === 'super_admin' ||
-      currentUser?.role === 'creator' ||
-      Boolean(currentUser?.is_creator) ||
-      currentUser?.email?.toLowerCase() === 'elenamends@gmail.com';
+      userToCheck?.role === 'super_admin' ||
+      userToCheck?.role === 'creator' ||
+      Boolean(userToCheck?.is_creator) ||
+      userToCheck?.email?.toLowerCase() === 'amoakoemmanuel2020@gmail.com' ||
+      userToCheck?.email?.toLowerCase() === 'elenaamoako70@gmail.com' ||
+      userToCheck?.email?.toLowerCase() === 'elenamends@gmail.com';
 
     if (mode === 'creator' && !isCreatorAllowed) {
       showToast('Access Denied: Creator console requires Super Admin or Creator role.');
@@ -746,6 +749,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
     const normalized = rawEmail.trim().toLowerCase();
     if (
+      normalized === 'amoakoemmanuel2020@gmail.com' ||
       normalized === 'elenaamoako70@gmail.com' ||
       normalized === 'elenamends@gmail.com' ||
       normalized.includes('creator') ||
@@ -772,6 +776,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const login = (user: AuthUser) => {
     setCurrentUser(user);
+    if (user.role === 'creator' || user.role === 'super_admin' || user.is_creator) {
+      setViewMode('creator', user);
+    } else {
+      setViewMode('app', user);
+    }
     try {
       localStorage.setItem('ekklesphere_user', JSON.stringify(user));
     } catch {
@@ -910,9 +919,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     try {
       firebaseSignOut(auth).catch(() => {});
       localStorage.removeItem('ekklesphere_user');
+      localStorage.removeItem('ekklesphere_token');
+      localStorage.removeItem('ekklesphere_view_mode');
     } catch {
       // ignore
     }
+    setViewModeState('app');
     showToast('Signed out of Ekklesphere');
   };
 
@@ -963,6 +975,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const isCreator =
       derivedRole === 'creator' ||
       derivedRole === 'super_admin' ||
+      preferredRole === 'creator' ||
+      preferredRole === 'super_admin' ||
+      trimmed === 'amoakoemmanuel2020@gmail.com' ||
+      trimmed === 'elenaamoako70@gmail.com' ||
       trimmed === 'elenamends@gmail.com';
 
     const finalRole: UserRole =

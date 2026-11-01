@@ -1810,19 +1810,20 @@ class PlatformStore {
             const plan = DEFAULT_PLANS[lic?.tier || 'grace_starter'];
             const memberCount = await this.getMemberCountForOrg(oid);
             const sites = await this.getSitesForOrg(oid);
+            const settings = (row.settings && typeof row.settings === 'object') ? row.settings : {};
             return {
               id: oid,
               name: String(row.name),
               slug: String(row.slug),
-              orgType: (row.org_type as OrganisationType) || 'church',
-              campusCode: row.campus_code || String(row.slug).slice(0, 8).toUpperCase(),
-              city: row.city || 'Accra',
-              country: row.country || 'Ghana',
-              seniorPastor: row.senior_pastor || row.contact_name || 'Administrator',
-              contactName: row.contact_name || '',
-              contactEmail: row.contact_email || '',
-              contactPhone: row.contact_phone || '',
-              status: (row.status as TenantStatus) || 'trial',
+              orgType: (settings.org_type || row.org_type || 'church') as OrganisationType,
+              campusCode: settings.campus_code || row.campus_code || String(row.slug).slice(0, 8).toUpperCase(),
+              city: settings.city || row.city || 'Accra',
+              country: settings.country || row.country || 'Ghana',
+              seniorPastor: settings.senior_pastor || row.senior_pastor || settings.contact_name || row.contact_name || 'Administrator',
+              contactName: settings.contact_name || row.contact_name || '',
+              contactEmail: row.email || settings.contact_email || row.contact_email || '',
+              contactPhone: row.phone || settings.contact_phone || row.contact_phone || '',
+              status: (settings.status || row.status || 'trial') as TenantStatus,
               memberCount,
               maxCapacity: lic?.overrides?.seatsLimit ?? lic?.seatsLimit ?? plan.seatsLimit,
               sitesCount: sites.length,
@@ -1832,11 +1833,11 @@ class PlatformStore {
               licenseStatus: lic?.status || 'expired',
               renewalDate: lic?.expiresDate || '',
               billingCycle: lic?.billingCycle || 'annual',
-              customDomain: row.custom_domain || undefined,
-              geofenceRadiusMeters: Number(row.outer_geofence_m || 300),
+              customDomain: row.website || settings.custom_domain || row.custom_domain || undefined,
+              geofenceRadiusMeters: Number(settings.outer_geofence_m || row.outer_geofence_m || 300),
               geofenceConfigured: sites.length > 0,
-              smsConfigured: Boolean(row.sms_configured),
-              pushConfigured: Boolean(row.push_configured),
+              smsConfigured: Boolean(settings.sms_configured || row.sms_configured),
+              pushConfigured: Boolean(settings.push_configured || row.push_configured),
               features: {
                 ...plan.featureFlags,
                 ...(lic?.overrides?.features || {}),
@@ -1917,7 +1918,7 @@ class PlatformStore {
     autoIssueTrial?: boolean;
   }): Promise<{ organisation: TenantChurch; license: SystemLicense | null }> {
     const id = (params.id && UUID_REGEX.test(params.id) ? params.id : randomUUID()).toLowerCase();
-    const baseSlug =
+    let baseSlug =
       (params.slug || params.name)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -1933,10 +1934,16 @@ class PlatformStore {
       .slice(0, 10);
 
     if (this.supabase) {
-      const { error } = await this.supabase.from('organizations').insert({
-        id,
-        name: params.name.trim(),
-        slug: baseSlug,
+      const { data: existing } = await this.supabase
+        .from('organizations')
+        .select('id')
+        .eq('slug', baseSlug)
+        .maybeSingle();
+      if (existing) {
+        baseSlug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
+      }
+
+      const orgSettings = {
         org_type: params.orgType || 'church',
         country: params.country || 'Ghana',
         city: params.city || 'Accra',
@@ -1947,17 +1954,43 @@ class PlatformStore {
         contact_phone: params.contactPhone || '',
         status: shouldAutoTrial ? 'trial' : 'active',
         custom_domain: params.customDomain || null,
+        initial_plan: planTier,
+      };
+
+      // Dual-write to tenants for relational foreign-key compatibility with licenses
+      await this.supabase.from('tenants').upsert({
+        id,
+        name: params.name.trim(),
+        slug: baseSlug,
+        settings: orgSettings,
+      });
+
+      const { error } = await this.supabase.from('organizations').insert({
+        id,
+        name: params.name.trim(),
+        slug: baseSlug,
+        phone: params.contactPhone || null,
+        email: params.contactEmail || null,
+        website: params.customDomain || null,
+        settings: orgSettings,
       });
 
       if (error) {
         throw new Error(`Failed to create organisation: ${error.message}`);
       }
 
-      if (!shouldAutoTrial) {
-        await this.supabase.from('licenses').delete().eq('organization_id', id);
+      let createdLic: SystemLicense | null = null;
+      if (shouldAutoTrial) {
+        createdLic = await this.issueLicense({
+          organizationId: id,
+          tier: planTier,
+          billingCycle: 'annual',
+          status: 'trial',
+          notes: 'Auto-issued 14-day trial on creation',
+        });
       }
+
       const createdOrg = (await this.getOrganisationById(id))!;
-      const createdLic = await this.getLatestLicenseForOrg(id);
       return { organisation: createdOrg, license: createdLic };
     }
 
@@ -2069,37 +2102,39 @@ class PlatformStore {
     if (this.supabase) {
       const { data, error } = await this.supabase
         .from('licenses')
-        .select('*, organizations(name)')
-        .order('issued_at', { ascending: false });
+        .select('*')
+        .order('created_at', { ascending: false });
 
       if (!error && Array.isArray(data)) {
         return data.map((row) => {
-          const tier = (row.plan_id || row.tier || 'grace_starter') as LicenseTier;
+          const tier = (row.tier || row.plan_id || 'grace_starter') as LicenseTier;
           const plan = DEFAULT_PLANS[tier] || DEFAULT_PLANS.grace_starter;
           const overrides: LicenseOverrides = row.overrides || {};
-          const orgId = String(row.organization_id || row.tenant_id || PRIMARY_ORGANIZATION_ID).toLowerCase();
+          const orgId = String(row.tenant_id || row.organization_id || PRIMARY_ORGANIZATION_ID).toLowerCase();
           return {
             id: String(row.id),
-            key: String(row.license_key || row.key),
+            key: String(row.key || row.license_key),
             tier,
             tenantId: orgId,
             organizationId: orgId,
-            tenantName: row.organizations?.name || 'Organisation',
-            seatsLimit: overrides.seatsLimit ?? plan.seatsLimit,
+            tenantName: 'Organisation',
+            seatsLimit: Number(row.seats_limit ?? overrides.seatsLimit ?? plan.seatsLimit),
             sitesLimit: overrides.sitesLimit ?? plan.sitesLimit,
             monthlyCheckinsLimit: overrides.monthlyCheckinsLimit ?? plan.monthlyCheckinsLimit,
             status: (row.status as LicenseStatus) || 'trial',
-            issuedDate: String(row.issued_at || row.issued_date || new Date().toISOString()).slice(0, 10),
-            expiresDate: String(row.expires_at || row.expires_date || new Date().toISOString()).slice(0, 10),
-            graceEndsDate: row.grace_ends_at ? String(row.grace_ends_at).slice(0, 10) : null,
+            issuedDate: String(row.issued_date || row.issued_at || new Date().toISOString()).slice(0, 10),
+            expiresDate: String(row.expires_date || row.expires_at || new Date().toISOString()).slice(0, 10),
+            graceEndsDate: null,
             billingCycle: (row.billing_cycle as BillingCycle) || 'annual',
             annualCostUSD: Number(row.annual_cost_usd ?? plan.annualCostUSD),
             overrides,
             notes: row.notes || undefined,
-            enabledFeatures: enabledFeatureLabelsFromFlags({
-              ...plan.featureFlags,
-              ...(overrides.features || {}),
-            }),
+            enabledFeatures: Array.isArray(row.enabled_features) && row.enabled_features.length > 0
+              ? row.enabled_features
+              : enabledFeatureLabelsFromFlags({
+                  ...plan.featureFlags,
+                  ...(overrides.features || {}),
+                }),
           };
         });
       }
@@ -2167,20 +2202,20 @@ class PlatformStore {
     const overrides = params.overrides || {};
 
     if (this.supabase) {
+      const dbStatus = status === 'trial' ? 'active' : status;
       const { data, error } = await this.supabase
         .from('licenses')
         .insert({
-          organization_id: orgId,
-          license_key: key,
-          plan_id: params.tier,
-          status,
-          issued_at: now.toISOString(),
-          expires_at: expires.toISOString(),
-          grace_ends_at: graceEnds.toISOString(),
+          tenant_id: orgId,
+          key,
+          tier: params.tier,
+          seats_limit: overrides.seatsLimit ?? plan.seatsLimit,
+          status: dbStatus,
+          issued_date: now.toISOString(),
+          expires_date: expires.toISOString(),
           billing_cycle: params.billingCycle,
           annual_cost_usd: annualCostUSD,
-          overrides,
-          notes: params.notes || null,
+          enabled_features: Object.keys(plan.featureFlags).filter((k) => (plan.featureFlags as any)[k]),
         })
         .select('*')
         .single();
@@ -2188,11 +2223,6 @@ class PlatformStore {
       if (error || !data) {
         throw new Error(`Failed to issue license: ${error?.message || 'Unknown error'}`);
       }
-
-      await this.supabase
-        .from('organizations')
-        .update({ status: status === 'trial' ? 'trial' : 'active', updated_at: now.toISOString() })
-        .eq('id', orgId);
 
       return (await this.getLatestLicenseForOrg(orgId))!;
     }

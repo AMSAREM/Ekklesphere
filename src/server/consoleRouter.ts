@@ -347,33 +347,41 @@ consoleRouter.get('/organisations', async (req: Request, res: Response) => {
 });
 
 consoleRouter.post('/organisations', async (req: Request, res: Response) => {
-  const parsed = CreateOrgSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({
-      error: 'validation_error',
-      details: parsed.error.flatten(),
+  try {
+    const parsed = CreateOrgSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const created = await platformStore.createOrganisation(parsed.data);
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'organisation.provisioned',
+      targetType: 'organization',
+      targetId: created.organisation.id,
+      organizationId: created.organisation.id,
+      metadata: {
+        name: created.organisation.name,
+        orgType: created.organisation.orgType,
+        initialPlan: parsed.data.initialPlan,
+        autoIssuedTrialKey: created.license?.key || null,
+      },
+      ipAddress: clientIp(req),
+    });
+
+    return res.status(201).json(created);
+  } catch (err: any) {
+    console.error('[Console] Failed to create organisation:', err);
+    return res.status(500).json({
+      error: 'create_organisation_failed',
+      message: err?.message || 'Could not provision new organisation',
     });
   }
-
-  const created = await platformStore.createOrganisation(parsed.data);
-  await platformStore.appendAuditLog({
-    actorId: req.user!.id,
-    actorEmail: req.user!.email,
-    actorRole: req.user!.role,
-    action: 'organisation.provisioned',
-    targetType: 'organization',
-    targetId: created.organisation.id,
-    organizationId: created.organisation.id,
-    metadata: {
-      name: created.organisation.name,
-      orgType: created.organisation.orgType,
-      initialPlan: parsed.data.initialPlan,
-      autoIssuedTrialKey: created.license?.key || null,
-    },
-    ipAddress: clientIp(req),
-  });
-
-  return res.status(201).json(created);
 });
 
 consoleRouter.get('/organisations/:orgId', async (req: Request, res: Response) => {
@@ -992,12 +1000,12 @@ consoleRouter.get('/export/:dataset', async (req: Request, res: Response) => {
 });
 
 // 14. Landing Page CMS (Stored in Supabase landing_cms_config)
-consoleRouter.get('/landing-config', async (_req: Request, res: Response) => {
+consoleRouter.get(['/landing-config', '/landing-cms'], async (_req: Request, res: Response) => {
   const config = await platformStore.getLandingConfig();
   return res.status(200).json({ landingConfig: config });
 });
 
-consoleRouter.put('/landing-config', async (req: Request, res: Response) => {
+consoleRouter.put(['/landing-config', '/landing-cms'], async (req: Request, res: Response) => {
   const parsed = LandingConfigUpdateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'validation_error', details: parsed.error.flatten() });
