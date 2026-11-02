@@ -270,7 +270,10 @@ export const CreatorsPanel: React.FC = () => {
     (currentUser?.role === 'super_admin' ||
       currentUser?.role === 'creator' ||
       Boolean(currentUser?.is_creator) ||
-      currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase());
+      Boolean(
+        import.meta.env.VITE_CREATOR_EMAIL &&
+          currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
+      ));
 
   // Active Console Navigation Tab (All 12 Modules including Creator Profile & Sign Out)
   type ConsoleTab =
@@ -448,7 +451,7 @@ export const CreatorsPanel: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: currentUser?.email || 'amoakoemmanuel2020@gmail.com',
+          email: currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform',
           role: 'creator',
         }),
       });
@@ -1215,7 +1218,7 @@ export const CreatorsPanel: React.FC = () => {
           </div>
           <button
             onClick={handleRevokeSupportGrant}
-            className="px-3 py-1 rounded-lg bg-slate-950 text-white font-bold hover:bg-slate-900 transition-colors text-[11px] cursor-pointer"
+            className="px-3 py-1 rounded-lg bg-amber-900/90 hover:bg-amber-950 text-white font-bold transition-colors text-[11px] cursor-pointer shadow-xs"
           >
             Exit Support View
           </button>
@@ -1225,21 +1228,6 @@ export const CreatorsPanel: React.FC = () => {
       {/* 2. CONSOLE TOP HEADER - SIMPLE, MINIMAL & OPTIMISED */}
       <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-4 shadow-2xs transition-colors shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          {/* Desktop Sidebar Collapse Toggle */}
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            className="hidden md:inline-flex p-1.5 rounded-lg text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer shrink-0"
-            title={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-            aria-label={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-          >
-            {isSidebarCollapsed ? (
-              <PanelLeftOpen className="w-4 h-4 text-[#6D5CF2]" />
-            ) : (
-              <PanelLeftClose className="w-4 h-4" />
-            )}
-          </button>
-
           {/* Clean Brand Wordmark & Active View Breadcrumb */}
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] tracking-tight whitespace-nowrap">
@@ -3444,19 +3432,19 @@ export const CreatorsPanel: React.FC = () => {
         {activeTab === 'profile' && (
           <div className="space-y-6 max-w-5xl mx-auto pb-10">
             {/* Top Identity Hero Card */}
-            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#1D1B3A] via-[#2A2356] to-[#6D5CF2] text-white p-6 sm:p-8 shadow-xl border border-white/10">
-              <div className="absolute right-0 top-0 -translate-y-8 translate-x-8 w-64 h-64 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-50/90 via-purple-50/60 to-white dark:from-[#181838] dark:via-[#1D1B3A] dark:to-[#2A2356] text-slate-900 dark:text-white p-6 sm:p-8 shadow-sm border border-indigo-100 dark:border-white/10">
+              <div className="absolute right-0 top-0 -translate-y-8 translate-x-8 w-64 h-64 bg-indigo-500/10 dark:bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
               
               <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div className="flex items-start sm:items-center gap-4 sm:gap-6">
                   {/* Avatar with Glow Ring */}
                   <div className="relative shrink-0">
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-[#6D5CF2] via-indigo-600 to-purple-800 text-white flex items-center justify-center font-black text-2xl sm:text-3xl shadow-xl shadow-black/30 border-2 border-white/20">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-[#6D5CF2] via-indigo-600 to-purple-700 text-white flex items-center justify-center font-black text-2xl sm:text-3xl shadow-lg shadow-indigo-500/20 border-2 border-white dark:border-white/20">
                       {currentUser?.initials || 'CR'}
                     </div>
                     <span
                       title="Verified Platform Master Key"
-                      className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-[#1D1B3A] flex items-center justify-center text-white"
+                      className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#1D1B3A] flex items-center justify-center text-white"
                     >
                       <Check className="w-3 h-3 stroke-[3]" />
                     </span>
@@ -3465,31 +3453,31 @@ export const CreatorsPanel: React.FC = () => {
                   {/* Profile Name & Roles */}
                   <div className="space-y-1.5 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white truncate">
-                        {currentUser?.name || 'Emmanuel Amoako'}
+                      <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 dark:text-white truncate">
+                        {currentUser?.name || 'Platform Creator'}
                       </h2>
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-extrabold border border-emerald-400/30">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-[11px] font-extrabold border border-emerald-200 dark:border-emerald-400/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                         Root Creator
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-                      <span className="flex items-center gap-1 text-slate-200 font-medium">
-                        <Mail className="w-3.5 h-3.5 text-indigo-300" />
-                        <span>{currentUser?.email || 'amoakoemmanuel2020@gmail.com'}</span>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                      <span className="flex items-center gap-1 text-slate-800 dark:text-slate-200 font-medium">
+                        <Mail className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-300" />
+                        <span>{currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}</span>
                       </span>
                       <span>•</span>
-                      <span className="text-indigo-200 font-bold">
+                      <span className="text-indigo-600 dark:text-indigo-200 font-bold">
                         {currentUser?.title || 'Platform Creator & Owner'}
                       </span>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-                      <span className="px-2 py-0.5 rounded-lg bg-white/10 text-white/90 border border-white/15 font-semibold">
+                      <span className="px-2 py-0.5 rounded-lg bg-white/90 dark:bg-white/10 text-slate-700 dark:text-white/90 border border-slate-200 dark:border-white/15 font-semibold">
                         Tier 0 Master Access
                       </span>
-                      <span className="px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 font-semibold">
+                      <span className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-500/30 text-indigo-700 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-400/30 font-semibold">
                         Ghana Act 843 Statutory Vault Admin
                       </span>
                     </div>
@@ -3500,12 +3488,12 @@ export const CreatorsPanel: React.FC = () => {
                 <div className="flex flex-col sm:flex-row md:flex-col items-stretch sm:items-center md:items-end gap-2 shrink-0">
                   <button
                     onClick={() => setIsSignOutConfirmOpen(true)}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-lg shadow-rose-900/40 transition-all hover:scale-[1.02] cursor-pointer"
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md shadow-rose-600/30 transition-all hover:scale-[1.02] cursor-pointer"
                   >
                     <LogOut className="w-4 h-4" />
                     <span>Sign Out of Session</span>
                   </button>
-                  <span className="text-[11px] text-slate-300/80 text-center md:text-right">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-300/80 text-center md:text-right">
                     Secure fail-closed session
                   </span>
                 </div>
@@ -3699,7 +3687,7 @@ export const CreatorsPanel: React.FC = () => {
 
               <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t border-rose-200/80 dark:border-rose-900/40">
                 <div className="text-xs text-rose-800 dark:text-rose-300 font-semibold">
-                  Account: <strong>{currentUser?.email || 'amoakoemmanuel2020@gmail.com'}</strong>
+                  Account: <strong>{currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}</strong>
                 </div>
 
                 <button
@@ -4596,7 +4584,7 @@ export const CreatorsPanel: React.FC = () => {
             <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 text-[11px] space-y-1">
               <div className="text-[#666A86] dark:text-[#8D92B5]">Active Creator Account:</div>
               <div className="font-bold text-[#1D1B3A] dark:text-white truncate">
-                {currentUser?.email || 'amoakoemmanuel2020@gmail.com'}
+                {currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}
               </div>
             </div>
 

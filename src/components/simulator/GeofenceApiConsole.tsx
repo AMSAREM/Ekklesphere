@@ -1012,7 +1012,7 @@ export const GeofenceApiConsole: React.FC = () => {
                 <button
                   onClick={() => handleSendLiveEvent('exit')}
                   disabled={loading || !liveCoords || !activeSite}
-                  className="py-3 px-4 rounded-xl bg-[#1D1B3A] hover:bg-[#2b2754] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  className="py-3 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-white border border-slate-200 dark:border-white/10 text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   <Send className="w-4 h-4" />
                   <span>Send Live EXIT</span>
@@ -1105,7 +1105,7 @@ export const GeofenceApiConsole: React.FC = () => {
                 <button
                   onClick={() => handleWebCheckIn('manual_out')}
                   disabled={webLocationLoading || !activeSite}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#1D1B3A] hover:bg-[#2a2752] text-white text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-white border border-slate-200 dark:border-white/10 text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>Verify Clock Out</span>
@@ -1282,7 +1282,7 @@ export const GeofenceApiConsole: React.FC = () => {
             </div>
             <button
               onClick={handleTriggerAutoClose}
-              className="px-3.5 py-2 rounded-xl bg-[#1D1B3A] text-white text-xs font-bold shadow-sm hover:bg-[#2a2752] flex items-center gap-1.5 self-start sm:self-auto"
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-white border border-slate-200 dark:border-white/10 text-xs font-bold shadow-xs flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>Run pg_cron Auto-Close (12h)</span>
@@ -1418,7 +1418,7 @@ export const GeofenceApiConsole: React.FC = () => {
                   link.click();
                   URL.revokeObjectURL(url);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-100 hover:bg-slate-900 text-xs font-bold transition-all cursor-pointer shadow-sm"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-white/10 text-xs font-bold transition-all cursor-pointer shadow-xs"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download .sql</span>

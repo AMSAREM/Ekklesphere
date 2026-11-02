@@ -69,45 +69,44 @@ export const UnifiedAuthScreen: React.FC = () => {
     <main className="w-full min-h-[calc(100vh-5rem)] flex items-center justify-center py-4 sm:py-6 px-3 sm:px-4">
       <div className="w-full max-w-4xl bg-white dark:bg-[#14142E] rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-2xl overflow-hidden transition-all duration-300">
         {/* Header Hero Banner */}
-        <div className="bg-gradient-to-r from-[#1D1B3A] via-[#2A2356] to-[#6D5CF2] text-white p-6 sm:p-8 relative overflow-hidden">
-          <div className="absolute right-0 top-0 translate-x-10 -translate-y-10 w-72 h-72 bg-[#6D5CF2]/20 rounded-full blur-3xl pointer-events-none" />
+        <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/70 to-white dark:from-[#1D1B3A] dark:via-[#2A2356] dark:to-[#6D5CF2] text-slate-900 dark:text-white p-6 sm:p-8 relative overflow-hidden border-b border-[#E3E5F2] dark:border-white/10">
+          <div className="absolute right-0 top-0 translate-x-10 -translate-y-10 w-72 h-72 bg-[#6D5CF2]/15 dark:bg-[#6D5CF2]/20 rounded-full blur-3xl pointer-events-none" />
           
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs font-semibold">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-md border border-indigo-200/80 dark:border-white/15 text-xs font-semibold text-slate-800 dark:text-white shadow-xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span>Role-Based Access Gateway</span>
-                <span className="text-white/60">·</span>
-                <span className="text-emerald-300">{systemSettings.churchName || 'Ekklesphere Sanctuary'}</span>
+                <span className="text-slate-400 dark:text-white/60">·</span>
+                <span className="text-indigo-600 dark:text-emerald-300 font-bold">{systemSettings.churchName || 'Ekklesphere Sanctuary'}</span>
               </div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 Role-Based Church Management
               </h1>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-xl">
                 Every role has its own dedicated portal and access permissions: Church Leadership & Pastoral Care, Door Usher Headcount Station, and Member Mobile Pass.
               </p>
             </div>
 
             <div className="flex md:flex-col items-end gap-2 shrink-0">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-[11px] font-medium text-emerald-300 border border-emerald-400/20">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-white/10 text-[11px] font-medium text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-400/20">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>Act 843 Compliant</span>
               </div>
-              <div className="text-[11px] text-white/60">
+              <div className="text-[11px] text-slate-500 dark:text-white/60">
                 Strict Role-Based Permissions
               </div>
             </div>
           </div>
 
           {/* Tab Navigation */}
-          <div className="flex items-center gap-2 mt-6 pt-4 border-t border-white/15">
-
+          <div className="flex items-center gap-2 mt-6 pt-4 border-t border-slate-200/80 dark:border-white/15">
             <button
               onClick={() => setActiveTab('login')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'login'
-                  ? 'bg-white text-[#1D1B3A] shadow-md shadow-black/20'
-                  : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20'
+                  ? 'bg-[#6D5CF2] text-white shadow-md shadow-indigo-500/25'
+                  : 'bg-white/80 dark:bg-white/10 text-slate-700 dark:text-white/80 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-white/20 border border-slate-200 dark:border-transparent'
               }`}
             >
               <KeyRound className="w-3.5 h-3.5" />
@@ -116,10 +115,10 @@ export const UnifiedAuthScreen: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('register')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'register'
-                  ? 'bg-white text-[#1D1B3A] shadow-md shadow-black/20'
-                  : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20'
+                  ? 'bg-[#6D5CF2] text-white shadow-md shadow-indigo-500/25'
+                  : 'bg-white/80 dark:bg-white/10 text-slate-700 dark:text-white/80 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-white/20 border border-slate-200 dark:border-transparent'
               }`}
             >
               <UserPlus className="w-3.5 h-3.5" />

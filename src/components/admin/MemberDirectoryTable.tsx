@@ -409,20 +409,51 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
             </thead>
 
             <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55]">
-              {filteredMembers.length === 0 ? (
+              {members.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={30}
-                    className="py-12 text-center text-[#666A86] dark:text-[#A9ACC8]"
-                  >
+                  <td colSpan={30} className="py-16 text-center text-[#666A86] dark:text-[#A9ACC8]">
+                    <div className="max-w-md mx-auto flex flex-col items-center justify-center p-6 rounded-2xl bg-slate-50/70 dark:bg-white/[0.02] border border-dashed border-[#6D5CF2]/30 text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-[#EFEDFF] dark:bg-[#6D5CF2]/20 flex items-center justify-center text-[#6D5CF2] mb-3 shadow-xs">
+                        <Users className="w-7 h-7" />
+                      </div>
+                      <h4 className="text-base font-extrabold text-[#1D1B3A] dark:text-white mb-1">
+                        No Members in Congregation Yet
+                      </h4>
+                      <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] leading-relaxed mb-5">
+                        Your church database is clean and ready. Upload your church membership spreadsheet (CSV) with GhanaPost GPS & demographic fields, or add your first member manually.
+                      </p>
+                      <div className="flex flex-wrap items-center justify-center gap-3">
+                        <button
+                          type="button"
+                          onClick={onOpenImportModal}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE2] text-white text-xs font-extrabold shadow-sm cursor-pointer transition-all hover:scale-[1.02]"
+                        >
+                          <Upload className="w-4 h-4" />
+                          <span>Import Members (CSV)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onAddMember}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-[#1F1F38] border border-slate-200 dark:border-white/10 text-xs font-bold text-[#1D1B3A] dark:text-white hover:bg-slate-50 cursor-pointer transition-all"
+                        >
+                          <UserPlus className="w-4 h-4 text-[#6D5CF2]" />
+                          <span>Add Single Member</span>
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredMembers.length === 0 ? (
+                <tr>
+                  <td colSpan={30} className="py-12 text-center text-[#666A86] dark:text-[#A9ACC8]">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Users className="w-8 h-8 text-slate-300" />
                       <span className="font-bold">No church members found matching your search.</span>
                       <button
                         onClick={onOpenImportModal}
-                        className="mt-2 text-xs font-bold text-[#6D5CF2] hover:underline"
+                        className="mt-2 text-xs font-bold text-[#6D5CF2] hover:underline cursor-pointer"
                       >
-                        Import members from spreadsheet or CSV
+                        Import additional members from spreadsheet or CSV
                       </button>
                     </div>
                   </td>

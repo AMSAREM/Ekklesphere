@@ -185,7 +185,10 @@ export const AppHeader: React.FC = () => {
             (currentUser.role === 'super_admin' ||
               currentUser.role === 'creator' ||
               Boolean(currentUser.is_creator) ||
-              currentUser.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase()) && (
+              Boolean(
+                import.meta.env.VITE_CREATOR_EMAIL &&
+                  currentUser.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
+              )) && (
               <button
                 onClick={() => setViewMode(viewMode === 'creator' ? 'app' : 'creator')}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${

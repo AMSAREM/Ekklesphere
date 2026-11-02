@@ -21,7 +21,10 @@ const EkklesphereMain: React.FC = () => {
       (currentUser?.role === 'super_admin' ||
         currentUser?.role === 'creator' ||
         Boolean(currentUser?.is_creator) ||
-        currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase());
+        Boolean(
+          import.meta.env.VITE_CREATOR_EMAIL &&
+            currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
+        ));
 
     if (!isCreatorAllowed) {
       return (
@@ -37,15 +40,15 @@ const EkklesphereMain: React.FC = () => {
     }
 
     return (
-      <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F5F6FA] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+      <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F8F9FD] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
         <CreatorsPanel />
         {toastMessage && (
           <div
             role="status"
             aria-live="polite"
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1D1B3A] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-2xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-white/10 flex items-center gap-2"
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-[#1D1B3A] text-[#1D1B3A] dark:text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-slate-200 dark:border-white/10 flex items-center gap-2"
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span>{toastMessage}</span>
           </div>
         )}
@@ -56,15 +59,15 @@ const EkklesphereMain: React.FC = () => {
   // If Public Landing Page view is active
   if (viewMode === 'landing') {
     return (
-      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F5F6FA] dark:bg-[#0A0A18] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F8F9FD] dark:bg-[#0A0A18] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
         <LandingPage />
         {toastMessage && (
           <div
             role="status"
             aria-live="polite"
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1D1B3A] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-2xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-white/10 flex items-center gap-2"
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-[#1D1B3A] text-[#1D1B3A] dark:text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-slate-200 dark:border-white/10 flex items-center gap-2"
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span>{toastMessage}</span>
           </div>
         )}
@@ -74,7 +77,7 @@ const EkklesphereMain: React.FC = () => {
 
   // Standard Church Application Portals View (viewMode === 'app')
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F8F9FD] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
       {/* Help Modal */}
       {currentUser && <HelpDocsModal />}
 

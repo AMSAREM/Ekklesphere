@@ -5,12 +5,13 @@
 // strict relational org-scoped backing store (zero os.tmpdir() temp files, zero anon-key fallback).
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { randomUUID, createHash } from 'crypto';
+import { randomUUID, createHash, scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 import {
   PRIMARY_CAMPUS_SITE_ID,
   PRIMARY_ORGANIZATION_ID,
   TEST_ANCHOR_ORGANIZATION_ID,
   TEST_CAMPUS_SITE_ID,
+  signToken,
   type ActiveSupportGrantContext,
   type AuthUserPayload,
   type ChurchRole,
@@ -52,6 +53,47 @@ export function toDeterministicUuid(rawId: string): string {
   if (UUID_REGEX.test(rawId)) return rawId.toLowerCase();
   const hex = createHash('sha256').update(`ekklesphere:${rawId}`).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+export function normalizePhone(rawPhone?: string | null): string {
+  if (!rawPhone) return '';
+  const digits = rawPhone.replace(/\D/g, '');
+  if (digits.startsWith('0') && digits.length === 10) {
+    return `+233${digits.slice(1)}`;
+  }
+  if (digits.startsWith('233') && digits.length === 12) {
+    return `+${digits}`;
+  }
+  return digits ? `+${digits}` : '';
+}
+
+export function hashPassword(password: string, existingSalt?: string): { hash: string; salt: string } {
+  const salt = existingSalt || randomBytes(16).toString('hex');
+  const hash = scryptSync(password, salt, 64).toString('hex');
+  return { hash, salt };
+}
+
+export function verifyPassword(password: string, hash: string, salt: string): boolean {
+  try {
+    const calculated = scryptSync(password, salt, 64).toString('hex');
+    return timingSafeEqual(Buffer.from(calculated, 'hex'), Buffer.from(hash, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
+export interface UserCredentialRecord {
+  id: string;
+  organizationId: string;
+  email?: string;
+  username?: string;
+  phone?: string;
+  fullName: string;
+  role: ChurchRole;
+  passwordHash: string;
+  salt: string;
+  status: 'active' | 'suspended';
+  createdAt: string;
 }
 
 export interface StoredGeofenceEvent {
@@ -283,6 +325,7 @@ class PlatformStore {
   private eventsByOrg = new Map<string, Record<string, any>[]>();
   private pushSubsByOrg = new Map<string, PushSubscriptionItem[]>();
   private legacyTenantsForDryRun: Array<{ id: string; name: string; slug: string }> = [];
+  private userCredentials = new Map<string, UserCredentialRecord>();
 
   constructor() {
     this.isTestRuntime = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
@@ -327,6 +370,7 @@ class PlatformStore {
     this.eventsByOrg.clear();
     this.pushSubsByOrg.clear();
     this.legacyTenantsForDryRun = [];
+    this.userCredentials.clear();
     this.landingConfig = { ...DEFAULT_LANDING_CMS };
     this.seedBaselineState();
   }
@@ -339,6 +383,24 @@ class PlatformStore {
     const now = new Date();
     const oneYearOut = new Date(now.getTime() + 365 * DAY_MS).toISOString().slice(0, 10);
     const graceOut = new Date(now.getTime() + (365 + GRACE_PERIOD_DAYS) * DAY_MS).toISOString().slice(0, 10);
+
+    // Seed Platform Creator Account credentials (accessible in live and test environments)
+    const creatorEmail = (process.env.CREATOR_EMAIL || process.env.VITE_CREATOR_EMAIL || 'elenamends@gmail.com').trim().toLowerCase();
+    const creatorPass = process.env.CREATOR_PASSWORD || 'Ekklesphere@2026!';
+    const { hash: creatorHash, salt: creatorSalt } = hashPassword(creatorPass);
+    this.userCredentials.set('cred-creator', {
+      id: 'creator-root',
+      organizationId: PRIMARY_ORGANIZATION_ID || 'creator-org',
+      email: creatorEmail,
+      username: 'elenamends',
+      phone: '+233240000001',
+      fullName: 'Platform Creator',
+      role: 'creator',
+      passwordHash: creatorHash,
+      salt: creatorSalt,
+      status: 'active',
+      createdAt: now.toISOString(),
+    });
 
     if (!this.isTestRuntime) {
       // In live environment, zero demo or mock organizations are seeded.
@@ -474,6 +536,92 @@ class PlatformStore {
     for (const f of defaultFlags) {
       this.featureFlags.set(f.key, f);
     }
+
+    // Seed Anchor Church role credentials for live authentication
+    const testAccounts: Array<{
+      id: string;
+      email: string;
+      username: string;
+      phone: string;
+      role: ChurchRole;
+      fullName: string;
+      password: string;
+    }> = [
+      {
+        id: 'user-admin-1',
+        email: 'admin@ekklesphere.church',
+        username: 'admin',
+        phone: '+233241112233',
+        role: 'admin',
+        fullName: 'Church Administrator',
+        password: 'AdminPassword@123',
+      },
+      {
+        id: 'user-pastor-1',
+        email: 'pastor@ekklesphere.church',
+        username: 'pastorkofi',
+        phone: '+233242223344',
+        role: 'pastor',
+        fullName: 'Lead Pastor',
+        password: 'PastorPassword@123',
+      },
+      {
+        id: 'user-usher-1',
+        email: 'usher@ekklesphere.church',
+        username: 'usherkwame',
+        phone: '+233243334455',
+        role: 'usher',
+        fullName: 'Door Usher',
+        password: 'UsherPassword@123',
+      },
+      {
+        id: 'm-elena',
+        email: 'elena@ekklesphere.church',
+        username: 'elenam',
+        phone: '+233244445566',
+        role: 'member',
+        fullName: 'Elena Mends',
+        password: 'MemberPassword@123',
+      },
+    ];
+
+    const memList: Record<string, any>[] = [];
+    for (const acc of testAccounts) {
+      const { hash, salt } = hashPassword(acc.password);
+      this.userCredentials.set(acc.id, {
+        id: acc.id,
+        organizationId: testOrgId,
+        email: acc.email,
+        username: acc.username,
+        phone: acc.phone,
+        fullName: acc.fullName,
+        role: acc.role,
+        passwordHash: hash,
+        salt,
+        status: 'active',
+        createdAt: now.toISOString(),
+      });
+      memList.push({
+        id: acc.id,
+        tenantId: testOrgId,
+        firstName: acc.fullName.split(' ')[0],
+        lastName: acc.fullName.split(' ').slice(1).join(' ') || 'Member',
+        email: acc.email,
+        phoneE164: acc.phone,
+        username: acc.username,
+        role: acc.role,
+        status: 'active',
+        groupName: acc.role === 'usher' ? 'Ushering Ministry' : 'General Congregation',
+        autoCheckinOptedIn: true,
+        avatarInitials: acc.fullName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase(),
+        joinedOn: now.toISOString().slice(0, 10),
+        consecutiveAbsences: 0,
+        passwordHash: hash,
+        salt,
+      });
+    }
+    this.membersByOrg.set(testOrgId, memList);
+    primaryOrg.memberCount = memList.length;
   }
 
   // ===========================================================================
@@ -590,6 +738,275 @@ class PlatformStore {
     return {
       organizationId: orgs[0]?.id || '',
       role: 'member',
+    };
+  }
+
+  public async authenticateWithCredentials(
+    rawIdentifier: string,
+    rawPassword?: string
+  ): Promise<{
+    user: {
+      id: string;
+      email: string;
+      username?: string;
+      phoneE164?: string;
+      name: string;
+      role: ChurchRole;
+      organizationId: string;
+      isCreator: boolean;
+    };
+    organization: OrganizationRecord | null;
+    token: string;
+  }> {
+    const identifier = (rawIdentifier || '').trim();
+    const password = (rawPassword || '').trim();
+
+    if (!identifier || !password) {
+      const err: any = new Error('Identifier (email, phone, or username) and password are required.');
+      err.code = 'INVALID_CREDENTIALS';
+      err.status = 400;
+      throw err;
+    }
+
+    const lowerId = identifier.toLowerCase();
+    const normalizedPhone = normalizePhone(identifier);
+
+    // 1. Search userCredentials
+    let foundCred: UserCredentialRecord | undefined;
+    for (const cred of this.userCredentials.values()) {
+      const matchEmail = cred.email && cred.email.toLowerCase() === lowerId;
+      const matchUsername = cred.username && cred.username.toLowerCase() === lowerId;
+      const matchPhone =
+        cred.phoneE164 &&
+        (cred.phoneE164 === normalizedPhone || cred.phoneE164 === identifier);
+
+      if (matchEmail || matchUsername || matchPhone) {
+        foundCred = cred;
+        break;
+      }
+    }
+
+    // 2. If not found in memory, query Supabase if available
+    if (!foundCred && this.supabase) {
+      const { data: memberRow } = await this.supabase
+        .from('members')
+        .select('*')
+        .or(
+          normalizedPhone
+            ? `email.ilike.${lowerId},phone.eq.${normalizedPhone}`
+            : `email.ilike.${lowerId}`
+        )
+        .limit(1)
+        .maybeSingle();
+
+      if (memberRow && memberRow.password_hash && memberRow.password_salt) {
+        foundCred = {
+          id: String(memberRow.id),
+          email: memberRow.email ? String(memberRow.email).toLowerCase() : undefined,
+          phoneE164: memberRow.phone ? String(memberRow.phone) : undefined,
+          passwordHash: memberRow.password_hash,
+          passwordSalt: memberRow.password_salt,
+          role: mapSupabaseRoleToChurchRole(memberRow.role),
+          organizationId: String(memberRow.organization_id || ''),
+          name:
+            memberRow.full_name ||
+            `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim() ||
+            'Member',
+          isCreator: false,
+          status: (memberRow.status as any) || 'active',
+        };
+        this.userCredentials.set(foundCred.id, foundCred);
+      }
+    }
+
+    if (!foundCred) {
+      const err: any = new Error('Invalid credentials. No active account found matching this identifier.');
+      err.code = 'INVALID_CREDENTIALS';
+      err.status = 401;
+      throw err;
+    }
+
+    if (foundCred.status !== 'active') {
+      const err: any = new Error('Account is inactive or suspended. Contact support.');
+      err.code = 'ACCOUNT_INACTIVE';
+      err.status = 403;
+      throw err;
+    }
+
+    const passwordMatches = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
+    if (!passwordMatches) {
+      const err: any = new Error('Invalid credentials. Password does not match.');
+      err.code = 'INVALID_CREDENTIALS';
+      err.status = 401;
+      throw err;
+    }
+
+    let organization: OrganizationRecord | null = null;
+    if (foundCred.organizationId) {
+      organization = (await this.getOrganisationById(foundCred.organizationId)) || null;
+    }
+
+    const token = signToken({
+      id: foundCred.id,
+      email: foundCred.email || `${foundCred.username || 'user'}@ekklesphere.church`,
+      role: foundCred.role,
+      organization_id: foundCred.organizationId,
+      name: foundCred.name,
+      is_creator: foundCred.isCreator,
+    });
+
+    return {
+      user: {
+        id: foundCred.id,
+        email: foundCred.email || '',
+        username: foundCred.username,
+        phoneE164: foundCred.phoneE164,
+        name: foundCred.name,
+        role: foundCred.role,
+        organizationId: foundCred.organizationId,
+        isCreator: foundCred.isCreator,
+      },
+      organization,
+      token,
+    };
+  }
+
+  public async registerMemberWithCredentials(params: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+    phone?: string;
+    password: string;
+    organizationId?: string;
+    groupName?: string;
+    autoCheckinOptedIn?: boolean;
+  }): Promise<{
+    user: {
+      id: string;
+      email: string;
+      phoneE164?: string;
+      name: string;
+      role: ChurchRole;
+      organizationId: string;
+      isCreator: boolean;
+    };
+    organization: OrganizationRecord | null;
+    token: string;
+  }> {
+    const firstName = (params.firstName || '').trim();
+    const lastName = (params.lastName || '').trim();
+    const email = params.email ? params.email.trim().toLowerCase() : '';
+    const phone = params.phone ? params.phone.trim() : '';
+    const password = (params.password || '').trim();
+
+    if (!firstName || !lastName) {
+      const err: any = new Error('First name and last name are required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    if (!email && !phone) {
+      const err: any = new Error('Either an email address or a valid phone number is required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    if (password.length < 6) {
+      const err: any = new Error('Password must be at least 6 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+
+    const normalizedPhone = normalizePhone(phone);
+
+    // Check duplicate in userCredentials
+    for (const cred of this.userCredentials.values()) {
+      if (email && cred.email && cred.email.toLowerCase() === email) {
+        const err: any = new Error('An account with this email address already exists. Please log in.');
+        err.code = 'DUPLICATE_CREDENTIAL';
+        err.status = 409;
+        throw err;
+      }
+      if (normalizedPhone && cred.phoneE164 && cred.phoneE164 === normalizedPhone) {
+        const err: any = new Error('An account with this phone number already exists. Please log in.');
+        err.code = 'DUPLICATE_CREDENTIAL';
+        err.status = 409;
+        throw err;
+      }
+    }
+
+    // Determine target church organization
+    let targetOrgId = params.organizationId?.toLowerCase() || '';
+    if (!targetOrgId) {
+      const orgs = await this.listOrganisations();
+      const activeOrg = orgs.find((o) => o.status === 'active' || o.licenseStatus === 'active') || orgs[0];
+      if (activeOrg) {
+        targetOrgId = activeOrg.id;
+      }
+    }
+
+    if (!targetOrgId) {
+      const err: any = new Error('No church organization is currently available for registration.');
+      err.code = 'NO_TENANT_AVAILABLE';
+      err.status = 400;
+      throw err;
+    }
+
+    // Create member in store
+    const member = await this.createMember(targetOrgId, {
+      firstName,
+      lastName,
+      email: email || undefined,
+      phoneE164: normalizedPhone || phone || undefined,
+      groupName: params.groupName || 'General Congregation',
+      autoCheckinOptedIn: params.autoCheckinOptedIn ?? true,
+      role: 'member',
+      status: 'active',
+    });
+
+    // Hash password and store credentials
+    const { hash, salt } = hashPassword(password);
+    const credId = member.id || randomUUID();
+    const newCred: UserCredentialRecord = {
+      id: credId,
+      email: email || undefined,
+      phoneE164: normalizedPhone || undefined,
+      passwordHash: hash,
+      passwordSalt: salt,
+      role: 'member',
+      organizationId: targetOrgId,
+      name: `${firstName} ${lastName}`.trim(),
+      isCreator: false,
+      status: 'active',
+    };
+    this.userCredentials.set(credId, newCred);
+
+    const organization = await this.getOrganisationById(targetOrgId);
+
+    const token = signToken({
+      id: credId,
+      email: email || `${normalizedPhone || 'member'}@ekklesphere.church`,
+      role: 'member',
+      organization_id: targetOrgId,
+      name: newCred.name,
+      is_creator: false,
+    });
+
+    return {
+      user: {
+        id: credId,
+        email: email,
+        phoneE164: normalizedPhone,
+        name: newCred.name,
+        role: 'member',
+        organizationId: targetOrgId,
+        isCreator: false,
+      },
+      organization,
+      token,
     };
   }
 

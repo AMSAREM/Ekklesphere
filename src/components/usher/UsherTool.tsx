@@ -168,7 +168,7 @@ export const UsherTool: React.FC = () => {
             <Users className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Roster</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Roster</span>
           </span>
         </div>
@@ -191,7 +191,7 @@ export const UsherTool: React.FC = () => {
             <Camera className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Camera</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>{isCameraActive ? 'Stop Camera' : 'Camera Scanner'}</span>
           </span>
         </div>
@@ -211,7 +211,7 @@ export const UsherTool: React.FC = () => {
             <UserPlus className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Visitor</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Register Visitor</span>
           </span>
         </div>
@@ -228,13 +228,13 @@ export const UsherTool: React.FC = () => {
           >
             <RefreshCw className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             {pendingSyncCount > 0 && (
-              <span className="absolute 1 top-0.5 right-1 sm:-top-1 sm:-right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center border-2 border-[#6D5CF2] shadow-xs">
+              <span className="absolute top-0.5 right-1 sm:-top-1 sm:-right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center border-2 border-[#6D5CF2] shadow-xs">
                 {pendingSyncCount}
               </span>
             )}
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Sync</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Sync Queue</span>
             {pendingSyncCount > 0 && (
               <span className="px-1.5 py-0.2 bg-red-500 text-white text-[10px] rounded-full font-black">
@@ -259,7 +259,7 @@ export const UsherTool: React.FC = () => {
             <Settings className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Settings</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Station Settings</span>
           </span>
         </div>
@@ -433,7 +433,7 @@ export const UsherTool: React.FC = () => {
           {/* Main High-Contrast Scanner Viewfinder */}
           <div
             id="usher-scanner-card"
-            className="bg-[#1B1B3A] dark:bg-[#151528] text-white rounded-3xl p-4 sm:p-5 border border-indigo-900/30 shadow-lg relative overflow-hidden flex flex-col justify-between"
+            className="bg-white dark:bg-[#151528] text-slate-800 dark:text-white rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-indigo-900/30 shadow-[0_10px_30px_rgba(60,50,140,0.07)] dark:shadow-lg relative overflow-hidden flex flex-col justify-between"
           >
             {/* Viewfinder: Live Camera or Standby Card */}
             {isCameraActive ? (
@@ -455,13 +455,13 @@ export const UsherTool: React.FC = () => {
                 />
               </div>
             ) : (
-              <div className="relative border-2 border-dashed border-[#6C5CE7]/60 rounded-2xl p-5 sm:p-6 flex flex-col items-center justify-center gap-3 bg-black/20 text-center mb-3">
-                <div className="w-14 h-14 rounded-2xl bg-[#6C5CE7]/20 flex items-center justify-center text-[#6C5CE7] dark:text-[#8C7DFF]">
+              <div className="relative border-2 border-dashed border-indigo-200 dark:border-[#6C5CE7]/60 rounded-2xl p-5 sm:p-6 flex flex-col items-center justify-center gap-3 bg-indigo-50/50 dark:bg-black/20 text-center mb-3">
+                <div className="w-14 h-14 rounded-2xl bg-[#6C5CE7]/15 dark:bg-[#6C5CE7]/20 flex items-center justify-center text-[#6D5CF2] dark:text-[#8C7DFF]">
                   <QrCode className="w-8 h-8 animate-pulse" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Digital Member Pass Scanner</h3>
-                  <p className="text-xs text-white/70 max-w-xs mt-0.5">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Digital Member Pass Scanner</h3>
+                  <p className="text-xs text-slate-500 dark:text-white/70 max-w-xs mt-0.5">
                     Activate camera scanner to scan QR passes & barcodes automatically
                   </p>
                 </div>
@@ -497,11 +497,11 @@ export const UsherTool: React.FC = () => {
                 onChange={(e) => setScannedIdInput(e.target.value)}
                 placeholder="Scan or enter Member ID (e.g. MEM-...)"
                 aria-label="Scan or enter Member ID"
-                className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl bg-white/10 border border-white/15 text-xs text-white placeholder-white/50 font-mono outline-none focus:border-[#8C7DFF]"
+                className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/15 text-xs text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-white/50 font-mono outline-none focus:border-[#6D5CF2] dark:focus:border-[#8C7DFF] focus:bg-white"
               />
               <button
                 type="submit"
-                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
               >
                 Verify ID
               </button>
@@ -533,7 +533,7 @@ export const UsherTool: React.FC = () => {
               <button
                 type="button"
                 onClick={handleScanClick}
-                className="min-h-[44px] py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap"
+                className="min-h-[44px] py-3 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-slate-200 dark:border-transparent text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap cursor-pointer"
                 title="Quick check in next member"
               >
                 <UserCheck className="w-4 h-4 shrink-0" />
@@ -542,7 +542,7 @@ export const UsherTool: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsVisitorSheetOpen(true)}
-                className="min-h-[44px] py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap"
+                className="min-h-[44px] py-3 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-slate-200 dark:border-transparent text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap cursor-pointer"
               >
                 <UserPlus className="w-4 h-4 shrink-0" />
                 <span>+ Visitor</span>

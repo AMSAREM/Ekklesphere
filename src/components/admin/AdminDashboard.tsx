@@ -392,7 +392,7 @@ export const AdminDashboard: React.FC = () => {
             <Grid className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Dash</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Dashboard</span>
           </span>
         </div>
@@ -416,7 +416,7 @@ export const AdminDashboard: React.FC = () => {
             <PieChart className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Insights</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150 tabular-nums">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150 tabular-nums">
             <span>Live Insights ({attendancePercentage}%)</span>
           </span>
         </div>
@@ -440,9 +440,9 @@ export const AdminDashboard: React.FC = () => {
             <Users className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Members</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Members & Roster</span>
-            <span className="px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold tabular-nums">
+            <span className="px-1.5 py-0.2 bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-[10px] rounded-full font-bold tabular-nums">
               {members.length}
             </span>
           </span>
@@ -467,7 +467,7 @@ export const AdminDashboard: React.FC = () => {
             <Radio className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Radar</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Proximity Radar</span>
           </span>
         </div>
@@ -492,7 +492,7 @@ export const AdminDashboard: React.FC = () => {
             <Settings className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
             <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Settings</span>
           </button>
-          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>System Settings</span>
           </span>
         </div>
@@ -1162,7 +1162,7 @@ export const AdminDashboard: React.FC = () => {
                     setIsMessageModalOpen(true);
                   }
                 }}
-                className="w-full bg-[#1D1B3A] hover:bg-[#1D1B3A]/90 text-white rounded-xl py-2 text-xs font-bold transition-all shadow-sm cursor-pointer"
+                className="w-full bg-white hover:bg-white/95 text-[#6D5CF2] rounded-xl py-2 text-xs font-extrabold transition-all shadow-sm cursor-pointer"
               >
                 {members.length === 0 ? 'Add first member' : 'Invite members'}
               </button>
@@ -1730,7 +1730,7 @@ export const AdminDashboard: React.FC = () => {
             <div className="pt-4 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex justify-end">
               <button
                 onClick={() => setIsFollowupModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-[#1D1B3A] text-white font-bold text-xs"
+                className="px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5A48DE] text-white font-bold text-xs shadow-sm transition-colors cursor-pointer"
               >
                 Close Queue
               </button>
