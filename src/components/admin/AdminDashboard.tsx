@@ -44,6 +44,7 @@ import { MemberDirectoryTable } from './MemberDirectoryTable';
 import { ImportMembersModal } from './ImportMembersModal';
 import { LiveAttendanceInsights } from './LiveAttendanceInsights';
 import { WeeklyAttendanceTrendChart } from './WeeklyAttendanceTrendChart';
+import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 import { Person } from '../../types/ekklesphere';
 
 export const AdminDashboard: React.FC = () => {
@@ -774,6 +775,24 @@ export const AdminDashboard: React.FC = () => {
                 setAdminSubTab('insights');
               }}
               onQuickCheckin={handleQuickArrivalCheckin}
+            />
+          </div>
+
+          {/* Member Attendance Frequency Visualizer (Recharts) */}
+          <div className="mb-4 sm:mb-5">
+            <MemberAttendanceFrequencyChart
+              onOpenFollowup={(memberId) => {
+                const targetMember = members.find((m) => m.id === memberId);
+                if (targetMember) {
+                  addFollowupTask(
+                    memberId,
+                    'manual',
+                    `Follow-up requested from attendance frequency review: ${targetMember.firstName} ${targetMember.lastName}`
+                  );
+                  showToast(`Care task assigned for ${targetMember.firstName} ${targetMember.lastName}`);
+                }
+                setIsFollowupModalOpen(true);
+              }}
             />
           </div>
 

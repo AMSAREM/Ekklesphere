@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { AttendanceRecord, CheckinMethod, Person } from '../../types/ekklesphere';
+import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 
 interface LiveAttendanceInsightsProps {
   onOpenAddMember?: () => void;
@@ -1122,6 +1123,21 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Member Attendance Frequency Visualizer (Recharts) */}
+      <MemberAttendanceFrequencyChart
+        onOpenFollowup={(memberId) => {
+          const targetMember = members.find((m) => m.id === memberId);
+          if (targetMember) {
+            addFollowupTask(
+              memberId,
+              'manual',
+              `Care follow-up scheduled from Live Insights frequency analysis for ${targetMember.firstName} ${targetMember.lastName}`
+            );
+            showToast(`Care task assigned for ${targetMember.firstName}`);
+          }
+        }}
+      />
 
       {/* Live Arrival Feed & Absentee Watchlist Data Grid */}
       <section className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] overflow-hidden">

@@ -33,6 +33,7 @@ import {
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
 import { DigitalMemberCard, getCanonicalMemberId } from './DigitalMemberCard';
+import { MemberAttendanceStreakCard } from './MemberAttendanceStreakCard';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -787,6 +788,15 @@ export const MemberApp: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Weekly Attendance Streak & Digital Badges Indicator */}
+        <MemberAttendanceStreakCard
+          personId={targetPersonId}
+          member={matchedMember}
+          isCheckedInToday={isCheckedIn}
+          attendanceRecords={attendanceRecords}
+          onShowToast={showToast}
+        />
 
         {/* Web Push Notification Card (Brief Section 3.3 & 6.2) */}
         <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-5 shadow-sm space-y-3.5">

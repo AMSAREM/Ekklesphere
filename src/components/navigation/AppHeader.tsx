@@ -107,61 +107,53 @@ export const AppHeader: React.FC = () => {
   };
 
   return (
-    <header className="sticky top-0 z-40 w-full bg-[#F6F7FC]/95 dark:bg-[#14142E]/95 backdrop-blur-md border-b border-[#E9EBF5] dark:border-[#2D2D55] transition-colors duration-200">
-      <div className="max-w-[1440px] mx-auto px-3 sm:px-5 lg:px-8 h-14 flex items-center justify-between gap-2 sm:gap-4">
-        {/* Left: Brand Identity & Active Campus Pill */}
-        <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#6D5CF2] to-[#8C7DFF] text-white flex items-center justify-center shadow-xs">
+    <header className="sticky top-0 z-50 w-full bg-white/95 dark:bg-[#14142E]/95 backdrop-blur-md border-b border-[#E9EBF5] dark:border-[#2D2D55] transition-colors duration-150">
+      <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-13 sm:h-14 flex items-center justify-between gap-3">
+        {/* Left: Simple, minimal brand identity */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#6D5CF2] text-white flex items-center justify-center shadow-xs">
             <Radio className="w-4 h-4" />
           </div>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-base sm:text-lg tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
-              Ekklesphere
-            </span>
-            <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-200/60 dark:bg-white/10 text-[11px] font-medium text-[#666A86] dark:text-[#A9ACC8]">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="truncate max-w-[140px]">{systemSettings?.campusName || 'Accra Central'}</span>
-            </div>
-            {/* Active Role Tag */}
-            {currentUser && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#6D5CF2]/10 text-[#6D5CF2] dark:text-[#A594FD] text-[10px] font-bold">
-                {getRoleDisplayName(currentUser.role)}
-              </span>
-            )}
-          </div>
+          <span className="font-bold text-sm sm:text-base tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
+            Ekklesphere
+          </span>
+          <span className="hidden md:inline-block text-[#C5C8DE] dark:text-[#3D3D66]">/</span>
+          <span className="hidden md:inline text-xs font-medium text-[#666A86] dark:text-[#A9ACC8] truncate max-w-[160px]">
+            {systemSettings?.campusName || 'Accra Central'}
+          </span>
         </div>
 
-        {/* Center: Live Attendance & Role Context (Clean and works across all roles) */}
-        <div className="hidden md:flex items-center gap-3">
+        {/* Center: Minimal live attendance indicator */}
+        <div className="hidden md:flex items-center gap-2 text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
           {currentUser && (
-            <div className="flex items-center gap-2.5 px-3 py-1 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs shadow-2xs">
-              <span className="text-[#666A86] dark:text-[#A9ACC8] font-medium">
-                {currentUser.role === 'usher' ? 'Door Check-ins:' : 'Attendance:'}
+            <>
+              <span className="text-[11px] font-medium text-[#8F93AF] dark:text-[#7A7E9F]">
+                {currentUser.role === 'usher' ? 'Check-ins' : 'Attendance'}
               </span>
-              <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums">
+              <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] font-mono">
                 {totalCheckedInCount}
-                <span className="text-[#666A86] dark:text-[#A9ACC8] font-normal">/{expectedAttendance}</span>
+                <span className="text-[#8F93AF] font-normal">/{expectedAttendance}</span>
               </span>
-              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                {attendancePercentage}%
+              <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                ({attendancePercentage}%)
               </span>
               {currentUser.role === 'admin' && headerAbsenteeCount > 0 && (
                 <>
-                  <span className="text-slate-300 dark:text-slate-600">|</span>
+                  <span className="text-slate-300 dark:text-slate-700">·</span>
                   <span className="text-[11px] text-rose-500 font-medium">
-                    {headerAbsenteeCount} absent
+                    {headerAbsenteeCount} unarrived
                   </span>
                 </>
               )}
-            </div>
+            </>
           )}
         </div>
 
-        {/* Right: Uncluttered Utility Controls & Seamless Role Switcher */}
-        <div className="flex items-center gap-1 sm:gap-2">
-          {/* Quick Role Switcher Buttons (Desktop/Tablet) */}
+        {/* Right: Minimal controls & clean switcher */}
+        <div className="flex items-center gap-1 sm:gap-1.5">
+          {/* Quick Role Switcher (Compact & Minimal) */}
           {currentUser && (
-            <div className="hidden lg:flex items-center p-0.5 rounded-xl bg-slate-200/60 dark:bg-white/5 border border-slate-200/80 dark:border-white/10">
+            <div className="hidden lg:flex items-center p-0.5 rounded-lg bg-[#F2F2FA] dark:bg-white/5 border border-[#E9EBF5] dark:border-white/10 text-xs">
               {roles.map((item) => {
                 const isActive =
                   currentUser.role === item.role ||
@@ -174,15 +166,14 @@ export const AppHeader: React.FC = () => {
                       switchUserRole(item.role);
                       showToast(`Switched to ${item.label} view`);
                     }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
                       isActive
-                        ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] dark:text-[#A594FD] shadow-xs font-bold'
+                        ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] dark:text-[#8C7DFF] shadow-2xs font-bold'
                         : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
                     }`}
                     title={`Switch to ${item.label} Portal`}
                   >
-                    {item.icon}
-                    <span>{item.label}</span>
+                    {item.label}
                   </button>
                 );
               })}
@@ -197,10 +188,10 @@ export const AppHeader: React.FC = () => {
               currentUser.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase()) && (
               <button
                 onClick={() => setViewMode(viewMode === 'creator' ? 'app' : 'creator')}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   viewMode === 'creator'
-                    ? 'bg-[#6D5CF2] text-white'
-                    : 'bg-[#6D5CF2]/10 hover:bg-[#6D5CF2]/20 text-[#6D5CF2] dark:text-[#A594FD] border border-[#6D5CF2]/30'
+                    ? 'bg-[#6D5CF2] text-white shadow-xs font-bold'
+                    : 'text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2]/10'
                 }`}
                 title="Toggle Platform Creator Console"
               >
@@ -209,23 +200,17 @@ export const AppHeader: React.FC = () => {
               </button>
             )}
 
-          {/* Theme Switcher Toggle (Light / Dark Mode) */}
+          {/* Minimal Theme Switcher */}
           <button
             onClick={toggleTheme}
-            className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-200/60 dark:bg-[#202042] hover:bg-slate-300/70 dark:hover:bg-[#2A2A55] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all cursor-pointer border border-[#E9EBF5] dark:border-[#2D2D55] shadow-2xs"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
             aria-label={`Toggle theme (Currently ${theme === 'dark' ? 'Dark' : 'Light'} mode)`}
           >
             {theme === 'dark' ? (
-              <>
-                <Sun className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20" />
-                <span className="text-[11px] font-medium hidden sm:inline text-amber-300">Light</span>
-              </>
+              <Sun className="w-4 h-4 text-amber-400" />
             ) : (
-              <>
-                <Moon className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600/20" />
-                <span className="text-[11px] font-medium hidden sm:inline text-[#666A86]">Dark</span>
-              </>
+              <Moon className="w-4 h-4 text-[#666A86]" />
             )}
           </button>
 
@@ -234,7 +219,7 @@ export const AppHeader: React.FC = () => {
             <div className="relative" ref={notifMenuRef}>
               <button
                 onClick={() => setIsNotifDropdownOpen(!isNotifDropdownOpen)}
-                className="relative w-8 h-8 rounded-xl flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                className="relative w-8 h-8 rounded-lg flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
                 title="Sanctuary Alerts & Follow-ups"
                 aria-label="Notifications"
               >

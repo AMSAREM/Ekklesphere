@@ -350,6 +350,8 @@ export const CreatorsPanel: React.FC = () => {
   const [usageDays, setUsageDays] = useState<number>(30);
   const [auditSearch, setAuditSearch] = useState<string>('');
   const [auditLimit, setAuditLimit] = useState<number>(50);
+  const [telemetryFilter, setTelemetryFilter] = useState<'all' | 'verified' | 'spoofs'>('all');
+  const [hoveredTrendIdx, setHoveredTrendIdx] = useState<number | null>(null);
 
   // Modals & Drawers
   const [isProvisionOrgOpen, setIsProvisionOrgOpen] = useState<boolean>(false);
@@ -1220,15 +1222,15 @@ export const CreatorsPanel: React.FC = () => {
         </aside>
       )}
 
-      {/* 2. CONSOLE TOP HEADER - STICKY, FIXED & OPTIMISED */}
-      <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-3 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 shadow-xs transition-colors duration-150 transform-gpu shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      {/* 2. CONSOLE TOP HEADER - SIMPLE, MINIMAL & OPTIMISED */}
+      <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-4 shadow-2xs transition-colors shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
           {/* Desktop Sidebar Collapse Toggle */}
           <button
             type="button"
             onClick={toggleSidebar}
-            className="hidden md:inline-flex p-2 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer shrink-0"
-            title={isSidebarCollapsed ? 'Expand Sidebar (⌘B)' : 'Collapse Sidebar (⌘B)'}
+            className="hidden md:inline-flex p-1.5 rounded-lg text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer shrink-0"
+            title={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
             aria-label={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
           >
             {isSidebarCollapsed ? (
@@ -1238,85 +1240,43 @@ export const CreatorsPanel: React.FC = () => {
             )}
           </button>
 
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-[#6D5CF2] to-[#4F46E5] text-white flex items-center justify-center font-black shadow-md shadow-[#6D5CF2]/25 shrink-0">
-              <Sliders className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="font-extrabold text-sm sm:text-base lg:text-lg text-[#1D1B3A] dark:text-white tracking-tight truncate">
-                  Ekklesphere Console
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-extrabold uppercase tracking-wider border border-emerald-500/20 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="hidden sm:inline">Live Prod</span>
-                </span>
-              </div>
-              <span className="hidden sm:block text-[11px] text-[#666A86] dark:text-[#8D92B5] truncate">
-                Multi-Tenant Licensing, ARR Ledger & Governance
-              </span>
-            </div>
+          {/* Clean Brand Wordmark & Active View Breadcrumb */}
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] tracking-tight whitespace-nowrap">
+              Ekklesphere Console
+            </span>
+            <span className="hidden sm:inline text-xs text-[#666A86]/40 dark:text-[#8D92B5]/40 select-none">/</span>
+            <span className="hidden sm:inline text-xs font-medium text-[#666A86] dark:text-[#8D92B5] truncate">
+              {activeModuleItem.label}
+            </span>
           </div>
         </div>
 
-        {/* Global Action Bar */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          <button
-            onClick={triggerManualRollup}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-white/5 border border-[#E3E5EE] dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10 transition-colors cursor-pointer"
-            title="Execute Usage Rollup Cron"
-          >
-            <RotateCw className={`w-3.5 h-3.5 text-[#6D5CF2] ${refreshing ? 'animate-spin' : ''}`} />
-            <span className="hidden md:inline">Run Rollup</span>
-          </button>
-
-          <a
-            href="/api/console/export/audit-log.csv"
-            download="ekklesphere-audit-log.csv"
-            className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-white/5 border border-[#E3E5EE] dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10 transition-colors cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
-            <span>Audit CSV</span>
-          </a>
-
-          {/* Profile & Sign Out Page Trigger */}
+        {/* Minimal Action Bar */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Profile & Account */}
           <button
             onClick={() => setActiveTab('profile')}
-            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+            className={`inline-flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'profile'
-                ? 'bg-[#6D5CF2] text-white border-[#6D5CF2] shadow-sm'
-                : 'bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] border-transparent hover:bg-[#E3E0FF] dark:hover:bg-[#28264A]'
+                ? 'bg-[#EFEDFF] dark:bg-[#202046] text-[#6D5CF2] dark:text-[#A594FD]'
+                : 'text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5'
             }`}
-            title="Creator Profile & Sign Out"
+            title="Creator Profile & Settings"
           >
-            <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-[#6D5CF2] to-indigo-400 text-white flex items-center justify-center text-[9px] font-black shrink-0">
+            <div className="w-5 h-5 rounded-full bg-[#6D5CF2] text-white flex items-center justify-center text-[10px] font-bold shrink-0">
               {currentUser?.initials || 'CR'}
             </div>
             <span className="hidden sm:inline">Profile</span>
           </button>
 
-          {/* Direct Sign Out Button */}
-          <button
-            onClick={() => {
-              if (typeof window !== 'undefined' && window.confirm('Sign out of Ekklesphere Creator Console?')) {
-                logout();
-                showToast('Signed out of Creator Console');
-              }
-            }}
-            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 transition-all cursor-pointer"
-            title="Sign Out of Creator Console"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Sign Out</span>
-          </button>
-
+          {/* Primary Action Button */}
           <button
             onClick={() => setViewMode('app')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-md shadow-[#6D5CF2]/25 transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white transition-all cursor-pointer whitespace-nowrap shadow-xs active:scale-[0.98]"
+            title="Switch to Church Sanctuary Portal"
           >
-            <span className="hidden sm:inline">Launch Church App</span>
-            <span className="sm:hidden">App</span>
+            <span>Launch App</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -1580,7 +1540,7 @@ export const CreatorsPanel: React.FC = () => {
 
       {/* MAIN CONTENT AREA */}
       <main
-        className={`flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 transition-all duration-200 ease-in-out ${
+        className={`flex-1 max-w-7xl w-full md:w-auto mx-auto min-w-0 px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 transition-all duration-200 ease-in-out ${
           isSidebarCollapsed ? 'md:ml-[68px]' : 'md:ml-64'
         }`}
       >
@@ -1659,47 +1619,300 @@ export const CreatorsPanel: React.FC = () => {
             </div>
 
             {/* 14-Day Check-in Telemetry Chart */}
-            <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h3 className="font-extrabold text-sm text-[#1D1B3A] dark:text-white">
-                    14-Day Platform Check-ins & GPS Anti-Spoofing Radar
+            <div className="rounded-2xl bg-white dark:bg-[#151532] border border-[#D8DAE8] dark:border-[#202046] shadow-xs p-4 sm:p-6 space-y-5 transition-colors">
+              {/* Header: Title + Unboxed Metadata (Zero-Pill Discipline) */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <h3 className="font-bold text-base text-[#1D1B3A] dark:text-[#F2F2FA] tracking-tight">
+                    Platform Arrival Velocity & Anti-Spoofing Radar
                   </h3>
-                  <p className="text-xs text-[#666A86]">
-                    Aggregated arrival signals, perimeter grace reviews, and rejected mock-location attempts.
+                  <p className="text-xs text-[#666A86] dark:text-[#8D92B5]">
+                    Aggregated 14-day campus arrival signals, geofence dwells, and client-attestation verifications.
                   </p>
                 </div>
-                <span className="self-start sm:self-auto px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-[#6D5CF2] text-xs font-bold font-mono">
-                  Privacy Preserving (0 PII)
-                </span>
+                {/* Clean unboxed metadata with typographic separators */}
+                <div className="flex items-center gap-2 text-xs font-mono text-[#666A86] dark:text-[#8D92B5] shrink-0">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  <span>Ghana Act 843</span>
+                  <span aria-hidden="true" className="opacity-40">·</span>
+                  <span>Zero PII Retained</span>
+                  <span aria-hidden="true" className="opacity-40">·</span>
+                  <span>14-Day Rolling Audit</span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-7 sm:grid-cols-14 gap-1.5 sm:gap-2 pt-2">
-                {activeSummary.checkinsTrend.map((t) => (
-                  <div key={t.date} className="flex flex-col items-center gap-1.5">
-                    <div className="w-full bg-slate-100 dark:bg-white/5 rounded-xl h-24 sm:h-28 flex flex-col justify-end p-1 relative group">
-                      {t.checkins > 0 ? (
-                        <div
-                          style={{ height: `${Math.min(100, Math.max(12, t.checkins * 4))}%` }}
-                          className="w-full rounded-lg bg-gradient-to-t from-[#6D5CF2] to-[#8C7EFF] transition-all"
-                        />
-                      ) : (
-                        <div className="h-1 w-full bg-slate-300 dark:bg-white/10 rounded" />
-                      )}
-                      {t.mockAttempts > 0 && (
-                        <div
-                          title={`${t.mockAttempts} GPS spoof attempts rejected`}
-                          className="w-2 h-2 rounded-full bg-rose-500 absolute top-1 right-1"
-                        />
-                      )}
+              {/* High-Density Telemetry Metrics Strip */}
+              {(() => {
+                const trend = activeSummary.checkinsTrend || [];
+                const totalCheckins = trend.reduce((sum, item) => sum + (item.checkins || 0), 0);
+                const totalMocks = trend.reduce((sum, item) => sum + (item.mockAttempts || 0), 0);
+                const dailyAvg = Math.round(totalCheckins / Math.max(trend.length, 1));
+                const peakItem = trend.reduce(
+                  (max, item) => (item.checkins > max.checkins ? item : max),
+                  trend[0] || { checkins: 0, date: '' }
+                );
+                const integrityPct =
+                  totalCheckins + totalMocks > 0
+                    ? ((totalCheckins / (totalCheckins + totalMocks)) * 100).toFixed(1)
+                    : '100.0';
+
+                return (
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-3.5 rounded-xl bg-slate-50/70 dark:bg-white/[0.02] border border-[#D8DAE8]/60 dark:border-[#202046]/60">
+                    <div className="space-y-0.5">
+                      <div className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider">
+                        14-Day Recorded
+                      </div>
+                      <div className="text-lg font-black font-mono tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {totalCheckins.toLocaleString()}{' '}
+                        <span className="text-xs font-normal text-[#666A86] dark:text-[#8D92B5]">signals</span>
+                      </div>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                        Live production throughput
+                      </div>
                     </div>
-                    <span className="text-[10px] font-mono text-[#666A86]">{t.date.slice(5)}</span>
-                    <span className="text-[10px] font-bold font-mono text-[#1D1B3A] dark:text-white">
-                      {t.checkins}
-                    </span>
+
+                    <div className="space-y-0.5">
+                      <div className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider">
+                        Daily Velocity
+                      </div>
+                      <div className="text-lg font-black font-mono tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {dailyAvg.toLocaleString()}{' '}
+                        <span className="text-xs font-normal text-[#666A86] dark:text-[#8D92B5]">/ day avg</span>
+                      </div>
+                      <div className="text-[10px] text-[#666A86] dark:text-[#8D92B5]">
+                        Rolling mean volume
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <div className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider">
+                        Peak 24h Window
+                      </div>
+                      <div className="text-lg font-black font-mono tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {peakItem.checkins}{' '}
+                        <span className="text-xs font-normal text-[#666A86] dark:text-[#8D92B5]">arrivals</span>
+                      </div>
+                      <div className="text-[10px] text-[#666A86] dark:text-[#8D92B5] font-mono">
+                        {peakItem.date ? new Date(peakItem.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'N/A'}
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <div className="text-[11px] font-bold text-[#666A86] dark:text-[#8D92B5] uppercase tracking-wider">
+                        GPS Anti-Spoof Shield
+                      </div>
+                      <div className="text-lg font-black font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                        {integrityPct}%{' '}
+                        <span className="text-xs font-normal text-[#666A86] dark:text-[#8D92B5]">verified</span>
+                      </div>
+                      <div className="text-[10px] text-rose-500 font-medium font-mono">
+                        {totalMocks} spoof attempts neutralized
+                      </div>
+                    </div>
                   </div>
-                ))}
+                );
+              })()}
+
+              {/* Interactive Segmented Filter Tabs */}
+              <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#D8DAE8]/60 dark:border-[#202046]/60">
+                <div className="flex items-center gap-1 p-1 bg-slate-100/80 dark:bg-white/[0.04] rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setTelemetryFilter('all')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      telemetryFilter === 'all'
+                        ? 'bg-white dark:bg-[#202046] text-[#1D1B3A] dark:text-white shadow-xs'
+                        : 'text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white'
+                    }`}
+                  >
+                    All Signals
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTelemetryFilter('verified')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      telemetryFilter === 'verified'
+                        ? 'bg-white dark:bg-[#202046] text-[#1D1B3A] dark:text-white shadow-xs'
+                        : 'text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white'
+                    }`}
+                  >
+                    Verified Arrivals
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTelemetryFilter('spoofs')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      telemetryFilter === 'spoofs'
+                        ? 'bg-white dark:bg-[#202046] text-[#1D1B3A] dark:text-white shadow-xs'
+                        : 'text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white'
+                    }`}
+                  >
+                    Neutralized GPS Flags
+                  </button>
+                </div>
+
+                <div className="text-[11px] font-mono text-[#666A86] dark:text-[#8D92B5]">
+                  Hover or tap column for telemetry payload
+                </div>
               </div>
+
+              {/* Data-Normalized Telemetry Chart Viewport */}
+              {(() => {
+                const trend = activeSummary.checkinsTrend || [];
+                const maxVal = Math.max(...trend.map((t) => Math.max(t.checkins, t.mockAttempts, 1)), 20);
+
+                return (
+                  <div className="space-y-2">
+                    {/* Chart Frame with Baseline & Y-Axis Markers */}
+                    <div className="relative pt-6 pb-2 px-1">
+                      {/* Grid Guides */}
+                      <div className="absolute inset-x-0 top-6 border-b border-dashed border-slate-200/70 dark:border-white/5 flex items-center justify-between text-[10px] font-mono text-slate-400 dark:text-slate-500 pointer-events-none">
+                        <span>Peak ({maxVal})</span>
+                        <span className="tabular-nums">100%</span>
+                      </div>
+                      <div className="absolute inset-x-0 top-[calc(50%+12px)] border-b border-dashed border-slate-200/50 dark:border-white/5 flex items-center justify-between text-[10px] font-mono text-slate-400 dark:text-slate-500 pointer-events-none">
+                        <span>Mid ({Math.round(maxVal / 2)})</span>
+                        <span className="tabular-nums">50%</span>
+                      </div>
+
+                      {/* Continuous 14-Day Timeline Container (Scrollable on Narrow Mobile, Full-Flex on Desktop) */}
+                      <div className="overflow-x-auto scrollbar-thin pb-1">
+                        <div className="min-w-[620px] sm:min-w-full flex items-end justify-between gap-2 sm:gap-3 h-44 sm:h-48 pt-6">
+                          {trend.map((t, idx) => {
+                            const isHovered = hoveredTrendIdx === idx;
+                            const checkinsHeight = Math.min(100, Math.round((t.checkins / maxVal) * 100));
+                            const mockHeight =
+                              t.mockAttempts > 0
+                                ? Math.min(100, Math.max(12, Math.round((t.mockAttempts / maxVal) * 100)))
+                                : 0;
+                            const dateObj = new Date(t.date);
+                            const dayName = isNaN(dateObj.getTime())
+                              ? t.date.slice(5)
+                              : dateObj.toLocaleDateString('en-GB', { weekday: 'short' });
+                            const dayNum = isNaN(dateObj.getTime())
+                              ? ''
+                              : dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+                            return (
+                              <div
+                                key={t.date}
+                                onMouseEnter={() => setHoveredTrendIdx(idx)}
+                                onMouseLeave={() => setHoveredTrendIdx(null)}
+                                onClick={() => setHoveredTrendIdx(hoveredTrendIdx === idx ? null : idx)}
+                                className="flex-1 min-w-[32px] flex flex-col items-center gap-2 cursor-pointer group relative"
+                              >
+                                {/* Tooltip popover on hover/active */}
+                                {isHovered && (
+                                  <div className="absolute -top-14 z-30 px-3 py-2 rounded-xl bg-[#1D1B3A] text-white dark:bg-white dark:text-[#1D1B3A] text-[11px] shadow-xl pointer-events-none whitespace-nowrap animate-in fade-in zoom-in-95 duration-150 flex flex-col gap-0.5 border border-white/10 dark:border-black/10">
+                                    <div className="font-extrabold flex items-center justify-between gap-3">
+                                      <span>
+                                        {dayName}, {dayNum || t.date}
+                                      </span>
+                                      <span className="font-mono text-emerald-400 dark:text-emerald-600">
+                                        {t.checkins} arrivals
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-300 dark:text-slate-600 font-mono flex items-center justify-between gap-3">
+                                      <span>GPS integrity</span>
+                                      <span className={t.mockAttempts > 0 ? 'text-rose-400 font-bold' : ''}>
+                                        {t.mockAttempts > 0 ? `${t.mockAttempts} mock flags rejected` : '0 anomalies'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Column Bar Track */}
+                                <div
+                                  className={`w-full rounded-t-lg h-36 sm:h-40 flex flex-col justify-end p-1 transition-all duration-150 relative ${
+                                    isHovered
+                                      ? 'bg-indigo-50 dark:bg-white/[0.08] ring-1 ring-[#6D5CF2]/50'
+                                      : 'bg-slate-100/80 dark:bg-white/[0.03] hover:bg-slate-200/60 dark:hover:bg-white/[0.06]'
+                                  }`}
+                                >
+                                  {telemetryFilter === 'spoofs' ? (
+                                    /* Spoofs Only View */
+                                    t.mockAttempts > 0 ? (
+                                      <div
+                                        style={{ height: `${mockHeight}%` }}
+                                        className="w-full rounded-md bg-rose-500 transition-all duration-200 shadow-xs"
+                                        title={`${t.mockAttempts} spoof attempts rejected`}
+                                      />
+                                    ) : (
+                                      <div className="h-0.5 w-full bg-slate-300/80 dark:bg-white/10 rounded" />
+                                    )
+                                  ) : telemetryFilter === 'verified' ? (
+                                    /* Verified Only View */
+                                    t.checkins > 0 ? (
+                                      <div
+                                        style={{ height: `${checkinsHeight}%` }}
+                                        className="w-full rounded-md bg-[#6D5CF2] hover:bg-[#5b4be0] transition-all duration-200 shadow-xs"
+                                      />
+                                    ) : (
+                                      <div className="h-0.5 w-full bg-slate-300/80 dark:bg-white/10 rounded" />
+                                    )
+                                  ) : (
+                                    /* All Signals Dual-Stack View */
+                                    <div className="w-full flex flex-col justify-end h-full">
+                                      {t.mockAttempts > 0 && (
+                                        <div
+                                          style={{ height: `${mockHeight}%` }}
+                                          className="w-full rounded-t-md bg-rose-500 mb-0.5 transition-all duration-200"
+                                          title={`${t.mockAttempts} spoof attempts rejected`}
+                                        />
+                                      )}
+                                      {t.checkins > 0 ? (
+                                        <div
+                                          style={{ height: `${checkinsHeight}%` }}
+                                          className={`w-full ${
+                                            t.mockAttempts > 0 ? 'rounded-b-md' : 'rounded-md'
+                                          } bg-[#6D5CF2] hover:bg-[#5b4be0] transition-all duration-200 shadow-xs`}
+                                        />
+                                      ) : (
+                                        <div className="h-0.5 w-full bg-slate-300/80 dark:bg-white/10 rounded" />
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* X-Axis Labels */}
+                                <div className="text-center space-y-0.5">
+                                  <div className="text-[10px] font-mono text-[#666A86] dark:text-[#8D92B5]">
+                                    {dayName}
+                                  </div>
+                                  <div className="text-[11px] font-bold font-mono text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums">
+                                    {telemetryFilter === 'spoofs' ? t.mockAttempts : t.checkins}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Chart Legend & Footnote Row */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-[#D8DAE8]/60 dark:border-[#202046]/60 text-xs">
+                      <div className="flex items-center flex-wrap gap-4 text-[11px] text-[#666A86] dark:text-[#8D92B5]">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-xs bg-[#6D5CF2] inline-block" />
+                          <span className="font-medium">Validated Geofence Arrivals</span>
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-xs bg-rose-500 inline-block" />
+                          <span className="font-medium">Rejected GPS Mock Flags</span>
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-xs bg-slate-200 dark:bg-white/10 inline-block" />
+                          <span className="font-medium">Zero-Signal Baseline</span>
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-[#666A86] dark:text-[#8D92B5]">
+                        Hardware entrance beacon and OS-level dwell verification active
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Top Active vs Inactive & Limit Watchlist */}
