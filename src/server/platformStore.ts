@@ -82,19 +82,28 @@ export function verifyPassword(password: string, hash: string, salt: string): bo
   }
 }
 
+export type OrganizationRecord = TenantChurch;
+
 export interface UserCredentialRecord {
   id: string;
+  memberId?: string;
   organizationId: string;
   email?: string;
   username?: string;
-  phone?: string;
-  fullName: string;
+  phoneE164?: string;
+  name: string;
   role: ChurchRole;
+  isCreator: boolean;
   passwordHash: string;
-  salt: string;
-  status: 'active' | 'suspended';
-  createdAt: string;
+  passwordSalt: string;
+  status: 'active' | 'suspended' | 'locked';
+  failedAttempts?: number;
+  lockedUntil?: string | null;
+  createdAt?: string;
 }
+
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 
 export interface StoredGeofenceEvent {
   id: string;
@@ -384,23 +393,61 @@ class PlatformStore {
     const oneYearOut = new Date(now.getTime() + 365 * DAY_MS).toISOString().slice(0, 10);
     const graceOut = new Date(now.getTime() + (365 + GRACE_PERIOD_DAYS) * DAY_MS).toISOString().slice(0, 10);
 
-    // Seed Platform Creator Account credentials (accessible in live and test environments)
-    const creatorEmail = (process.env.CREATOR_EMAIL || process.env.VITE_CREATOR_EMAIL || 'elenamends@gmail.com').trim().toLowerCase();
-    const creatorPass = process.env.CREATOR_PASSWORD || 'Ekklesphere@2026!';
-    const { hash: creatorHash, salt: creatorSalt } = hashPassword(creatorPass);
-    this.userCredentials.set('cred-creator', {
-      id: 'creator-root',
-      organizationId: PRIMARY_ORGANIZATION_ID || 'creator-org',
-      email: creatorEmail,
-      username: 'elenamends',
-      phone: '+233240000001',
-      fullName: 'Platform Creator',
-      role: 'creator',
-      passwordHash: creatorHash,
-      salt: creatorSalt,
-      status: 'active',
-      createdAt: now.toISOString(),
-    });
+    // Optional explicit bootstrap creator credentials sourced strictly from environment secrets.
+    // Zero hardcoded emails or passwords ever exist in source code.
+    const envCreatorEmail = (process.env.CREATOR_EMAIL || '').trim().toLowerCase();
+    const envCreatorPass = (process.env.CREATOR_PASSWORD || '').trim();
+    const envCreatorUsername = (process.env.CREATOR_USERNAME || '').trim().toLowerCase() || undefined;
+    const envCreatorPhone = normalizePhone(process.env.CREATOR_PHONE) || undefined;
+    const envCreatorName = (process.env.CREATOR_NAME || '').trim() || 'Platform Creator';
+    const envCreatorOrgId =
+      process.env.CREATOR_ORGANIZATION_ID && UUID_REGEX.test(process.env.CREATOR_ORGANIZATION_ID.trim())
+        ? process.env.CREATOR_ORGANIZATION_ID.trim().toLowerCase()
+        : PRIMARY_ORGANIZATION_ID || '';
+
+    if (envCreatorEmail && envCreatorPass) {
+      const { hash: creatorHash, salt: creatorSalt } = hashPassword(envCreatorPass);
+      const creatorId = toDeterministicUuid(`creator:${envCreatorEmail}`);
+      const creatorRecord: UserCredentialRecord = {
+        id: creatorId,
+        organizationId: envCreatorOrgId,
+        email: envCreatorEmail,
+        username: envCreatorUsername,
+        phoneE164: envCreatorPhone,
+        name: envCreatorName,
+        role: 'creator',
+        isCreator: true,
+        passwordHash: creatorHash,
+        passwordSalt: creatorSalt,
+        status: 'active',
+        failedAttempts: 0,
+        lockedUntil: null,
+        createdAt: now.toISOString(),
+      };
+      this.userCredentials.set(creatorId, creatorRecord);
+
+      if (this.supabase && !this.isTestRuntime) {
+        void this.supabase
+          .from('account_credentials')
+          .upsert(
+            {
+              id: creatorId,
+              organization_id: envCreatorOrgId && UUID_REGEX.test(envCreatorOrgId) ? envCreatorOrgId : null,
+              email: envCreatorEmail,
+              username: envCreatorUsername || null,
+              phone_e164: envCreatorPhone || null,
+              full_name: envCreatorName,
+              role: 'creator',
+              is_creator: true,
+              password_hash: creatorHash,
+              password_salt: creatorSalt,
+              status: 'active',
+            },
+            { onConflict: 'email' }
+          )
+          .then(undefined, () => {});
+      }
+    }
 
     if (!this.isTestRuntime) {
       // In live environment, zero demo or mock organizations are seeded.
@@ -537,15 +584,14 @@ class PlatformStore {
       this.featureFlags.set(f.key, f);
     }
 
-    // Seed Anchor Church role credentials for live authentication
-    const testAccounts: Array<{
+    // Seed Anchor Church member roster profiles (NO hardcoded passwords or credentials)
+    const testProfiles: Array<{
       id: string;
       email: string;
       username: string;
       phone: string;
       role: ChurchRole;
       fullName: string;
-      password: string;
     }> = [
       {
         id: 'user-admin-1',
@@ -554,7 +600,6 @@ class PlatformStore {
         phone: '+233241112233',
         role: 'admin',
         fullName: 'Church Administrator',
-        password: 'AdminPassword@123',
       },
       {
         id: 'user-pastor-1',
@@ -563,7 +608,6 @@ class PlatformStore {
         phone: '+233242223344',
         role: 'pastor',
         fullName: 'Lead Pastor',
-        password: 'PastorPassword@123',
       },
       {
         id: 'user-usher-1',
@@ -572,7 +616,6 @@ class PlatformStore {
         phone: '+233243334455',
         role: 'usher',
         fullName: 'Door Usher',
-        password: 'UsherPassword@123',
       },
       {
         id: 'm-elena',
@@ -581,45 +624,25 @@ class PlatformStore {
         phone: '+233244445566',
         role: 'member',
         fullName: 'Elena Mends',
-        password: 'MemberPassword@123',
       },
     ];
 
-    const memList: Record<string, any>[] = [];
-    for (const acc of testAccounts) {
-      const { hash, salt } = hashPassword(acc.password);
-      this.userCredentials.set(acc.id, {
-        id: acc.id,
-        organizationId: testOrgId,
-        email: acc.email,
-        username: acc.username,
-        phone: acc.phone,
-        fullName: acc.fullName,
-        role: acc.role,
-        passwordHash: hash,
-        salt,
-        status: 'active',
-        createdAt: now.toISOString(),
-      });
-      memList.push({
-        id: acc.id,
-        tenantId: testOrgId,
-        firstName: acc.fullName.split(' ')[0],
-        lastName: acc.fullName.split(' ').slice(1).join(' ') || 'Member',
-        email: acc.email,
-        phoneE164: acc.phone,
-        username: acc.username,
-        role: acc.role,
-        status: 'active',
-        groupName: acc.role === 'usher' ? 'Ushering Ministry' : 'General Congregation',
-        autoCheckinOptedIn: true,
-        avatarInitials: acc.fullName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase(),
-        joinedOn: now.toISOString().slice(0, 10),
-        consecutiveAbsences: 0,
-        passwordHash: hash,
-        salt,
-      });
-    }
+    const memList: Record<string, any>[] = testProfiles.map((acc) => ({
+      id: acc.id,
+      tenantId: testOrgId,
+      firstName: acc.fullName.split(' ')[0],
+      lastName: acc.fullName.split(' ').slice(1).join(' ') || 'Member',
+      email: acc.email,
+      phoneE164: acc.phone,
+      username: acc.username,
+      role: acc.role,
+      status: 'active',
+      groupName: acc.role === 'usher' ? 'Ushering Ministry' : 'General Congregation',
+      autoCheckinOptedIn: true,
+      avatarInitials: acc.fullName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase(),
+      joinedOn: now.toISOString().slice(0, 10),
+      consecutiveAbsences: 0,
+    }));
     this.membersByOrg.set(testOrgId, memList);
     primaryOrg.memberCount = memList.length;
   }
@@ -638,9 +661,25 @@ class PlatformStore {
 
     const sbUser = data.user;
     const email = (sbUser.email || '').toLowerCase();
-    const isCreator = Boolean(
+    let isCreator = Boolean(
       sbUser.app_metadata?.creator === true || sbUser.app_metadata?.is_super_admin === true
     );
+
+    if (!isCreator && email) {
+      const { data: credRow } = await this.supabase
+        .from('account_credentials')
+        .select('is_creator, role, status')
+        .ilike('email', email)
+        .limit(1)
+        .maybeSingle();
+      if (
+        credRow &&
+        credRow.status === 'active' &&
+        (credRow.is_creator === true || credRow.role === 'creator' || credRow.role === 'super_admin')
+      ) {
+        isCreator = true;
+      }
+    }
 
     // Resolve organization membership and church role strictly from public.members
     let resolvedOrgId = '';
@@ -741,9 +780,385 @@ class PlatformStore {
     };
   }
 
+  private async recordAuthAuditEvent(params: {
+    organizationId?: string | null;
+    accountId?: string | null;
+    identifier: string;
+    eventType:
+      | 'login_success'
+      | 'login_failed'
+      | 'login_locked'
+      | 'login_rate_limited'
+      | 'register_success'
+      | 'register_rejected'
+      | 'token_exchanged'
+      | 'logout';
+    ipAddress?: string;
+    success: boolean;
+    reason?: string;
+  }): Promise<void> {
+    const identifierHash = createHash('sha256')
+      .update(params.identifier.trim().toLowerCase() || 'anonymous')
+      .digest('hex')
+      .slice(0, 24);
+
+    if (this.supabase) {
+      await this.supabase
+        .from('auth_audit_events')
+        .insert({
+          organization_id:
+            params.organizationId && UUID_REGEX.test(params.organizationId)
+              ? params.organizationId.toLowerCase()
+              : null,
+          account_id:
+            params.accountId && UUID_REGEX.test(params.accountId) ? params.accountId : null,
+          identifier_hash: identifierHash,
+          event_type: params.eventType,
+          ip_address: params.ipAddress || null,
+          success: params.success,
+          reason: params.reason || null,
+        })
+        .then(undefined, () => {});
+    }
+  }
+
+  public async provisionCredentialRecord(params: {
+    id?: string;
+    memberId?: string;
+    organizationId: string;
+    email?: string;
+    username?: string;
+    phoneE164?: string;
+    name: string;
+    role: ChurchRole;
+    isCreator?: boolean;
+    password: string;
+  }): Promise<UserCredentialRecord> {
+    const { hash, salt } = hashPassword(params.password);
+    const id = params.id || randomUUID();
+    const record: UserCredentialRecord = {
+      id,
+      memberId: params.memberId,
+      organizationId: params.organizationId.toLowerCase(),
+      email: params.email ? params.email.trim().toLowerCase() : undefined,
+      username: params.username ? params.username.trim().toLowerCase() : undefined,
+      phoneE164: params.phoneE164 ? normalizePhone(params.phoneE164) : undefined,
+      name: params.name.trim() || 'Ekklesphere User',
+      role: params.role,
+      isCreator: Boolean(params.isCreator),
+      passwordHash: hash,
+      passwordSalt: salt,
+      status: 'active',
+      failedAttempts: 0,
+      lockedUntil: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (this.supabase) {
+      const { error } = await this.supabase.from('account_credentials').upsert({
+        id: UUID_REGEX.test(id) ? id : toDeterministicUuid(id),
+        member_id: record.memberId && UUID_REGEX.test(record.memberId) ? record.memberId : null,
+        organization_id:
+          record.organizationId && UUID_REGEX.test(record.organizationId)
+            ? record.organizationId
+            : null,
+        email: record.email || null,
+        username: record.username || null,
+        phone_e164: record.phoneE164 || null,
+        full_name: record.name,
+        role: record.role,
+        is_creator: record.isCreator,
+        password_hash: record.passwordHash,
+        password_salt: record.passwordSalt,
+        status: record.status,
+        failed_attempts: 0,
+        locked_until: null,
+      });
+      if (error && (record.isCreator || record.role === 'creator')) {
+        throw new Error(`Failed to persist creator credentials in Supabase: ${error.message}`);
+      }
+    }
+
+    this.userCredentials.set(record.id, record);
+    return record;
+  }
+
+  public async upsertCreatorCredentials(params: {
+    id?: string;
+    email: string;
+    username?: string;
+    phone?: string;
+    name?: string;
+    password?: string;
+    organizationId?: string;
+  }): Promise<{
+    user: {
+      id: string;
+      email: string;
+      username?: string;
+      phoneE164?: string;
+      name: string;
+      role: ChurchRole;
+      organizationId: string;
+      isCreator: boolean;
+    };
+    token: string;
+    persistedInSupabase: boolean;
+  }> {
+    const email = (params.email || '').trim().toLowerCase();
+    if (!email) {
+      const err: any = new Error('Creator email is required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    const username = params.username ? params.username.trim().toLowerCase() : undefined;
+    const phoneE164 = params.phone ? normalizePhone(params.phone) : undefined;
+    const name = (params.name || '').trim() || 'Platform Creator';
+    const orgId =
+      params.organizationId && UUID_REGEX.test(params.organizationId.trim())
+        ? params.organizationId.trim().toLowerCase()
+        : '';
+
+    let existingCred: UserCredentialRecord | undefined;
+    for (const c of this.userCredentials.values()) {
+      if (
+        (params.id && c.id === params.id) ||
+        (c.email && c.email.toLowerCase() === email)
+      ) {
+        existingCred = c;
+        break;
+      }
+    }
+
+    if (!existingCred && this.supabase) {
+      let row: Record<string, any> | null = null;
+      if (params.id && UUID_REGEX.test(params.id)) {
+        const byId = await this.supabase
+          .from('account_credentials')
+          .select('*')
+          .eq('id', params.id)
+          .limit(1)
+          .maybeSingle();
+        row = byId.data;
+      }
+      if (!row) {
+        const byEmail = await this.supabase
+          .from('account_credentials')
+          .select('*')
+          .ilike('email', email)
+          .limit(1)
+          .maybeSingle();
+        row = byEmail.data;
+      }
+      if (row) {
+        existingCred = {
+          id: String(row.id),
+          organizationId: row.organization_id ? String(row.organization_id).toLowerCase() : '',
+          email: row.email ? String(row.email).toLowerCase() : undefined,
+          username: row.username ? String(row.username).toLowerCase() : undefined,
+          phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
+          name: String(row.full_name || 'Platform Creator'),
+          role: 'creator',
+          isCreator: true,
+          passwordHash: String(row.password_hash),
+          passwordSalt: String(row.password_salt),
+          status: (row.status as UserCredentialRecord['status']) || 'active',
+        };
+      }
+    }
+
+    const rawPassword = (params.password || '').trim();
+    if (!existingCred && rawPassword.length < 8) {
+      const err: any = new Error('Creator password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+    if (rawPassword && rawPassword.length < 8) {
+      const err: any = new Error('New password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+
+    const { hash, salt } = rawPassword
+      ? hashPassword(rawPassword)
+      : { hash: existingCred!.passwordHash, salt: existingCred!.passwordSalt };
+
+    const credId = existingCred?.id || toDeterministicUuid(`creator:${email}`);
+    const updated: UserCredentialRecord = {
+      id: credId,
+      organizationId: orgId || existingCred?.organizationId || '',
+      email,
+      username: username !== undefined ? username || undefined : existingCred?.username,
+      phoneE164: phoneE164 !== undefined ? phoneE164 || undefined : existingCred?.phoneE164,
+      name,
+      role: 'creator',
+      isCreator: true,
+      passwordHash: hash,
+      passwordSalt: salt,
+      status: 'active',
+      failedAttempts: 0,
+      lockedUntil: null,
+      createdAt: existingCred?.createdAt || new Date().toISOString(),
+    };
+
+    let persistedInSupabase = false;
+    if (this.supabase) {
+      const { error } = await this.supabase.from('account_credentials').upsert(
+        {
+          id: UUID_REGEX.test(credId) ? credId : toDeterministicUuid(credId),
+          organization_id:
+            updated.organizationId && UUID_REGEX.test(updated.organizationId)
+              ? updated.organizationId
+              : null,
+          email: updated.email,
+          username: updated.username || null,
+          phone_e164: updated.phoneE164 || null,
+          full_name: updated.name,
+          role: 'creator',
+          is_creator: true,
+          password_hash: updated.passwordHash,
+          password_salt: updated.passwordSalt,
+          status: 'active',
+          failed_attempts: 0,
+          locked_until: null,
+        },
+        { onConflict: 'id' }
+      );
+      if (error) {
+        throw new Error(`Failed to persist creator credentials in Supabase: ${error.message}`);
+      }
+      persistedInSupabase = true;
+    }
+
+    this.userCredentials.set(credId, updated);
+
+    const token = signToken({
+      id: credId,
+      email,
+      role: 'creator',
+      organization_id: updated.organizationId,
+      tenant_id: updated.organizationId,
+      name: updated.name,
+      is_creator: true,
+    });
+
+    return {
+      user: {
+        id: credId,
+        email,
+        username: updated.username,
+        phoneE164: updated.phoneE164,
+        name: updated.name,
+        role: 'creator',
+        organizationId: updated.organizationId,
+        isCreator: true,
+      },
+      token,
+      persistedInSupabase,
+    };
+  }
+
+  public async getCreatorProfileSummary(
+    id: string,
+    email?: string
+  ): Promise<{
+    id: string;
+    email: string;
+    username?: string;
+    phoneE164?: string;
+    name: string;
+    organizationId: string;
+    source: 'supabase' | 'env_or_memory';
+    envSecretsConfigured: {
+      email: boolean;
+      password: boolean;
+      username: boolean;
+      phone: boolean;
+      name: boolean;
+      bootstrapSecret: boolean;
+    };
+  }> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    let matched: UserCredentialRecord | undefined = this.userCredentials.get(id);
+    if (!matched) {
+      for (const c of this.userCredentials.values()) {
+        if (c.isCreator && cleanEmail && c.email?.toLowerCase() === cleanEmail) {
+          matched = c;
+          break;
+        }
+      }
+    }
+
+    let source: 'supabase' | 'env_or_memory' = 'env_or_memory';
+    if (this.supabase) {
+      let row: Record<string, any> | null = null;
+      if (UUID_REGEX.test(id)) {
+        const byId = await this.supabase
+          .from('account_credentials')
+          .select('id, organization_id, email, username, phone_e164, full_name, is_creator, role')
+          .eq('id', id)
+          .limit(1)
+          .maybeSingle();
+        row = byId.data;
+      }
+      if (!row && cleanEmail) {
+        const byEmail = await this.supabase
+          .from('account_credentials')
+          .select('id, organization_id, email, username, phone_e164, full_name, is_creator, role')
+          .ilike('email', cleanEmail)
+          .limit(1)
+          .maybeSingle();
+        row = byEmail.data;
+      }
+      if (row) {
+        source = 'supabase';
+        return {
+          id: String(row.id),
+          email: String(row.email || cleanEmail),
+          username: row.username ? String(row.username) : undefined,
+          phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
+          name: String(row.full_name || matched?.name || 'Platform Creator'),
+          organizationId: row.organization_id ? String(row.organization_id).toLowerCase() : '',
+          source,
+          envSecretsConfigured: {
+            email: Boolean(process.env.CREATOR_EMAIL?.trim()),
+            password: Boolean(process.env.CREATOR_PASSWORD?.trim()),
+            username: Boolean(process.env.CREATOR_USERNAME?.trim()),
+            phone: Boolean(process.env.CREATOR_PHONE?.trim()),
+            name: Boolean(process.env.CREATOR_NAME?.trim()),
+            bootstrapSecret: Boolean(process.env.CREATOR_BOOTSTRAP_SECRET?.trim()),
+          },
+        };
+      }
+    }
+
+    return {
+      id: matched?.id || id,
+      email: matched?.email || cleanEmail,
+      username: matched?.username,
+      phoneE164: matched?.phoneE164,
+      name: matched?.name || 'Platform Creator',
+      organizationId: matched?.organizationId || '',
+      source,
+      envSecretsConfigured: {
+        email: Boolean(process.env.CREATOR_EMAIL?.trim()),
+        password: Boolean(process.env.CREATOR_PASSWORD?.trim()),
+        username: Boolean(process.env.CREATOR_USERNAME?.trim()),
+        phone: Boolean(process.env.CREATOR_PHONE?.trim()),
+        name: Boolean(process.env.CREATOR_NAME?.trim()),
+        bootstrapSecret: Boolean(process.env.CREATOR_BOOTSTRAP_SECRET?.trim()),
+      },
+    };
+  }
+
   public async authenticateWithCredentials(
     rawIdentifier: string,
-    rawPassword?: string
+    rawPassword?: string,
+    ipAddress?: string
   ): Promise<{
     user: {
       id: string;
@@ -771,7 +1186,7 @@ class PlatformStore {
     const lowerId = identifier.toLowerCase();
     const normalizedPhone = normalizePhone(identifier);
 
-    // 1. Search userCredentials
+    // 1. Search isolated in-memory credential cache
     let foundCred: UserCredentialRecord | undefined;
     for (const cred of this.userCredentials.values()) {
       const matchEmail = cred.email && cred.email.toLowerCase() === lowerId;
@@ -786,48 +1201,85 @@ class PlatformStore {
       }
     }
 
-    // 2. If not found in memory, query Supabase if available
+    // 2. If not found in memory, query Supabase isolated public.account_credentials table (service_role ONLY)
     if (!foundCred && this.supabase) {
-      const { data: memberRow } = await this.supabase
-        .from('members')
+      const orFilters = [`email.ilike.${lowerId}`, `username.ilike.${lowerId}`];
+      if (normalizedPhone) {
+        orFilters.push(`phone_e164.eq.${normalizedPhone}`);
+      }
+
+      const { data: credRow } = await this.supabase
+        .from('account_credentials')
         .select('*')
-        .or(
-          normalizedPhone
-            ? `email.ilike.${lowerId},phone.eq.${normalizedPhone}`
-            : `email.ilike.${lowerId}`
-        )
+        .or(orFilters.join(','))
         .limit(1)
         .maybeSingle();
 
-      if (memberRow && memberRow.password_hash && memberRow.password_salt) {
+      if (credRow && credRow.password_hash && credRow.password_salt) {
         foundCred = {
-          id: String(memberRow.id),
-          email: memberRow.email ? String(memberRow.email).toLowerCase() : undefined,
-          phoneE164: memberRow.phone ? String(memberRow.phone) : undefined,
-          passwordHash: memberRow.password_hash,
-          passwordSalt: memberRow.password_salt,
-          role: mapSupabaseRoleToChurchRole(memberRow.role),
-          organizationId: String(memberRow.organization_id || ''),
-          name:
-            memberRow.full_name ||
-            `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim() ||
-            'Member',
-          isCreator: false,
-          status: (memberRow.status as any) || 'active',
+          id: String(credRow.id),
+          memberId: credRow.member_id ? String(credRow.member_id) : undefined,
+          email: credRow.email ? String(credRow.email).toLowerCase() : undefined,
+          username: credRow.username ? String(credRow.username).toLowerCase() : undefined,
+          phoneE164: credRow.phone_e164 ? String(credRow.phone_e164) : undefined,
+          passwordHash: String(credRow.password_hash),
+          passwordSalt: String(credRow.password_salt),
+          role: mapSupabaseRoleToChurchRole(credRow.role),
+          organizationId: String(credRow.organization_id || '').toLowerCase(),
+          name: String(credRow.full_name || 'Member'),
+          isCreator: Boolean(credRow.is_creator || credRow.role === 'creator' || credRow.role === 'super_admin'),
+          status: (credRow.status as UserCredentialRecord['status']) || 'active',
+          failedAttempts: Number(credRow.failed_attempts || 0),
+          lockedUntil: credRow.locked_until ? String(credRow.locked_until) : null,
+          createdAt: credRow.created_at ? String(credRow.created_at) : undefined,
         };
         this.userCredentials.set(foundCred.id, foundCred);
       }
     }
 
     if (!foundCred) {
-      const err: any = new Error('Invalid credentials. No active account found matching this identifier.');
+      await this.recordAuthAuditEvent({
+        identifier,
+        eventType: 'login_failed',
+        ipAddress,
+        success: false,
+        reason: 'account_not_found',
+      });
+      const err: any = new Error('Invalid email/username or password.');
       err.code = 'INVALID_CREDENTIALS';
       err.status = 401;
       throw err;
     }
 
+    // 3. Enforce temporary brute-force lockout window
+    if (foundCred.lockedUntil) {
+      const lockedUntilMs = new Date(foundCred.lockedUntil).getTime();
+      if (!Number.isNaN(lockedUntilMs) && lockedUntilMs > Date.now()) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+        await this.recordAuthAuditEvent({
+          organizationId: foundCred.organizationId,
+          accountId: foundCred.id,
+          identifier,
+          eventType: 'login_locked',
+          ipAddress,
+          success: false,
+          reason: `locked_for_${retryAfterSeconds}s`,
+        });
+        const err: any = new Error(
+          `Too many failed login attempts. Account is temporarily locked. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).`
+        );
+        err.code = 'ACCOUNT_LOCKED';
+        err.status = 429;
+        err.retryAfterSeconds = retryAfterSeconds;
+        throw err;
+      }
+      // Lockout expired — reset counter cleanly
+      foundCred.failedAttempts = 0;
+      foundCred.lockedUntil = null;
+    }
+
     if (foundCred.status !== 'active') {
-      const err: any = new Error('Account is inactive or suspended. Contact support.');
+      const err: any = new Error('Account is inactive or suspended. Contact your church administrator.');
       err.code = 'ACCOUNT_INACTIVE';
       err.status = 403;
       throw err;
@@ -835,11 +1287,79 @@ class PlatformStore {
 
     const passwordMatches = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
     if (!passwordMatches) {
-      const err: any = new Error('Invalid credentials. Password does not match.');
+      const nextAttempts = (foundCred.failedAttempts || 0) + 1;
+      foundCred.failedAttempts = nextAttempts;
+
+      const isNowLocked = nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS;
+      const lockedUntilIso = isNowLocked ? new Date(Date.now() + LOGIN_LOCKOUT_MS).toISOString() : null;
+      if (isNowLocked) {
+        foundCred.lockedUntil = lockedUntilIso;
+      }
+      this.userCredentials.set(foundCred.id, foundCred);
+
+      if (this.supabase) {
+        await this.supabase
+          .from('account_credentials')
+          .update({
+            failed_attempts: nextAttempts,
+            locked_until: lockedUntilIso,
+          })
+          .eq('id', foundCred.id)
+          .then(undefined, () => {});
+      }
+
+      await this.recordAuthAuditEvent({
+        organizationId: foundCred.organizationId,
+        accountId: foundCred.id,
+        identifier,
+        eventType: isNowLocked ? 'login_locked' : 'login_failed',
+        ipAddress,
+        success: false,
+        reason: isNowLocked ? 'max_attempts_exceeded' : 'password_mismatch',
+      });
+
+      if (isNowLocked) {
+        const retryAfterSeconds = Math.ceil(LOGIN_LOCKOUT_MS / 1000);
+        const err: any = new Error(
+          'Too many failed login attempts. Account locked for 15 minutes for your security.'
+        );
+        err.code = 'ACCOUNT_LOCKED';
+        err.status = 429;
+        err.retryAfterSeconds = retryAfterSeconds;
+        throw err;
+      }
+
+      const err: any = new Error('Invalid email/username or password.');
       err.code = 'INVALID_CREDENTIALS';
       err.status = 401;
       throw err;
     }
+
+    // Valid login: reset failed attempts counter
+    foundCred.failedAttempts = 0;
+    foundCred.lockedUntil = null;
+    this.userCredentials.set(foundCred.id, foundCred);
+
+    if (this.supabase) {
+      await this.supabase
+        .from('account_credentials')
+        .update({
+          failed_attempts: 0,
+          locked_until: null,
+          last_login_at: new Date().toISOString(),
+        })
+        .eq('id', foundCred.id)
+        .then(undefined, () => {});
+    }
+
+    await this.recordAuthAuditEvent({
+      organizationId: foundCred.organizationId,
+      accountId: foundCred.id,
+      identifier,
+      eventType: 'login_success',
+      ipAddress,
+      success: true,
+    });
 
     let organization: OrganizationRecord | null = null;
     if (foundCred.organizationId) {
@@ -847,17 +1367,18 @@ class PlatformStore {
     }
 
     const token = signToken({
-      id: foundCred.id,
+      id: foundCred.memberId || foundCred.id,
       email: foundCred.email || `${foundCred.username || 'user'}@ekklesphere.church`,
       role: foundCred.role,
       organization_id: foundCred.organizationId,
+      tenant_id: foundCred.organizationId,
       name: foundCred.name,
       is_creator: foundCred.isCreator,
     });
 
     return {
       user: {
-        id: foundCred.id,
+        id: foundCred.memberId || foundCred.id,
         email: foundCred.email || '',
         username: foundCred.username,
         phoneE164: foundCred.phoneE164,
@@ -878,8 +1399,10 @@ class PlatformStore {
     phone?: string;
     password: string;
     organizationId?: string;
+    organizationSlug?: string;
     groupName?: string;
     autoCheckinOptedIn?: boolean;
+    ipAddress?: string;
   }): Promise<{
     user: {
       id: string;
@@ -913,8 +1436,8 @@ class PlatformStore {
       throw err;
     }
 
-    if (password.length < 6) {
-      const err: any = new Error('Password must be at least 6 characters long.');
+    if (password.length < 8) {
+      const err: any = new Error('Password must be at least 8 characters long.');
       err.code = 'WEAK_PASSWORD';
       err.status = 400;
       throw err;
@@ -922,7 +1445,7 @@ class PlatformStore {
 
     const normalizedPhone = normalizePhone(phone);
 
-    // Check duplicate in userCredentials
+    // Check duplicate in isolated in-memory credential store
     for (const cred of this.userCredentials.values()) {
       if (email && cred.email && cred.email.toLowerCase() === email) {
         const err: any = new Error('An account with this email address already exists. Please log in.');
@@ -938,10 +1461,41 @@ class PlatformStore {
       }
     }
 
-    // Determine target church organization
-    let targetOrgId = params.organizationId?.toLowerCase() || '';
+    // Check duplicate in Supabase isolated credentials table if configured
+    if (this.supabase) {
+      const orFilters: string[] = [];
+      if (email) orFilters.push(`email.ilike.${email}`);
+      if (normalizedPhone) orFilters.push(`phone_e164.eq.${normalizedPhone}`);
+      if (orFilters.length > 0) {
+        const { data: existingCred } = await this.supabase
+          .from('account_credentials')
+          .select('id')
+          .or(orFilters.join(','))
+          .limit(1)
+          .maybeSingle();
+
+        if (existingCred) {
+          const err: any = new Error('An account with this email or phone already exists. Please log in.');
+          err.code = 'DUPLICATE_CREDENTIAL';
+          err.status = 409;
+          throw err;
+        }
+      }
+    }
+
+    // Resolve target church organization (slug -> id -> first active organization)
+    const orgs = await this.listOrganisations();
+    let targetOrgId = '';
+    if (params.organizationId && UUID_REGEX.test(params.organizationId.trim())) {
+      const matched = orgs.find((o) => o.id.toLowerCase() === params.organizationId!.trim().toLowerCase());
+      if (matched) targetOrgId = matched.id;
+    } else if (params.organizationSlug && params.organizationSlug.trim()) {
+      const slug = params.organizationSlug.trim().toLowerCase();
+      const matched = orgs.find((o) => o.slug.toLowerCase() === slug);
+      if (matched) targetOrgId = matched.id;
+    }
+
     if (!targetOrgId) {
-      const orgs = await this.listOrganisations();
       const activeOrg = orgs.find((o) => o.status === 'active' || o.licenseStatus === 'active') || orgs[0];
       if (activeOrg) {
         targetOrgId = activeOrg.id;
@@ -955,7 +1509,7 @@ class PlatformStore {
       throw err;
     }
 
-    // Create member in store
+    // Self-registration ALWAYS forces least-privilege role: 'member' (never trusts client role)
     const member = await this.createMember(targetOrgId, {
       firstName,
       lastName,
@@ -967,38 +1521,46 @@ class PlatformStore {
       status: 'active',
     });
 
-    // Hash password and store credentials
-    const { hash, salt } = hashPassword(password);
-    const credId = member.id || randomUUID();
-    const newCred: UserCredentialRecord = {
-      id: credId,
+    const memberId = String(member.id || randomUUID());
+    const fullName = `${firstName} ${lastName}`.trim();
+
+    const newCred = await this.provisionCredentialRecord({
+      id: memberId,
+      memberId,
+      organizationId: targetOrgId,
       email: email || undefined,
       phoneE164: normalizedPhone || undefined,
-      passwordHash: hash,
-      passwordSalt: salt,
+      name: fullName,
       role: 'member',
-      organizationId: targetOrgId,
-      name: `${firstName} ${lastName}`.trim(),
       isCreator: false,
-      status: 'active',
-    };
-    this.userCredentials.set(credId, newCred);
+      password,
+    });
+
+    await this.recordAuthAuditEvent({
+      organizationId: targetOrgId,
+      accountId: newCred.id,
+      identifier: email || normalizedPhone || memberId,
+      eventType: 'register_success',
+      ipAddress: params.ipAddress,
+      success: true,
+    });
 
     const organization = await this.getOrganisationById(targetOrgId);
 
     const token = signToken({
-      id: credId,
+      id: memberId,
       email: email || `${normalizedPhone || 'member'}@ekklesphere.church`,
       role: 'member',
       organization_id: targetOrgId,
+      tenant_id: targetOrgId,
       name: newCred.name,
       is_creator: false,
     });
 
     return {
       user: {
-        id: credId,
-        email: email,
+        id: memberId,
+        email,
         phoneE164: normalizedPhone,
         name: newCred.name,
         role: 'member',

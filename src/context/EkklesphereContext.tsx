@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import {
-  auth,
-  db,
-  googleProvider,
-  signInWithPopup,
-  firebaseSignOut,
-  onAuthStateChanged,
-} from '../firebase';
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import {
+  isSupabaseBrowserConfigured,
+  signInWithSupabaseGoogle,
+  signOutSupabaseBrowser,
+  supabaseBrowserClient,
+} from '../lib/supabase';
 import {
   Person,
   ServiceInstance,
@@ -29,6 +28,8 @@ import {
   BillingCycle,
   LandingPageConfig,
   LiveTelemetrySummary,
+  ChurchWallPost,
+  AuthActionResult,
 } from '../types/ekklesphere';
 import { pushNotificationService } from '../services/pushNotificationService';
 
@@ -105,12 +106,21 @@ interface EkklesphereContextType {
   currentUser: AuthUser | null;
   setCurrentUser: (user: AuthUser | null) => void;
   login: (user: AuthUser) => void;
-  loginWithCredentials: (email: string, password?: string, preferredRole?: UserRole) => boolean;
+  loginWithCredentials: (identifier: string, password: string) => Promise<AuthActionResult>;
   signInWithGoogle: () => Promise<void>;
   isGoogleAuthLoading: boolean;
   googleAuthError: string | null;
   clearGoogleAuthError: () => void;
-  registerMember: (firstName: string, lastName: string, email: string, phone: string, groupName: string) => AuthUser;
+  registerMember: (params: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+    phone?: string;
+    password: string;
+    groupName?: string;
+    autoCheckinOptedIn?: boolean;
+    organizationSlug?: string;
+  }) => Promise<AuthActionResult>;
   logout: () => void;
   switchUserRole: (role: UserRole) => void;
 
@@ -238,6 +248,15 @@ interface EkklesphereContextType {
   toggleRsvp: (eventName: string) => void;
   donations: Donation[];
   submitDonation: (amountGhs: number, fund: string, method: 'MTN MoMo' | 'Telecel Cash' | 'Card') => void;
+  churchWallPosts: ChurchWallPost[];
+  refreshChurchWallPosts: () => Promise<void>;
+  addChurchWallPost: (input: {
+    message: string;
+    category?: 'birthday' | 'testimony' | 'celebration';
+    targetMemberId?: string;
+    targetMemberName?: string;
+  }) => Promise<ChurchWallPost>;
+  toggleChurchWallAmen: (postId: string) => Promise<void>;
 
   // Audit Logs & Toasts
   auditLogs: AuditLogItem[];
@@ -388,11 +407,33 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
 
-  // Platform view navigation (live test default: app)
+  // Platform view navigation: '/' defaults to the Ekklesphere App ('app');
+  // '/home' (or ?church=...) renders ChurchHomePage; '/creator' is Creator Console.
+  const resolveRouteViewMode = (): AppViewMode | null => {
+    if (typeof window === 'undefined') return null;
+    const path = window.location.pathname.toLowerCase();
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get('view')?.toLowerCase();
+
+    if (path === '/home' || viewParam === 'home' || params.has('church')) {
+      return 'home';
+    }
+    if (path === '/app' || path === '/login' || path === '/portal' || viewParam === 'app') {
+      return 'app';
+    }
+    if (path === '/creator' || path === '/console' || viewParam === 'creator') {
+      return 'creator';
+    }
+    return null;
+  };
+
   const [viewMode, setViewModeState] = useState<AppViewMode>(() => {
+    const fromRoute = resolveRouteViewMode();
+    if (fromRoute) return fromRoute;
+
     try {
       const saved = localStorage.getItem('ekklesphere_view_mode');
-      if (saved === 'app' || saved === 'landing' || saved === 'creator') {
+      if (saved === 'app' || saved === 'creator') {
         return saved as AppViewMode;
       }
     } catch {
@@ -401,14 +442,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return 'app';
   });
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      const next = resolveRouteViewMode();
+      setViewModeState(next || 'app');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const setViewMode = (mode: AppViewMode, actingUser?: AuthUser | null) => {
     const userToCheck = actingUser !== undefined ? actingUser : currentUser;
-    const creatorEnvEmail = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_CREATOR_EMAIL : '')?.trim().toLowerCase();
     const isCreatorAllowed =
       userToCheck?.role === 'super_admin' ||
       userToCheck?.role === 'creator' ||
-      Boolean(userToCheck?.is_creator) ||
-      Boolean(creatorEnvEmail && userToCheck?.email?.toLowerCase() === creatorEnvEmail);
+      userToCheck?.verifiedRole === 'super_admin' ||
+      userToCheck?.verifiedRole === 'creator' ||
+      Boolean(userToCheck?.is_creator);
 
     if (mode === 'creator' && !isCreatorAllowed) {
       showToast('Access Denied: Creator console requires Super Admin or Creator role.');
@@ -417,6 +468,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setViewModeState(mode);
     try {
       localStorage.setItem('ekklesphere_view_mode', mode);
+      if (typeof window !== 'undefined') {
+        const nextPath =
+          mode === 'home'
+            ? '/home'
+            : mode === 'creator'
+            ? '/creator'
+            : '/app';
+        if (window.location.pathname.toLowerCase() !== nextPath) {
+          window.history.pushState({}, '', `${nextPath}${window.location.search}`);
+        }
+      }
     } catch {
       // ignore
     }
@@ -432,14 +494,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
-    }
-    if (currentUser) {
-      headers['x-user-role'] = currentUser.role;
-      headers['x-user-id'] = currentUser.id;
-      headers['x-user-email'] = currentUser.email;
-      if (currentUser.name) headers['x-user-name'] = currentUser.name;
-      if (currentUser.tenant_id) headers['x-tenant-id'] = currentUser.tenant_id;
-      if (currentUser.campus_id) headers['x-campus-id'] = currentUser.campus_id;
     }
     return headers;
   };
@@ -694,155 +748,164 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const clearGoogleAuthError = () => setGoogleAuthError(null);
 
-  const resolveUserRoleForEmail = (rawEmail: string, matchedMember?: Person): UserRole => {
-    const normalized = rawEmail.trim().toLowerCase();
-    const creatorEmail = (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase();
-    if (
-      normalized === creatorEmail ||
-      normalized.includes('creator') ||
-      normalized.includes('superadmin')
-    ) {
-      return 'creator';
-    }
-    const officer = (matchedMember?.officerName || '').toLowerCase();
-    const dept = (matchedMember?.department || '').toLowerCase();
-    if (officer.includes('admin') || officer.includes('pastor') || officer.includes('elder')) {
-      return 'admin';
-    }
-    if (officer.includes('usher') || dept.includes('usher')) {
-      return 'usher';
-    }
-    if (normalized.includes('pastor') || normalized.includes('admin')) {
-      return 'admin';
-    }
-    if (normalized.includes('usher')) {
-      return 'usher';
-    }
-    return 'member';
+  const buildAuthUserFromServer = (
+    payload: {
+      id: string;
+      email: string;
+      name: string;
+      role: UserRole;
+      organizationId?: string;
+      organization_id?: string;
+      tenant_id?: string;
+      isCreator?: boolean;
+      is_creator?: boolean;
+      username?: string;
+    },
+    token: string,
+    campusNameOverride?: string
+  ): AuthUser => {
+    const role = payload.role;
+    const isCreator = Boolean(
+      payload.isCreator || payload.is_creator || role === 'creator' || role === 'super_admin'
+    );
+    const orgId = (payload.organizationId || payload.organization_id || payload.tenant_id || '').toLowerCase() || undefined;
+    const matchedMember = members.find(
+      (m) => m.id === payload.id || (payload.email && (m.email || '').toLowerCase() === payload.email.toLowerCase())
+    );
+    const displayName = (payload.name || payload.email?.split('@')[0] || 'Ekklesphere User').trim();
+    const initials =
+      displayName
+        .split(' ')
+        .filter(Boolean)
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase() || 'EU';
+
+    return {
+      id: payload.id,
+      name: displayName,
+      email: payload.email || '',
+      role,
+      verifiedRole: role,
+      is_creator: isCreator,
+      token,
+      username: payload.username,
+      initials,
+      memberId: matchedMember?.id || payload.id,
+      organization_id: orgId,
+      tenant_id: orgId,
+      campusName: campusNameOverride || systemSettings.campusName || 'Main Campus',
+      title:
+        role === 'creator' || role === 'super_admin'
+          ? 'Platform Creator & Owner'
+          : role === 'admin' || role === 'pastor'
+          ? 'Administrator / Executive Pastor'
+          : role === 'usher'
+          ? 'Door Steward / Usher'
+          : matchedMember?.groupName
+          ? `Member (${matchedMember.groupName})`
+          : 'Congregation Member',
+      permissions:
+        role === 'creator' || role === 'super_admin'
+          ? ['all_access', 'creator_console', 'pastoral_care', 'service_management', 'system_settings']
+          : role === 'admin' || role === 'pastor'
+          ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+          : role === 'usher'
+          ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
+          : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
+    };
   };
 
   const login = (user: AuthUser) => {
-    setCurrentUser(user);
-    if (user.role === 'creator' || user.role === 'super_admin' || user.is_creator) {
-      setViewMode('creator', user);
+    const verifiedUser: AuthUser = {
+      ...user,
+      verifiedRole: user.verifiedRole || user.role,
+    };
+    setCurrentUser(verifiedUser);
+    if (verifiedUser.role === 'creator' || verifiedUser.role === 'super_admin' || verifiedUser.is_creator) {
+      setViewMode('creator', verifiedUser);
     } else {
-      setViewMode('app', user);
+      setViewMode('app', verifiedUser);
     }
     try {
-      localStorage.setItem('ekklesphere_user', JSON.stringify(user));
+      localStorage.setItem('ekklesphere_user', JSON.stringify(verifiedUser));
+      if (verifiedUser.token) {
+        localStorage.setItem('ekklesphere_token', verifiedUser.token);
+      }
     } catch {
       // ignore
     }
 
-    // Persist user document to Firestore so security rules and multi-device auth recognize user role
-    try {
-      setDoc(doc(db, 'users', user.id), {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        photoURL: user.avatar || '',
-        title: user.title || (user.role === 'admin' ? 'Administrator' : user.role === 'usher' ? 'Door Steward' : 'Congregation Member'),
-        campusName: user.campusName || systemSettings.campusName || 'Main Campus',
-        createdAt: new Date().toISOString(),
-      }, { merge: true }).catch((err) => {
-        console.warn('Firestore user profile sync warning (non-blocking):', err);
-      });
-    } catch {}
+    if (
+      verifiedUser.role === 'admin' ||
+      verifiedUser.role === 'pastor' ||
+      verifiedUser.role === 'creator' ||
+      verifiedUser.role === 'super_admin'
+    ) {
+      setActivePortalState('admin');
+    } else if (verifiedUser.role === 'usher') {
+      setActivePortalState('usher');
+    } else {
+      setActivePortalState('member');
+    }
+  };
 
-    if (user.role === 'admin' || user.role === 'creator' || user.role === 'super_admin') setActivePortal('admin');
-    else if (user.role === 'usher') setActivePortal('usher');
-    else if (user.role === 'member') setActivePortal('member');
-    showToast(`Welcome back, ${user.name}`);
+  const exchangeSupabaseAccessToken = async (accessToken: string): Promise<boolean> => {
+    const res = await fetch('/api/auth/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data?.token || !data?.user) return false;
+
+    const authUser = buildAuthUserFromServer(data.user, data.token);
+    login(authUser);
+    showToast(`Signed in as ${authUser.name}`);
+    return true;
   };
 
   const signInWithGoogle = async () => {
     setIsGoogleAuthLoading(true);
     setGoogleAuthError(null);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const fbUser = result.user;
-      const email = fbUser.email || '';
-      const matchedMember = members.find(
-        (m) => (m.email || '').toLowerCase() === email.trim().toLowerCase()
-      );
-      const name =
-        fbUser.displayName ||
-        (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : '') ||
-        'Google Member';
-      const initials =
-        name
-          .split(' ')
-          .filter(Boolean)
-          .map((n) => n[0])
-          .slice(0, 2)
-          .join('')
-          .toUpperCase() || 'GM';
-
-      const role = resolveUserRoleForEmail(email, matchedMember);
-
-      const gUser: AuthUser = {
-        id: fbUser.uid,
-        name,
-        email,
-        role,
-        avatar: fbUser.photoURL || undefined,
-        initials,
-        memberId: matchedMember?.id,
-        title:
-          role === 'admin'
-            ? 'Administrator / Executive Pastor'
-            : role === 'usher'
-            ? 'Door Steward / Usher'
-            : matchedMember?.groupName
-            ? `Member (${matchedMember.groupName})`
-            : 'Congregation Member',
-        campusName: systemSettings.campusName || 'Main Campus',
-        permissions:
-          role === 'admin'
-            ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-            : role === 'usher'
-            ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-            : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-      };
-
-      login(gUser);
-      showToast(`Authenticated with Google as ${name}`);
-    } catch (err: unknown) {
-      const errCode =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: unknown }).code || '')
-          : '';
-      const errMsg = err instanceof Error ? err.message : String(err);
-
-      if (errCode.includes('popup-closed-by-user') || errCode.includes('cancelled-popup-request') || errMsg.includes('popup-closed-by-user')) {
-        showToast('Google sign-in popup was closed before completion.');
-      } else if (errCode.includes('popup-blocked') || errMsg.includes('popup-blocked')) {
-        const msg = 'Your browser blocked the Google sign-in popup. Please allow popups for this site and try again.';
+      if (!isSupabaseBrowserConfigured) {
+        const msg =
+          'Google OAuth via Supabase is not configured in this preview environment (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). Sign in using your registered account credentials below.';
         setGoogleAuthError(msg);
         showToast(msg);
-      } else if (errCode.includes('unauthorized-domain') || errMsg.includes('unauthorized-domain')) {
-        const host = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
-        const msg = `Domain "${host}" is not yet authorized in Firebase Authentication → Settings → Authorized domains. You can also sign in immediately below using your email.`;
-        console.warn('[Auth] Unauthorized domain during Google Sign-in:', host);
-        setGoogleAuthError(msg);
-        showToast('Google domain authorization required — use email sign-in below or refresh.');
-      } else {
-        console.warn('[Auth] Google Sign-in warning:', errMsg);
-        const msg = 'Google sign-in could not complete right now. Please retry or sign in with your church email below.';
-        setGoogleAuthError(msg);
-        showToast(msg);
+        return;
       }
+      await signInWithSupabaseGoogle();
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setGoogleAuthError(errMsg || 'Google OAuth sign-in could not be initiated.');
+      showToast('Google sign-in could not start. Use account credentials below.');
     } finally {
       setIsGoogleAuthLoading(false);
     }
   };
 
   const logout = () => {
+    const existingToken =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (existingToken) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${existingToken}` },
+      }).catch(() => {});
+    }
     setCurrentUser(null);
     setGoogleAuthError(null);
     try {
-      firebaseSignOut(auth).catch(() => {});
+      signOutSupabaseBrowser().catch(() => {});
       localStorage.removeItem('ekklesphere_user');
       localStorage.removeItem('ekklesphere_token');
       localStorage.removeItem('ekklesphere_view_mode');
@@ -855,17 +918,39 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const switchUserRole = (role: UserRole) => {
     if (!currentUser) return;
+    const baseRole = currentUser.verifiedRole || currentUser.role;
+    const isCreator = Boolean(
+      currentUser.is_creator || baseRole === 'creator' || baseRole === 'super_admin'
+    );
+    const isAdmin = isCreator || baseRole === 'admin' || baseRole === 'pastor';
+
+    // Strict least-privilege view switching: members can never switch into Admin/Usher portals
+    if (!isAdmin) {
+      if (baseRole === 'usher' && (role === 'usher' || role === 'member')) {
+        // Usher can preview Member portal, nothing higher
+      } else if (role !== baseRole) {
+        showToast('Access Restricted: Only church administrators can preview other portals.');
+        return;
+      }
+    }
+
+    if ((role === 'creator' || role === 'super_admin') && !isCreator) {
+      showToast('Access Denied: Creator role requires verified Creator privileges.');
+      return;
+    }
+
     const updatedUser: AuthUser = {
       ...currentUser,
       role,
+      verifiedRole: baseRole,
       title:
-        role === 'admin'
+        role === 'admin' || role === 'pastor'
           ? 'Administrator / Executive Pastor'
           : role === 'usher'
           ? 'Door Steward / Usher'
           : 'Congregation Member',
       permissions:
-        role === 'admin'
+        role === 'admin' || role === 'pastor'
           ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
           : role === 'usher'
           ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
@@ -874,132 +959,118 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     login(updatedUser);
   };
 
-  const loginWithCredentials = (email: string, _password?: string, preferredRole?: UserRole): boolean => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed) return false;
+  const loginWithCredentials = async (
+    identifier: string,
+    password: string
+  ): Promise<AuthActionResult> => {
+    const trimmedId = identifier.trim();
+    const trimmedPass = password.trim();
+    if (!trimmedId || !trimmedPass) {
+      const msg = 'Email/username and password are required.';
+      showToast(msg);
+      return { ok: false, error: msg, code: 'INVALID_CREDENTIALS' };
+    }
 
-    const matchedMember = members.find((m) => (m.email || '').toLowerCase() === trimmed);
-    const derivedRole: UserRole = preferredRole || resolveUserRoleForEmail(trimmed, matchedMember);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: trimmedId,
+          password: trimmedPass,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
 
-    const rawName = matchedMember
-      ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim()
-      : trimmed
-          .split('@')[0]
-          .replace(/[._-]+/g, ' ')
-          .replace(/\b\w/g, (c) => c.toUpperCase());
+      if (!res.ok || !data?.token || !data?.user) {
+        const errorMsg = data?.message || 'Invalid credentials.';
+        showToast(errorMsg);
+        return {
+          ok: false,
+          error: errorMsg,
+          code: data?.code || 'INVALID_CREDENTIALS',
+          retryAfterSeconds: data?.retryAfterSeconds,
+        };
+      }
 
-    const initials =
-      rawName
-        .split(' ')
-        .filter(Boolean)
-        .map((n) => n[0])
-        .slice(0, 2)
-        .join('')
-        .toUpperCase() || 'MB';
-
-    const creatorEmail = (import.meta.env.VITE_CREATOR_EMAIL || 'amoakoemmanuel2020@gmail.com').toLowerCase();
-    const isCreator =
-      derivedRole === 'creator' ||
-      derivedRole === 'super_admin' ||
-      preferredRole === 'creator' ||
-      preferredRole === 'super_admin' ||
-      trimmed === creatorEmail;
-
-    const finalRole: UserRole =
-      preferredRole === 'creator' || preferredRole === 'super_admin'
-        ? preferredRole
-        : isCreator
-        ? 'creator'
-        : derivedRole;
-
-    const authenticatedUser: AuthUser = {
-      id: matchedMember?.id || `u-${Date.now()}`,
-      name: rawName || 'Church Member',
-      email: trimmed,
-      role: finalRole,
-      is_creator: isCreator,
-      initials,
-      title:
-        finalRole === 'creator' || finalRole === 'super_admin'
-          ? 'Platform Creator & Owner'
-          : finalRole === 'admin'
-          ? 'Administrator / Executive Pastor'
-          : finalRole === 'usher'
-          ? 'Door Steward / Usher'
-          : matchedMember?.groupName
-          ? `Member (${matchedMember.groupName})`
-          : 'Congregation Member',
-      campusName: systemSettings.campusName || 'Main Campus',
-      memberId: matchedMember?.id,
-      permissions:
-        finalRole === 'creator' || finalRole === 'super_admin'
-          ? ['all_access', 'creator_console', 'pastoral_care', 'service_management', 'system_settings']
-          : finalRole === 'admin'
-          ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-          : finalRole === 'usher'
-          ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-          : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-    };
-
-    login(authenticatedUser);
-    return true;
+      const authUser = buildAuthUserFromServer(
+        data.user,
+        data.token,
+        data.organization?.name
+      );
+      login(authUser);
+      showToast(`Welcome back, ${authUser.name}`);
+      return { ok: true };
+    } catch {
+      const msg = 'Authentication service unreachable. Please check your connection.';
+      showToast(msg);
+      return { ok: false, error: msg, code: 'NETWORK_ERROR' };
+    }
   };
 
-  const registerMember = (firstName: string, lastName: string, email: string, phone: string, groupName: string): AuthUser => {
-    const initials = `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase();
-    const formattedPhone = phone
-      ? phone.startsWith('+')
-        ? phone
-        : `+233${phone.replace(/^0/, '').replace(/\D/g, '')}`
-      : '';
-    const tempMemberId = `m-${Date.now()}`;
+  const registerMember = async (params: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+    phone?: string;
+    password: string;
+    groupName?: string;
+    autoCheckinOptedIn?: boolean;
+    organizationSlug?: string;
+  }): Promise<AuthActionResult> => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: params.firstName.trim(),
+          lastName: params.lastName.trim(),
+          email: params.email?.trim() || '',
+          phone: params.phone?.trim() || '',
+          password: params.password,
+          groupName: params.groupName || 'General Congregation',
+          autoCheckinOptedIn: params.autoCheckinOptedIn ?? true,
+          organizationSlug: params.organizationSlug?.trim() || undefined,
+        }),
+      });
 
-    const newUser: AuthUser = {
-      id: `u-${Date.now()}`,
-      name: `${firstName} ${lastName}`,
-      email,
-      role: 'member',
-      initials,
-      title: `Member (${groupName || 'Congregation'})`,
-      campusName: systemSettings.campusName || 'Main Church Premise',
-      memberId: tempMemberId,
-      permissions: ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-    };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.token || !data?.user) {
+        const errorMsg = data?.message || 'Registration failed. Please verify your details.';
+        showToast(errorMsg);
+        return {
+          ok: false,
+          error: errorMsg,
+          code: data?.code || 'REGISTRATION_FAILED',
+        };
+      }
 
-    // Persist newly self-registered member to database
-    fetch('/api/members', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        firstName,
-        lastName,
-        phoneE164: formattedPhone || undefined,
-        email: email || undefined,
+      const savedPerson = normalizePersonRecord({
+        id: data.user.id,
+        tenantId: data.user.organizationId,
+        firstName: params.firstName.trim(),
+        lastName: params.lastName.trim(),
+        email: data.user.email,
+        phoneE164: data.user.phoneE164,
+        groupName: params.groupName || 'General Congregation',
+        autoCheckinOptedIn: params.autoCheckinOptedIn ?? true,
         status: 'member',
-        homeCellGroup: groupName || 'General Congregation',
-        groupName: groupName || 'General Congregation',
-        autoCheckinOptedIn: true,
-        consecutiveAbsences: 0,
-      }),
-    })
-      .then(async (res) => {
-        if (res.ok) {
-          const savedPerson = normalizePersonRecord(await res.json());
-          setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
-          const updatedUser = { ...newUser, memberId: savedPerson.id };
-          setCurrentUser(updatedUser);
-          try {
-            localStorage.setItem('ekklesphere_user', JSON.stringify(updatedUser));
-          } catch {
-            // ignore
-          }
-        }
-      })
-      .catch((err) => console.error('Failed to persist registered member:', err));
+      });
+      setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
 
-    login(newUser);
-    showToast(`Welcome to ${systemSettings.churchName || 'Church'}, ${firstName}!`);
-    return newUser;
+      const authUser = buildAuthUserFromServer(
+        data.user,
+        data.token,
+        data.organization?.name
+      );
+      login(authUser);
+      showToast(`Welcome to ${data.organization?.name || systemSettings.churchName || 'Ekklesphere'}, ${params.firstName.trim()}!`);
+      return { ok: true };
+    } catch {
+      const msg = 'Unable to reach the registration server. Please try again.';
+      showToast(msg);
+      return { ok: false, error: msg, code: 'NETWORK_ERROR' };
+    }
   };
 
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
@@ -1074,65 +1145,67 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
-        const email = fbUser.email || '';
-        const matchedMember = members.find(
-          (m) => (m.email || '').toLowerCase() === email.trim().toLowerCase()
-        );
-        const name =
-          fbUser.displayName ||
-          (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : '') ||
-          email.split('@')[0] ||
-          'Church Member';
-        const initials =
-          name
-            .split(' ')
-            .filter(Boolean)
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase() || 'CM';
+    let active = true;
 
-        const role = resolveUserRoleForEmail(email, matchedMember);
+    // 1. Validate stored JWT against backend (/api/auth/me) so expired or tampered tokens fail closed
+    const storedToken =
+      typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null;
+    if (storedToken) {
+      fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${storedToken}` },
+      })
+        .then(async (res) => {
+          if (!active) return;
+          if (!res.ok) {
+            localStorage.removeItem('ekklesphere_token');
+            localStorage.removeItem('ekklesphere_user');
+            setCurrentUser(null);
+            return;
+          }
+          const data = await res.json();
+          if (data?.user && active) {
+            const hydrated = buildAuthUserFromServer(
+              {
+                id: data.user.id,
+                email: data.user.email,
+                name: data.user.name,
+                role: data.user.role,
+                organizationId: data.organizationId || data.user.organization_id,
+                isCreator: data.isCreator,
+              },
+              storedToken
+            );
+            setCurrentUser(hydrated);
+            localStorage.setItem('ekklesphere_user', JSON.stringify(hydrated));
+          }
+        })
+        .catch(() => {});
+    } else if (currentUser) {
+      // Zero-trust rule: never trust a cached user object without a verifiable Bearer token
+      try {
+        localStorage.removeItem('ekklesphere_user');
+      } catch {}
+      setCurrentUser(null);
+    }
 
-        const gUser: AuthUser = {
-          id: fbUser.uid,
-          name,
-          email,
-          role,
-          avatar: fbUser.photoURL || undefined,
-          initials,
-          memberId: matchedMember?.id,
-          title:
-            role === 'admin'
-              ? 'Administrator / Executive Pastor'
-              : role === 'usher'
-              ? 'Door Steward / Usher'
-              : matchedMember?.groupName
-              ? `Member (${matchedMember.groupName})`
-              : 'Congregation Member',
-          campusName: systemSettings.campusName || 'Main Campus',
-          permissions:
-            role === 'admin'
-              ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
-              : role === 'usher'
-              ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
-              : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
-        };
+    // 2. Listen for Supabase OAuth redirects / auth state changes and exchange for backend JWT
+    if (!supabaseBrowserClient) {
+      return () => {
+        active = false;
+      };
+    }
 
-        setCurrentUser(gUser);
-        setGoogleAuthError(null);
-        try {
-          localStorage.setItem('ekklesphere_user', JSON.stringify(gUser));
-        } catch {
-          // ignore
-        }
+    const { data: authSub } = supabaseBrowserClient.auth.onAuthStateChange((_event, session) => {
+      if (active && session?.access_token) {
+        void exchangeSupabaseAccessToken(session.access_token);
       }
     });
 
-    return () => unsubscribe();
-  }, [members, systemSettings.campusName]);
+    return () => {
+      active = false;
+      authSub?.subscription?.unsubscribe();
+    };
+  }, []);
 
   const [churchGroups, setChurchGroups] = useState<ChurchGroup[]>(() => {
     try {
@@ -2550,6 +2623,152 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`Thank you! GHS ${amountGhs} given to ${fund} via ${method}.`);
   };
 
+  const activeWallOrgKey = currentUser?.organization_id || currentUser?.tenant_id || 'default';
+  const [churchWallPosts, setChurchWallPosts] = useState<ChurchWallPost[]>(() => {
+    try {
+      const saved = localStorage.getItem(`ekklesphere_church_wall_${activeWallOrgKey}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  const persistWallCache = (posts: ChurchWallPost[]) => {
+    try {
+      localStorage.setItem(`ekklesphere_church_wall_${activeWallOrgKey}`, JSON.stringify(posts));
+    } catch {
+      // ignore
+    }
+  };
+
+  const refreshChurchWallPosts = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch('/api/church-wall', {
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.posts)) {
+          setChurchWallPosts(data.posts);
+          persistWallCache(data.posts);
+        }
+      }
+    } catch {
+      // keep cached posts when offline
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser?.token) {
+      refreshChurchWallPosts();
+    }
+  }, [currentUser?.id, currentUser?.organization_id]);
+
+  const addChurchWallPost = async (input: {
+    message: string;
+    category?: 'birthday' | 'testimony' | 'celebration';
+    targetMemberId?: string;
+    targetMemberName?: string;
+  }): Promise<ChurchWallPost> => {
+    const cleanMessage = input.message.trim();
+    const authorName = currentUser?.name || 'Church Member';
+    const fallbackPost: ChurchWallPost = {
+      id: `wall-${Date.now()}`,
+      organizationId: activeWallOrgKey,
+      authorId: currentUser?.memberId || currentUser?.id || 'member',
+      authorName,
+      authorInitials:
+        currentUser?.initials ||
+        authorName
+          .split(' ')
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((p) => p[0]?.toUpperCase() || '')
+          .join('') ||
+        'MB',
+      authorAvatar: currentUser?.avatar,
+      category: input.category || 'birthday',
+      message: cleanMessage,
+      targetMemberId: input.targetMemberId,
+      targetMemberName: input.targetMemberName,
+      createdAt: new Date().toISOString(),
+      amens: [],
+    };
+
+    let createdPost = fallbackPost;
+    try {
+      const res = await fetch('/api/church-wall', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          message: cleanMessage,
+          category: input.category || 'birthday',
+          targetMemberId: input.targetMemberId,
+          targetMemberName: input.targetMemberName,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.post) {
+          createdPost = {
+            ...data.post,
+            authorAvatar: data.post.authorAvatar || currentUser?.avatar,
+          };
+        }
+      }
+    } catch {
+      // fallback to local post when offline
+    }
+
+    setChurchWallPosts((prev) => {
+      const next = [createdPost, ...prev.filter((p) => p.id !== createdPost.id)];
+      persistWallCache(next);
+      return next;
+    });
+    showToast('Birthday celebration shared to the Church Wall!');
+    return createdPost;
+  };
+
+  const toggleChurchWallAmen = async (postId: string) => {
+    const actorId = currentUser?.id || currentUser?.memberId || 'member';
+    setChurchWallPosts((prev) => {
+      const next = prev.map((post) => {
+        if (post.id !== postId) return post;
+        const already = post.amens.includes(actorId);
+        return {
+          ...post,
+          amens: already ? post.amens.filter((id) => id !== actorId) : [...post.amens, actorId],
+        };
+      });
+      persistWallCache(next);
+      return next;
+    });
+
+    try {
+      const res = await fetch(`/api/church-wall/${encodeURIComponent(postId)}/amen`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.post) {
+          setChurchWallPosts((prev) => {
+            const next = prev.map((p) => (p.id === postId ? { ...p, amens: data.post.amens } : p));
+            persistWallCache(next);
+            return next;
+          });
+        }
+      }
+    } catch {
+      // optimistic local reaction already applied
+    }
+  };
+
   const resolveFollowupTask = (taskId: string, outcome: string) => {
     setFollowupTasks((prev) =>
       prev.map((t) =>
@@ -2724,6 +2943,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         toggleRsvp,
         donations,
         submitDonation,
+        churchWallPosts,
+        refreshChurchWallPosts,
+        addChurchWallPost,
+        toggleChurchWallAmen,
         auditLogs,
         toastMessage,
         showToast,

@@ -8,7 +8,7 @@ import { UnifiedAuthScreen } from './components/auth/UnifiedAuthScreen';
 
 import { AppHeader } from './components/navigation/AppHeader';
 import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
-import { LandingPage } from './components/landing/LandingPage';
+import { ChurchHomePage } from './components/home/ChurchHomePage';
 import { CreatorsPanel } from './components/creator/CreatorsPanel';
 
 const EkklesphereMain: React.FC = () => {
@@ -20,11 +20,7 @@ const EkklesphereMain: React.FC = () => {
       Boolean(currentUser) &&
       (currentUser?.role === 'super_admin' ||
         currentUser?.role === 'creator' ||
-        Boolean(currentUser?.is_creator) ||
-        Boolean(
-          import.meta.env.VITE_CREATOR_EMAIL &&
-            currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
-        ));
+        Boolean(currentUser?.is_creator));
 
     if (!isCreatorAllowed) {
       return (
@@ -56,16 +52,16 @@ const EkklesphereMain: React.FC = () => {
     );
   }
 
-  // If Public Landing Page view is active
-  if (viewMode === 'landing') {
+  // Public / Member Church Home route (/home or ?church=slug)
+  if (viewMode === 'home') {
     return (
-      <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#F8F9FD] dark:bg-[#0A0A18] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
-        <LandingPage />
+      <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors duration-200">
+        <ChurchHomePage />
         {toastMessage && (
           <div
             role="status"
             aria-live="polite"
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-[#1D1B3A] text-[#1D1B3A] dark:text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-xl z-50 animate-in fade-in slide-in-from-bottom-2 border border-slate-200 dark:border-white/10 flex items-center gap-2"
+            className="fixed bottom-20 min-[760px]:bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-[#15221D] text-[#16221D] dark:text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-xl z-50 border border-black/10 dark:border-white/15 flex items-center gap-2"
           >
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span>{toastMessage}</span>

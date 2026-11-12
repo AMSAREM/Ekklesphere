@@ -11,12 +11,12 @@ export { validateOrganizationId, expressOrganizationMiddleware, type Organizatio
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.SUPABASE_URL ||
-  "https://sdijgiznzxvlklorvcvi.supabase.co";
+  "";
 
 const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
-  "sb_publishable_IOTky2JHZSEzrvWHrOP5mw_ZD2nMpfC";
+  "";
 
 /**
  * Polyfilled NextResponse implementation matching Next.js specifications.
@@ -128,52 +128,52 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
     },
   });
 
-  const supabase = createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({
-            request: {
-              headers: requestHeaders,
-            },
-          });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
-      },
-    },
-  );
-
-  // 1. Authenticate user session
+  // 1. Authenticate user session (only when Supabase URL & key are configured)
   let userId: string | null = null;
   let userClaimOrgId: string | null = null;
   let userRole: string | null = null;
   let isSuperAdmin = false;
 
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      userId = user.id;
-      userClaimOrgId =
-        (user.app_metadata?.organization_id as string) ||
-        (user.app_metadata?.org_id as string) ||
-        (user.user_metadata?.organization_id as string) ||
-        null;
-      userRole =
-        (user.app_metadata?.role as string) ||
-        (user.user_metadata?.role as string) ||
-        'member';
-      isSuperAdmin = Boolean(user.app_metadata?.is_super_admin);
+  if (supabaseUrl && supabaseKey) {
+    const supabase = createServerClient(
+      supabaseUrl,
+      supabaseKey,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+            supabaseResponse = NextResponse.next({
+              request: {
+                headers: requestHeaders,
+              },
+            });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              supabaseResponse.cookies.set(name, value, options)
+            );
+          },
+        },
+      },
+    );
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        userId = user.id;
+        userClaimOrgId =
+          (user.app_metadata?.organization_id as string) ||
+          (user.app_metadata?.org_id as string) ||
+          null;
+        userRole =
+          (user.app_metadata?.role as string) ||
+          'member';
+        isSuperAdmin = Boolean(user.app_metadata?.is_super_admin || user.app_metadata?.creator);
+      }
+    } catch (err) {
+      console.warn("[Supabase Middleware] Session verification error:", err);
     }
-  } catch (err) {
-    console.warn("[Supabase Middleware] Session verification error:", err);
   }
 
   type NextOrgSource = 'header' | 'query' | 'cookie' | 'jwt_claim' | 'default' | 'none';
@@ -181,18 +181,10 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
   let resolvedOrgId: string | null = extracted.id;
   let orgSource: NextOrgSource = extracted.source;
 
-  // Fallback to user's JWT claim if not explicitly provided in request
+  // Fallback strictly to verified user app_metadata JWT claim (never user_metadata or hardcoded org)
   if (!resolvedOrgId && userClaimOrgId && validateOrganizationId(userClaimOrgId)) {
     resolvedOrgId = userClaimOrgId;
     orgSource = 'jwt_claim';
-  }
-
-  // Fallback for development / pilot if none set
-  if (!resolvedOrgId) {
-    // Default Pilot: Accra Central Church UUID
-    const defaultOrgId = "e0000000-0000-0000-0000-000000000001";
-    resolvedOrgId = defaultOrgId;
-    orgSource = 'default';
   }
 
   // 3. Security Claim Verification

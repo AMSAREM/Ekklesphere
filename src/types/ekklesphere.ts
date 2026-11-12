@@ -15,6 +15,7 @@ export interface AuthUser {
   name: string;
   email: string;
   role: UserRole;
+  verifiedRole?: UserRole;
   avatar?: string;
   initials: string;
   title: string;
@@ -27,6 +28,13 @@ export interface AuthUser {
   permissions: string[];
   token?: string;
   is_creator?: boolean;
+}
+
+export interface AuthActionResult {
+  ok: boolean;
+  error?: string;
+  code?: string;
+  retryAfterSeconds?: number;
 }
 
 export type SignalKind =
@@ -374,7 +382,7 @@ export interface ChurchGroup {
 // CREATOR PLATFORM: TENANTS & LICENSES TYPES
 // ==========================================
 
-export type AppViewMode = 'landing' | 'app' | 'creator';
+export type AppViewMode = 'home' | 'app' | 'creator';
 
 export type LicenseTier = 'grace_starter' | 'ministry_pro' | 'cathedral_enterprise';
 export type TenantStatus = 'active' | 'trial' | 'suspended' | 'maintenance' | 'archived';
@@ -689,6 +697,17 @@ export interface LandingPageConfig {
   };
 }
 
-
-
-
+export interface ChurchWallPost {
+  id: string;
+  organizationId: string;
+  authorId: string;
+  authorName: string;
+  authorInitials: string;
+  authorAvatar?: string;
+  category: 'birthday' | 'testimony' | 'celebration';
+  message: string;
+  targetMemberId?: string;
+  targetMemberName?: string;
+  createdAt: string;
+  amens: string[];
+}

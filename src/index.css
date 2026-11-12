@@ -101,3 +101,39 @@ body::-webkit-scrollbar {
   height: 0;
 }
 
+/* Public Church Home theme tokens, typography & accessibility helpers */
+:root {
+  --deep: #102A22;
+  --bg: #FAF8F4;
+  --text: #16221D;
+}
+
+.dark {
+  --deep: #0B1D17;
+  --bg: #0E1714;
+  --text: #F1F5F2;
+}
+
+.font-display {
+  font-family: 'Fraunces', Georgia, serif;
+}
+
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+.church-home-root :is(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--brand, #D97706);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .church-home-root *,
+  .church-home-root *::before,
+  .church-home-root *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

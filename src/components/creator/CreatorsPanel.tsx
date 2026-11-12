@@ -262,18 +262,14 @@ const DEFAULT_ALERTS: ConsoleAlert[] = [];
 const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [];
 
 export const CreatorsPanel: React.FC = () => {
-  const { currentUser, setViewMode, showToast, logout } = useEkklesphere();
+  const { currentUser, login, setViewMode, showToast, logout } = useEkklesphere();
 
-  // Authentication Guard: allows verified creator and super_admin login with no bypass
+  // Authentication Guard: strictly allows verified creator and super_admin claims (zero env/client bypass)
   const isAuthorized =
     Boolean(currentUser) &&
     (currentUser?.role === 'super_admin' ||
       currentUser?.role === 'creator' ||
-      Boolean(currentUser?.is_creator) ||
-      Boolean(
-        import.meta.env.VITE_CREATOR_EMAIL &&
-          currentUser?.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
-      ));
+      Boolean(currentUser?.is_creator));
 
   // Active Console Navigation Tab (All 12 Modules including Creator Profile & Sign Out)
   type ConsoleTab =
@@ -433,10 +429,40 @@ export const CreatorsPanel: React.FC = () => {
     notes: '',
   });
 
-  // Profile & Sign Out State
+  // Profile, Credentials & Sign Out State
   const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
   const [isTokenCopied, setIsTokenCopied] = useState(false);
   const [isRefreshingToken, setIsRefreshingToken] = useState(false);
+  const [isSavingCredentials, setIsSavingCredentials] = useState(false);
+  const [credentialStorageMeta, setCredentialStorageMeta] = useState<{
+    source: 'supabase' | 'env_or_memory';
+    envSecretsConfigured: {
+      email: boolean;
+      password: boolean;
+      username: boolean;
+      phone: boolean;
+      name: boolean;
+      bootstrapSecret: boolean;
+    };
+  }>({
+    source: 'env_or_memory',
+    envSecretsConfigured: {
+      email: false,
+      password: false,
+      username: false,
+      phone: false,
+      name: false,
+      bootstrapSecret: false,
+    },
+  });
+  const [creatorCredForm, setCreatorCredForm] = useState({
+    name: currentUser?.name || '',
+    email: currentUser?.email || '',
+    username: currentUser?.username || '',
+    phone: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
 
   const handleCreatorSignOut = () => {
     logout();
@@ -447,18 +473,19 @@ export const CreatorsPanel: React.FC = () => {
   const handleRefreshToken = async () => {
     setIsRefreshingToken(true);
     try {
+      const headers = await getConsoleHeaders();
       const res = await fetch('/api/auth/creator-session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform',
-          role: 'creator',
-        }),
+        headers,
+        body: JSON.stringify({}),
       });
       if (res.ok) {
         const data = await res.json();
         if (data?.token) {
           localStorage.setItem('ekklesphere_token', data.token);
+          if (currentUser) {
+            login({ ...currentUser, token: data.token });
+          }
           showToast('Creator session token successfully renewed!');
         }
       } else {
@@ -468,6 +495,83 @@ export const CreatorsPanel: React.FC = () => {
       showToast('Network error renewing token.');
     } finally {
       setIsRefreshingToken(false);
+    }
+  };
+
+  const handleSaveCreatorCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!creatorCredForm.email.trim()) {
+      showToast('Creator email address is required.');
+      return;
+    }
+    if (creatorCredForm.newPassword && creatorCredForm.newPassword.length < 8) {
+      showToast('New password must be at least 8 characters long.');
+      return;
+    }
+    if (creatorCredForm.newPassword !== creatorCredForm.confirmPassword) {
+      showToast('New password and confirmation do not match.');
+      return;
+    }
+
+    setIsSavingCredentials(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch('/api/console/profile/credentials', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          name: creatorCredForm.name.trim() || 'Platform Creator',
+          email: creatorCredForm.email.trim().toLowerCase(),
+          username: creatorCredForm.username.trim().toLowerCase(),
+          phone: creatorCredForm.phone.trim(),
+          ...(creatorCredForm.newPassword ? { password: creatorCredForm.newPassword } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.message || 'Failed to update Creator credentials.');
+        return;
+      }
+
+      if (data?.token && currentUser) {
+        const nextName = data.user?.name || creatorCredForm.name.trim() || currentUser.name;
+        const initials =
+          nextName
+            .split(' ')
+            .filter(Boolean)
+            .map((p: string) => p[0])
+            .slice(0, 2)
+            .join('')
+            .toUpperCase() || currentUser.initials;
+        login({
+          ...currentUser,
+          name: nextName,
+          email: data.user?.email || creatorCredForm.email.trim().toLowerCase(),
+          username: data.user?.username,
+          initials,
+          token: data.token,
+        });
+      }
+
+      setCreatorCredForm((prev) => ({
+        ...prev,
+        phone: data.user?.phoneE164 || prev.phone,
+        newPassword: '',
+        confirmPassword: '',
+      }));
+      setCredentialStorageMeta((prev) => ({
+        ...prev,
+        source: data.persistedInSupabase ? 'supabase' : prev.source,
+      }));
+      showToast(
+        data.persistedInSupabase
+          ? 'Creator credentials saved directly to Supabase database!'
+          : 'Creator credentials updated in active server credential store.'
+      );
+    } catch {
+      showToast('Network error saving Creator credentials.');
+    } finally {
+      setIsSavingCredentials(false);
     }
   };
 
@@ -540,6 +644,7 @@ export const CreatorsPanel: React.FC = () => {
           auditRes,
           cmsRes,
           grantsRes,
+          credRes,
         ] = await Promise.all([
           safeFetchJson('/api/console/dashboard', headers),
           safeFetchJson('/api/console/organisations', headers),
@@ -553,6 +658,7 @@ export const CreatorsPanel: React.FC = () => {
           safeFetchJson(`/api/console/audit-log?limit=${auditLimit}`, headers),
           safeFetchJson('/api/console/landing-cms', headers),
           safeFetchJson('/api/console/support-grants', headers),
+          safeFetchJson('/api/console/profile/credentials', headers),
         ]);
 
         if (dashRes) setSummary(dashRes);
@@ -582,6 +688,27 @@ export const CreatorsPanel: React.FC = () => {
         if (grantsRes?.supportGrants) {
           const active = grantsRes.supportGrants.find((g: SupportGrantSession) => g.active);
           setActiveSupportGrant(active || null);
+        }
+        if (credRes?.credentials) {
+          const c = credRes.credentials;
+          setCredentialStorageMeta({
+            source: c.source || 'env_or_memory',
+            envSecretsConfigured: c.envSecretsConfigured || {
+              email: false,
+              password: false,
+              username: false,
+              phone: false,
+              name: false,
+              bootstrapSecret: false,
+            },
+          });
+          setCreatorCredForm((prev) => ({
+            ...prev,
+            name: c.name || prev.name,
+            email: c.email || prev.email,
+            username: c.username || prev.username,
+            phone: c.phoneE164 || prev.phone,
+          }));
         }
       } catch (err: any) {
         console.error('[Console] Data fetch failed:', err);
@@ -3298,7 +3425,7 @@ export const CreatorsPanel: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setViewMode('landing')}
+                  onClick={() => setViewMode('home')}
                   className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
                 >
                   <Eye className="w-3.5 h-3.5" /> Preview
@@ -3465,7 +3592,7 @@ export const CreatorsPanel: React.FC = () => {
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                       <span className="flex items-center gap-1 text-slate-800 dark:text-slate-200 font-medium">
                         <Mail className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-300" />
-                        <span>{currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}</span>
+                        <span>{currentUser?.email || creatorCredForm.email || 'Authenticated Creator'}</span>
                       </span>
                       <span>•</span>
                       <span className="text-indigo-600 dark:text-indigo-200 font-bold">
@@ -3550,7 +3677,7 @@ export const CreatorsPanel: React.FC = () => {
                   <span className="truncate">Supabase SQL</span>
                 </div>
                 <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 block">
-                  + Firebase Auth
+                  + Supabase Auth
                 </span>
               </div>
             </div>
@@ -3589,7 +3716,7 @@ export const CreatorsPanel: React.FC = () => {
                       ? `${currentUser.token.slice(0, 16)}••••••••••••••••••••••••••••••••••••${currentUser.token.slice(-12)}`
                       : (typeof window !== 'undefined' && localStorage.getItem('ekklesphere_token'))
                       ? `${(localStorage.getItem('ekklesphere_token') || '').slice(0, 16)}••••••••••••••••••••••••••••••••••••${(localStorage.getItem('ekklesphere_token') || '').slice(-12)}`
-                      : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.active-creator-session-bearer-verified'}
+                      : 'No verified session token loaded — click Renew Token to issue a new session JWT.'}
                   </div>
                   <button
                     type="button"
@@ -3597,7 +3724,11 @@ export const CreatorsPanel: React.FC = () => {
                       const t =
                         currentUser?.token ||
                         (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : '') ||
-                        'active-creator-session-bearer-verified';
+                        '';
+                      if (!t) {
+                        showToast('No verified session token available to copy.');
+                        return;
+                      }
                       if (typeof window !== 'undefined') {
                         navigator.clipboard.writeText(t);
                         setIsTokenCopied(true);
@@ -3647,6 +3778,154 @@ export const CreatorsPanel: React.FC = () => {
               </div>
             </div>
 
+            {/* Creator Credentials & Secrets Management Card */}
+            <form
+              onSubmit={handleSaveCreatorCredentials}
+              className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs space-y-5"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-white/5">
+                <div>
+                  <h3 className="text-base font-extrabold text-[#1D1B3A] dark:text-white flex items-center gap-2">
+                    <KeyRound className="w-5 h-5 text-[#6D5CF2]" />
+                    <span>Creator Credentials &amp; Secrets</span>
+                  </h3>
+                  <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-0.5">
+                    Update all Platform Creator login identifiers and password directly in the encrypted Supabase{' '}
+                    <code className="font-mono text-[11px] text-[#6D5CF2]">account_credentials</code> table or supply them via server secrets.
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold border border-emerald-200 dark:border-emerald-500/30 shrink-0">
+                  <Database className="w-3.5 h-3.5" />
+                  <span>
+                    {credentialStorageMeta.source === 'supabase'
+                      ? 'Persisted in Supabase DB'
+                      : 'Active Server Store'}
+                  </span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    Display Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={creatorCredForm.name}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="Platform Creator"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    Creator Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={creatorCredForm.email}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, email: e.target.value }))}
+                    placeholder="creator@yourchurch.org"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    Username Alias (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={creatorCredForm.username}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, username: e.target.value }))}
+                    placeholder="founder"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    Phone Number Alias (Optional)
+                  </label>
+                  <input
+                    type="tel"
+                    value={creatorCredForm.phone}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="+233240000000"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    New Password (Leave blank to keep current)
+                  </label>
+                  <input
+                    type="password"
+                    minLength={8}
+                    value={creatorCredForm.newPassword}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, newPassword: e.target.value }))}
+                    placeholder="Minimum 8 characters"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    minLength={8}
+                    value={creatorCredForm.confirmPassword}
+                    onChange={(e) => setCreatorCredForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                    placeholder="Re-enter new password"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold text-[#1D1B3A] dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 space-y-2">
+                <div className="text-[11px] font-extrabold text-[#1D1B3A] dark:text-white">
+                  Server Environment Secrets Status (Never prefixed with VITE_)
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] font-mono">
+                  {[
+                    { key: 'CREATOR_EMAIL', set: credentialStorageMeta.envSecretsConfigured.email },
+                    { key: 'CREATOR_PASSWORD', set: credentialStorageMeta.envSecretsConfigured.password },
+                    { key: 'CREATOR_USERNAME', set: credentialStorageMeta.envSecretsConfigured.username },
+                    { key: 'CREATOR_PHONE', set: credentialStorageMeta.envSecretsConfigured.phone },
+                    { key: 'CREATOR_NAME', set: credentialStorageMeta.envSecretsConfigured.name },
+                    { key: 'CREATOR_BOOTSTRAP_SECRET', set: credentialStorageMeta.envSecretsConfigured.bootstrapSecret },
+                  ].map((item) => (
+                    <div
+                      key={item.key}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#141430] border border-slate-200/70 dark:border-white/10"
+                    >
+                      <span className="truncate text-slate-700 dark:text-slate-200">{item.key}</span>
+                      <span className={item.set ? 'text-emerald-600 font-bold' : 'text-slate-400'}>
+                        {item.set ? 'SET' : 'UNSET'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={isSavingCredentials}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-extrabold shadow-md shadow-[#6D5CF2]/25 transition-all cursor-pointer disabled:opacity-60"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingCredentials ? 'Saving...' : 'Save Creator Credentials to Database'}</span>
+                </button>
+              </div>
+            </form>
+
             {/* Platform Cross-Portal Switcher Card */}
             <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1">
@@ -3687,7 +3966,7 @@ export const CreatorsPanel: React.FC = () => {
 
               <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t border-rose-200/80 dark:border-rose-900/40">
                 <div className="text-xs text-rose-800 dark:text-rose-300 font-semibold">
-                  Account: <strong>{currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}</strong>
+                  Account: <strong>{currentUser?.email || creatorCredForm.email || 'Authenticated Creator'}</strong>
                 </div>
 
                 <button
@@ -4584,7 +4863,7 @@ export const CreatorsPanel: React.FC = () => {
             <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 text-[11px] space-y-1">
               <div className="text-[#666A86] dark:text-[#8D92B5]">Active Creator Account:</div>
               <div className="font-bold text-[#1D1B3A] dark:text-white truncate">
-                {currentUser?.email || (import.meta.env.VITE_CREATOR_EMAIL as string) || 'creator@ekklesphere.platform'}
+                {currentUser?.email || creatorCredForm.email || 'Authenticated Creator'}
               </div>
             </div>
 

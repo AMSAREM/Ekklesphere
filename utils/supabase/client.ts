@@ -1,17 +1,19 @@
 import { createBrowserClient } from "@supabase/ssr";
 
 const supabaseUrl =
-  (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_SUPABASE_URL) ||
+  (typeof process !== "undefined" && (process.env?.NEXT_PUBLIC_SUPABASE_URL || process.env?.SUPABASE_URL)) ||
   (typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_SUPABASE_URL) ||
-  "https://sdijgiznzxvlklorvcvi.supabase.co";
+  "";
 
 const supabaseKey =
-  (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ||
+  (typeof process !== "undefined" &&
+    (process.env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env?.SUPABASE_ANON_KEY)) ||
   (typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_SUPABASE_ANON_KEY) ||
-  "sb_publishable_IOTky2JHZSEzrvWHrOP5mw_ZD2nMpfC";
+  "";
 
-export const createClient = () =>
-  createBrowserClient(
-    supabaseUrl!,
-    supabaseKey!,
-  );
+export const createClient = () => {
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error("Supabase URL and public anon key environment variables are required.");
+  }
+  return createBrowserClient(supabaseUrl, supabaseKey);
+};

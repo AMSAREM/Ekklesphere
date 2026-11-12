@@ -151,44 +151,55 @@ export const AppHeader: React.FC = () => {
 
         {/* Right: Minimal controls & clean switcher */}
         <div className="flex items-center gap-1 sm:gap-1.5">
-          {/* Quick Role Switcher (Compact & Minimal) */}
+          {/* Quick Role Preview Switcher (Verified Admin / Pastor / Creator ONLY) */}
+          {currentUser &&
+            (currentUser.is_creator ||
+              ['creator', 'super_admin', 'admin', 'pastor'].includes(
+                currentUser.verifiedRole || currentUser.role
+              )) && (
+              <div className="hidden lg:flex items-center p-0.5 rounded-lg bg-[#F2F2FA] dark:bg-white/5 border border-[#E9EBF5] dark:border-white/10 text-xs">
+                {roles.map((item) => {
+                  const isActive =
+                    currentUser.role === item.role ||
+                    (item.role === 'admin' && (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
+                    (item.role === 'member' && currentUser.role === 'group_leader');
+                  return (
+                    <button
+                      key={item.role}
+                      onClick={() => {
+                        switchUserRole(item.role);
+                        showToast(`Switched to ${item.label} view`);
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] dark:text-[#8C7DFF] shadow-2xs font-bold'
+                          : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
+                      }`}
+                      title={`Switch to ${item.label} Portal`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+          {/* Authenticated Church Home Preview Button */}
           {currentUser && (
-            <div className="hidden lg:flex items-center p-0.5 rounded-lg bg-[#F2F2FA] dark:bg-white/5 border border-[#E9EBF5] dark:border-white/10 text-xs">
-              {roles.map((item) => {
-                const isActive =
-                  currentUser.role === item.role ||
-                  (item.role === 'admin' && (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
-                  (item.role === 'member' && currentUser.role === 'group_leader');
-                return (
-                  <button
-                    key={item.role}
-                    onClick={() => {
-                      switchUserRole(item.role);
-                      showToast(`Switched to ${item.label} view`);
-                    }}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] dark:text-[#8C7DFF] shadow-2xs font-bold'
-                        : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white'
-                    }`}
-                    title={`Switch to ${item.label} Portal`}
-                  >
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
+            <button
+              onClick={() => setViewMode('home')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-all cursor-pointer"
+              title="Open Church Public Home Screen (/home)"
+            >
+              <span>Church Home</span>
+            </button>
           )}
 
           {/* Platform Creator Quick Access Button */}
           {currentUser &&
             (currentUser.role === 'super_admin' ||
               currentUser.role === 'creator' ||
-              Boolean(currentUser.is_creator) ||
-              Boolean(
-                import.meta.env.VITE_CREATOR_EMAIL &&
-                  currentUser.email?.toLowerCase() === (import.meta.env.VITE_CREATOR_EMAIL as string).toLowerCase()
-              )) && (
+              Boolean(currentUser.is_creator)) && (
               <button
                 onClick={() => setViewMode(viewMode === 'creator' ? 'app' : 'creator')}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -332,40 +343,45 @@ export const AppHeader: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Switch Role Quick Links (Available in all roles!) */}
-                  <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
-                    <div className="text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] uppercase px-2 py-1 tracking-wider">
-                      Switch Active Portal
+                  {/* Switch Role Quick Links (Verified Admin / Pastor / Creator ONLY) */}
+                  {(currentUser.is_creator ||
+                    ['creator', 'super_admin', 'admin', 'pastor'].includes(
+                      currentUser.verifiedRole || currentUser.role
+                    )) && (
+                    <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <div className="text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] uppercase px-2 py-1 tracking-wider">
+                        Switch Active Portal
+                      </div>
+                      {roles.map((item) => {
+                        const isActive =
+                          currentUser.role === item.role ||
+                          (item.role === 'admin' &&
+                            (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
+                          (item.role === 'member' && currentUser.role === 'group_leader');
+                        return (
+                          <button
+                            key={item.role}
+                            onClick={() => {
+                              switchUserRole(item.role);
+                              setIsUserMenuOpen(false);
+                              showToast(`Switched to ${item.label} mode`);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-indigo-50 dark:bg-indigo-950/50 text-[#6D5CF2] dark:text-[#8C7DFF]'
+                                : 'text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              {item.icon}
+                              <span>{item.label} Portal</span>
+                            </div>
+                            {isActive && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
+                          </button>
+                        );
+                      })}
                     </div>
-                    {roles.map((item) => {
-                      const isActive =
-                        currentUser.role === item.role ||
-                        (item.role === 'admin' &&
-                          (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
-                        (item.role === 'member' && currentUser.role === 'group_leader');
-                      return (
-                        <button
-                          key={item.role}
-                          onClick={() => {
-                            switchUserRole(item.role);
-                            setIsUserMenuOpen(false);
-                            showToast(`Switched to ${item.label} mode`);
-                          }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                            isActive
-                              ? 'bg-indigo-50 dark:bg-indigo-950/50 text-[#6D5CF2] dark:text-[#8C7DFF]'
-                              : 'text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            {item.icon}
-                            <span>{item.label} Portal</span>
-                          </div>
-                          {isActive && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  )}
 
                   {/* System Settings & Help Options */}
                   <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">

@@ -3,6 +3,7 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import { timingSafeEqual } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -29,6 +30,7 @@ import {
 } from './src/server/platformStore.ts';
 import { requireActiveLicense } from './src/server/licenseMiddleware.ts';
 import { consoleRouter } from './src/server/consoleRouter.ts';
+import { churchWallStore } from './src/server/churchWallStore.ts';
 
 dotenv.config();
 
@@ -90,6 +92,120 @@ const attendanceLimiter = rateLimit({
   message: { error: 'rate_limit_exceeded', message: 'Too many attendance submissions. Please wait.' },
 });
 
+// Strict rate limiters for authentication endpoints (brute-force & credential stuffing protection)
+const authIpBurstLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `ip:${getClientIpKey(req)}`,
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: {
+    error: 'rate_limit_exceeded',
+    code: 'AUTH_IP_RATE_LIMITED',
+    message: 'Too many authentication attempts from this network. Please wait 15 minutes and try again.',
+  },
+});
+
+const authLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const rawId =
+      typeof req.body?.identifier === 'string'
+        ? req.body.identifier
+        : typeof req.body?.email === 'string'
+        ? req.body.email
+        : '';
+    return `${getClientIpKey(req)}:${rawId.trim().toLowerCase().slice(0, 80) || 'anon'}`;
+  },
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: {
+    error: 'rate_limit_exceeded',
+    code: 'AUTH_RATE_LIMITED',
+    message: 'Too many failed sign-in attempts. Please wait 15 minutes before retrying.',
+  },
+});
+
+const authRegisterLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `reg:${getClientIpKey(req)}`,
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: {
+    error: 'rate_limit_exceeded',
+    code: 'REGISTER_RATE_LIMITED',
+    message: 'Too many registration attempts from this IP. Please wait before trying again.',
+  },
+});
+
+const authSessionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `sess:${getClientIpKey(req)}`,
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: {
+    error: 'rate_limit_exceeded',
+    code: 'SESSION_RATE_LIMITED',
+    message: 'Too many session exchange requests. Please wait a moment.',
+  },
+});
+
+const loginRequestSchema = z
+  .object({
+    identifier: z.string().trim().min(1).max(160).optional(),
+    email: z.string().trim().min(1).max(160).optional(),
+    password: z.string().min(1, 'Password is required.').max(256),
+  })
+  .refine((data) => Boolean((data.identifier || data.email || '').trim()), {
+    message: 'Email, phone, or username is required.',
+  });
+
+const registerRequestSchema = z
+  .object({
+    firstName: z.string().trim().min(1, 'First name is required.').max(80),
+    lastName: z.string().trim().min(1, 'Last name is required.').max(80),
+    email: z.string().trim().email('Invalid email address.').max(160).optional().or(z.literal('')),
+    phone: z.string().trim().min(7).max(32).optional().or(z.literal('')),
+    password: z.string().min(8, 'Password must be at least 8 characters long.').max(256),
+    organizationId: z.string().trim().uuid().optional(),
+    organizationSlug: z.string().trim().max(80).optional(),
+    groupName: z.string().trim().max(120).optional(),
+    autoCheckinOptedIn: z.boolean().optional(),
+  })
+  .refine((data) => Boolean((data.email || '').trim() || (data.phone || '').trim()), {
+    message: 'Either a valid email address or phone number is required.',
+  });
+
+const bootstrapCreatorSchema = z.object({
+  email: z.string().trim().email('A valid Creator email address is required.').max(160),
+  password: z.string().min(8, 'Creator password must be at least 8 characters long.').max(256),
+  username: z.string().trim().min(2).max(80).optional().or(z.literal('')),
+  phone: z.string().trim().min(7).max(32).optional().or(z.literal('')),
+  name: z.string().trim().min(2).max(160).optional().or(z.literal('')),
+  organizationId: z.string().trim().uuid().optional().or(z.literal('')),
+  bootstrapSecret: z.string().trim().min(1).max(256).optional(),
+});
+
 /**
  * PHASE 0 REMEDIATION (#2 & #4):
  * Universal Role-Based Access Control (RBAC) & Zero-Trust Organization Scope middleware.
@@ -115,12 +231,121 @@ app.all('/api/dev/preview-session', (_req: Request, res: Response) => {
 });
 
 // =========================================================================
-// PHASE 0 (#1): HARDENED SESSION TOKEN EXCHANGE & DEV PREVIEW HELPER
+// HARDENED AUTHENTICATION ROUTES (CREDENTIAL LOGIN, SIGNUP & TOKEN EXCHANGE)
 // =========================================================================
+
+// Password-verified credential sign-in. Role and organization ALWAYS come from DB, never req.body.
+app.post(
+  '/api/auth/login',
+  authIpBurstLimiter,
+  authLoginLimiter,
+  async (req: Request, res: Response) => {
+    const parsed = loginRequestSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'invalid_input',
+        code: 'INVALID_CREDENTIALS',
+        message: parsed.error.issues[0]?.message || 'Identifier and password are required.',
+      });
+    }
+
+    const identifier = (parsed.data.identifier || parsed.data.email || '').trim();
+    const ipAddress = getClientIpKey(req);
+
+    try {
+      const result = await platformStore.authenticateWithCredentials(
+        identifier,
+        parsed.data.password,
+        ipAddress
+      );
+      return res.status(200).json({
+        token: result.token,
+        role: result.user.role,
+        organizationId: result.user.organizationId,
+        isCreator: result.user.isCreator,
+        user: {
+          ...result.user,
+          organization_id: result.user.organizationId,
+          tenant_id: result.user.organizationId,
+          is_creator: result.user.isCreator,
+        },
+        organization: result.organization,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 401;
+      if (status === 429 && err?.retryAfterSeconds) {
+        res.setHeader('Retry-After', String(err.retryAfterSeconds));
+      }
+      return res.status(status).json({
+        error: status === 429 ? 'rate_limit_exceeded' : err?.code === 'ACCOUNT_INACTIVE' ? 'forbidden' : 'unauthorized',
+        code: err?.code || 'INVALID_CREDENTIALS',
+        message: err?.message || 'Authentication failed.',
+        retryAfterSeconds: err?.retryAfterSeconds,
+      });
+    }
+  }
+);
+
+// Public congregation member self-registration. ALWAYS forces role: 'member'.
+app.post('/api/auth/register', authRegisterLimiter, async (req: Request, res: Response) => {
+  const parsed = registerRequestSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'invalid_input',
+      code: 'INVALID_INPUT',
+      message: parsed.error.issues[0]?.message || 'Invalid registration fields provided.',
+    });
+  }
+
+  const ipAddress = getClientIpKey(req);
+
+  try {
+    const result = await platformStore.registerMemberWithCredentials({
+      firstName: parsed.data.firstName,
+      lastName: parsed.data.lastName,
+      email: parsed.data.email || undefined,
+      phone: parsed.data.phone || undefined,
+      password: parsed.data.password,
+      organizationId: parsed.data.organizationId,
+      organizationSlug: parsed.data.organizationSlug,
+      groupName: parsed.data.groupName,
+      autoCheckinOptedIn: parsed.data.autoCheckinOptedIn,
+      ipAddress,
+    });
+
+    return res.status(201).json({
+      token: result.token,
+      role: 'member',
+      organizationId: result.user.organizationId,
+      isCreator: false,
+      user: {
+        ...result.user,
+        organization_id: result.user.organizationId,
+        tenant_id: result.user.organizationId,
+        is_creator: false,
+      },
+      organization: result.organization,
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: status === 409 ? 'conflict' : 'registration_failed',
+      code: err?.code || 'REGISTRATION_FAILED',
+      message: err?.message || 'Could not complete member registration.',
+    });
+  }
+});
+
+app.post('/api/auth/logout', authSessionLimiter, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    message: 'Session cleared successfully.',
+  });
+});
 
 // Token refresh/exchange endpoint: requires a verified Bearer token (Supabase JWT or session JWT).
 // Role and organization_id ALWAYS come from the verified identity / database membership — NEVER from req.body.
-app.post('/api/auth/token', requireUser, async (req: Request, res: Response) => {
+app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
   const verifiedUser = req.user!;
   const creator = isCreatorClaim(verifiedUser);
 
@@ -170,7 +395,7 @@ app.post('/api/auth/token', requireUser, async (req: Request, res: Response) => 
 });
 
 // Dedicated Creator Console session exchange/refresh endpoint (Strictly authenticated, no bypass)
-app.post('/api/auth/creator-session', requireUser, async (req: Request, res: Response) => {
+app.post('/api/auth/creator-session', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
   const verifiedUser = req.user!;
   if (!isCreatorClaim(verifiedUser)) {
     return res.status(403).json({
@@ -210,6 +435,102 @@ app.post('/api/auth/creator-session', requireUser, async (req: Request, res: Res
     },
   });
 });
+
+// Secret-gated Creator bootstrap/rotation endpoint (fail-closed unless CREATOR_BOOTSTRAP_SECRET is configured and matches)
+app.post(
+  '/api/auth/bootstrap-creator',
+  authIpBurstLimiter,
+  authRegisterLimiter,
+  async (req: Request, res: Response) => {
+    const expectedSecret = (process.env.CREATOR_BOOTSTRAP_SECRET || '').trim();
+    if (!expectedSecret || expectedSecret.length < 8) {
+      return res.status(403).json({
+        error: 'bootstrap_disabled',
+        code: 'BOOTSTRAP_SECRET_UNCONFIGURED',
+        message:
+          'Creator bootstrap endpoint is disabled until CREATOR_BOOTSTRAP_SECRET (min 8 characters) is set in server secrets.',
+      });
+    }
+
+    const parsed = bootstrapCreatorSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'invalid_input',
+        code: 'INVALID_INPUT',
+        message: parsed.error.issues[0]?.message || 'Valid creator bootstrap fields are required.',
+      });
+    }
+
+    const headerSecretRaw = req.headers['x-creator-bootstrap-secret'];
+    const providedSecret = (
+      (typeof headerSecretRaw === 'string' ? headerSecretRaw : '') ||
+      parsed.data.bootstrapSecret ||
+      ''
+    ).trim();
+
+    const expectedBuf = Buffer.from(expectedSecret, 'utf8');
+    const providedBuf = Buffer.from(providedSecret, 'utf8');
+    const matches =
+      providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf);
+
+    if (!matches) {
+      return res.status(403).json({
+        error: 'forbidden',
+        code: 'INVALID_BOOTSTRAP_SECRET',
+        message: 'Invalid CREATOR_BOOTSTRAP_SECRET.',
+      });
+    }
+
+    try {
+      const result = await platformStore.upsertCreatorCredentials({
+        email: parsed.data.email,
+        password: parsed.data.password,
+        username: parsed.data.username || undefined,
+        phone: parsed.data.phone || undefined,
+        name: parsed.data.name || undefined,
+        organizationId: parsed.data.organizationId || undefined,
+      });
+
+      await platformStore.appendAuditLog({
+        actorId: result.user.id,
+        actorEmail: result.user.email,
+        actorRole: 'creator',
+        action: 'creator.credentials_bootstrapped',
+        targetType: 'account_credentials',
+        targetId: result.user.id,
+        metadata: {
+          email: result.user.email,
+          username: result.user.username || null,
+          hasPhone: Boolean(result.user.phoneE164),
+          persistedInSupabase: result.persistedInSupabase,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      return res.status(200).json({
+        success: true,
+        token: result.token,
+        role: result.user.role,
+        organizationId: result.user.organizationId,
+        isCreator: true,
+        persistedInSupabase: result.persistedInSupabase,
+        user: {
+          ...result.user,
+          organization_id: result.user.organizationId,
+          tenant_id: result.user.organizationId,
+          is_creator: true,
+        },
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      return res.status(status).json({
+        error: 'bootstrap_failed',
+        code: err?.code || 'BOOTSTRAP_FAILED',
+        message: err?.message || 'Failed to bootstrap creator credentials.',
+      });
+    }
+  }
+);
 
 // =========================================================================
 // PUBLIC LANDING CMS & ORG-ADMIN SELF-USAGE ENDPOINTS
@@ -1660,6 +1981,63 @@ app.delete(
   async (req: Request, res: Response) => {
     await platformStore.deleteMember(req.organizationId!, req.params.id);
     return res.status(200).json({ success: true });
+  }
+);
+
+// =========================================================================
+// CONGREGATION CHURCH WALL & BIRTHDAY CELEBRATION POSTS (ORG SCOPED)
+// =========================================================================
+
+const createWallPostSchema = z.object({
+  message: z.string().trim().min(1, 'Please enter a birthday greeting or celebration note').max(600),
+  category: z.enum(['birthday', 'testimony', 'celebration']).optional().default('birthday'),
+  targetMemberId: z.string().trim().max(120).optional(),
+  targetMemberName: z.string().trim().max(120).optional(),
+});
+
+app.get(
+  '/api/church-wall',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    const posts = await churchWallStore.listPosts(req.organizationId!);
+    return res.status(200).json({ posts });
+  }
+);
+
+app.post(
+  '/api/church-wall',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    const parsed = createWallPostSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid church wall post.',
+      });
+    }
+
+    const post = await churchWallStore.createPost(req.organizationId!, {
+      authorId: req.user!.id,
+      authorName: req.user!.name || req.user!.email || 'Church Member',
+      category: parsed.data.category,
+      message: parsed.data.message,
+      targetMemberId: parsed.data.targetMemberId,
+      targetMemberName: parsed.data.targetMemberName,
+    });
+
+    return res.status(201).json({ post });
+  }
+);
+
+app.post(
+  '/api/church-wall/:id/amen',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    const post = await churchWallStore.toggleAmen(req.organizationId!, req.params.id, req.user!.id);
+    if (!post) {
+      return res.status(404).json({ error: 'not_found', message: 'Church wall post not found.' });
+    }
+    return res.status(200).json({ post });
   }
 );
 

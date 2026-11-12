@@ -125,14 +125,15 @@ export const WeeklyAttendanceTrendChart: React.FC<WeeklyAttendanceTrendChartProp
 
   useEffect(() => {
     let cancelled = false;
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-user-role': currentUser?.role || 'admin',
-      'x-user-id': currentUser?.id || 'admin-client',
-      'x-user-email': currentUser?.email || 'admin@church.org',
+      Authorization: `Bearer ${token}`,
     };
-    if (currentUser?.tenant_id) headers['x-tenant-id'] = currentUser.tenant_id;
-    if (currentUser?.campus_id) headers['x-campus-id'] = currentUser.campus_id;
 
     fetch('/api/attendance/weekly-trend', { headers })
       .then((res) => (res.ok ? (res.json() as Promise<ThirtyDayAttendanceTrendResponse>) : null))

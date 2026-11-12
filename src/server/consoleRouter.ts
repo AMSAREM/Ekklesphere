@@ -1046,3 +1046,79 @@ consoleRouter.post('/migrations/tenants', async (req: Request, res: Response) =>
 
   return res.status(200).json({ success: true, report });
 });
+
+// 16. Platform Creator Profile & Credentials Management (Database + Secrets)
+const CreatorCredentialsUpdateSchema = z.object({
+  email: z.string().trim().email('Valid email address is required.').max(160),
+  username: z.string().trim().max(80).optional().or(z.literal('')),
+  phone: z.string().trim().max(32).optional().or(z.literal('')),
+  name: z.string().trim().min(2, 'Full name is required.').max(160),
+  password: z.string().min(8, 'New password must be at least 8 characters.').max(256).optional().or(z.literal('')),
+  organizationId: z.string().trim().uuid().optional().or(z.literal('')),
+});
+
+consoleRouter.get('/profile/credentials', async (req: Request, res: Response) => {
+  const summary = await platformStore.getCreatorProfileSummary(req.user!.id, req.user!.email);
+  return res.status(200).json({
+    credentials: summary,
+  });
+});
+
+consoleRouter.patch('/profile/credentials', async (req: Request, res: Response) => {
+  const parsed = CreatorCredentialsUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'validation_error',
+      message: parsed.error.issues[0]?.message || 'Invalid creator credential fields.',
+      details: parsed.error.flatten(),
+    });
+  }
+
+  try {
+    const result = await platformStore.upsertCreatorCredentials({
+      id: req.user!.id,
+      email: parsed.data.email,
+      username: parsed.data.username ?? undefined,
+      phone: parsed.data.phone ?? undefined,
+      name: parsed.data.name,
+      password: parsed.data.password || undefined,
+      organizationId: parsed.data.organizationId || undefined,
+    });
+
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: result.user.email,
+      actorRole: req.user!.role,
+      action: 'creator.credentials_updated',
+      targetType: 'account_credentials',
+      targetId: result.user.id,
+      metadata: {
+        email: result.user.email,
+        username: result.user.username || null,
+        hasPhone: Boolean(result.user.phoneE164),
+        passwordRotated: Boolean(parsed.data.password && parsed.data.password.trim().length > 0),
+        persistedInSupabase: result.persistedInSupabase,
+      },
+      ipAddress: clientIp(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      token: result.token,
+      persistedInSupabase: result.persistedInSupabase,
+      user: {
+        ...result.user,
+        organization_id: result.user.organizationId,
+        tenant_id: result.user.organizationId,
+        is_creator: true,
+      },
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: 'credentials_update_failed',
+      code: err?.code || 'CREDENTIALS_UPDATE_FAILED',
+      message: err?.message || 'Could not update Creator credentials.',
+    });
+  }
+});

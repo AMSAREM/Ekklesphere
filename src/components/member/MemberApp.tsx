@@ -29,11 +29,16 @@ import {
   Bell,
   Sparkles,
   Send,
+  Cake,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
 import { DigitalMemberCard, getCanonicalMemberId } from './DigitalMemberCard';
 import { MemberAttendanceStreakCard } from './MemberAttendanceStreakCard';
+import {
+  MemberBirthdaysModule,
+  formatBirthdayMonthDay,
+} from './MemberBirthdaysModule';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -75,6 +80,9 @@ export const MemberApp: React.FC = () => {
     isPushSubscribed,
     requestPushPermission,
     sendTestPushNotification,
+    churchWallPosts,
+    addChurchWallPost,
+    toggleChurchWallAmen,
   } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
@@ -158,6 +166,38 @@ export const MemberApp: React.FC = () => {
     }
     if (currentUser) {
       setCurrentUser({ ...currentUser, avatar: dataUrl });
+    }
+  };
+
+  const [localDobOverride, setLocalDobOverride] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`ekklesphere_member_dob_${targetPersonId}`) || '';
+    } catch {
+      return '';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setLocalDobOverride(localStorage.getItem(`ekklesphere_member_dob_${targetPersonId}`) || '');
+    } catch {
+      setLocalDobOverride('');
+    }
+  }, [targetPersonId]);
+
+  const memberDateOfBirth = matchedMember?.dateOfBirth || localDobOverride || undefined;
+
+  const handleSaveMemberBirthday = async (dateOfBirth: string) => {
+    try {
+      localStorage.setItem(`ekklesphere_member_dob_${targetPersonId}`, dateOfBirth);
+    } catch {
+      // ignore storage quota
+    }
+    setLocalDobOverride(dateOfBirth);
+    if (matchedMember) {
+      await updateMember(matchedMember.id, { dateOfBirth });
+    } else {
+      showToast('Birthday saved to your member profile!');
     }
   };
 
@@ -501,6 +541,22 @@ export const MemberApp: React.FC = () => {
           </div>
         </div>
 
+        {/* Congratulatory Birthday Card when signed-in member logs in on their birthday */}
+        <MemberBirthdaysModule
+          section="greeting"
+          memberId={targetPersonId}
+          memberFirstName={memberFirstName}
+          memberDisplayName={memberDisplayName}
+          memberDateOfBirth={memberDateOfBirth}
+          churchName={systemSettings.churchName}
+          members={members}
+          wallPosts={churchWallPosts}
+          currentActorId={currentUser?.id || targetPersonId}
+          onShareToWall={addChurchWallPost}
+          onToggleAmen={toggleChurchWallAmen}
+          onSaveBirthdayDate={handleSaveMemberBirthday}
+        />
+
         {/* Real Hardware GPS Proximity & Live Attendance Card */}
         <div className="bg-[#6C5CE7] dark:bg-[#7D6DF8] text-white rounded-3xl p-5 sm:p-6 shadow-md transition-all space-y-4">
           {!isPremiseConfigured ? (
@@ -796,6 +852,22 @@ export const MemberApp: React.FC = () => {
           isCheckedInToday={isCheckedIn}
           attendanceRecords={attendanceRecords}
           onShowToast={showToast}
+        />
+
+        {/* Birthdays & Church Wall Module */}
+        <MemberBirthdaysModule
+          section="wall"
+          memberId={targetPersonId}
+          memberFirstName={memberFirstName}
+          memberDisplayName={memberDisplayName}
+          memberDateOfBirth={memberDateOfBirth}
+          churchName={systemSettings.churchName}
+          members={members}
+          wallPosts={churchWallPosts}
+          currentActorId={currentUser?.id || targetPersonId}
+          onShareToWall={addChurchWallPost}
+          onToggleAmen={toggleChurchWallAmen}
+          onSaveBirthdayDate={handleSaveMemberBirthday}
         />
 
         {/* Web Push Notification Card (Brief Section 3.3 & 6.2) */}
@@ -1413,9 +1485,18 @@ export const MemberApp: React.FC = () => {
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Registered Email</span>
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberEmail}</b>
               </div>
-              <div className="flex justify-between py-1.5">
+              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Fellowship Group</span>
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberGroup}</b>
+              </div>
+              <div className="flex justify-between py-1.5">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] inline-flex items-center gap-1">
+                  <Cake className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                  <span>Birthday</span>
+                </span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  {memberDateOfBirth ? formatBirthdayMonthDay(memberDateOfBirth) : 'Not set'}
+                </b>
               </div>
             </div>
 
@@ -1438,32 +1519,39 @@ export const MemberApp: React.FC = () => {
             </div>
           </div>
 
-          {/* Portal Switcher */}
+          {/* Account Session & Verified Portal Switcher */}
           <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">
-            <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide flex items-center gap-1.5">
-              <Crosshair className="w-3.5 h-3.5 text-[#6D5CF2]" />
-              <span>Switch Active Portal</span>
-            </h2>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => switchUserRole('admin')}
-                className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <LayoutDashboard className="w-4 h-4 text-[#6D5CF2]" />
-                <span>Pastor Admin</span>
-              </button>
-              <button
-                onClick={() => switchUserRole('usher')}
-                className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <QrCode className="w-4 h-4 text-amber-500" />
-                <span>Door Usher</span>
-              </button>
-            </div>
+            {(currentUser?.is_creator ||
+              ['creator', 'super_admin', 'admin', 'pastor'].includes(
+                currentUser?.verifiedRole || currentUser?.role || 'member'
+              )) && (
+              <>
+                <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide flex items-center gap-1.5">
+                  <Crosshair className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  <span>Switch Active Portal</span>
+                </h2>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => switchUserRole('admin')}
+                    className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <LayoutDashboard className="w-4 h-4 text-[#6D5CF2]" />
+                    <span>Pastor Admin</span>
+                  </button>
+                  <button
+                    onClick={() => switchUserRole('usher')}
+                    className="py-2.5 px-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <QrCode className="w-4 h-4 text-amber-500" />
+                    <span>Door Usher</span>
+                  </button>
+                </div>
+              </>
+            )}
 
             <button
               onClick={() => logout()}
-              className="w-full py-2.5 rounded-2xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 flex items-center justify-center gap-2 transition-colors"
+              className="w-full py-2.5 rounded-2xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
               <span>Sign Out from Ekklesphere</span>
