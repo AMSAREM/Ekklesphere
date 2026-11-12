@@ -352,4 +352,152 @@ describe('Authentication, Brute-Force Lockout, Rate Limiting & RLS Hardening', (
     expect(newPassLogin.body.isCreator).toBe(true);
     expect(newPassLogin.body.user.email).toBe('owner.rotated@ekklesphere.test');
   });
+
+  it('provisions a tenant-isolated 14-day trial organisation on /api/auth/register-organisation and rejects duplicates', async () => {
+    const signupRes = await request(app)
+      .post('/api/auth/register-organisation')
+      .set('x-forwarded-for', '198.51.100.141')
+      .send({
+        organizationName: 'Living Grace Tabernacle',
+        orgType: 'church',
+        city: 'Kumasi',
+        country: 'Ghana',
+        adminFirstName: 'Kwame',
+        adminLastName: 'Osei',
+        email: 'kwame.osei@livinggrace.org',
+        phone: '0247778899',
+        password: 'GraceTrialPassword#2026',
+        trialPlan: 'grace_starter',
+        role: 'creator',
+        isCreator: true,
+        is_creator: true,
+      });
+
+    expect(signupRes.status).toBe(201);
+    expect(signupRes.body.role).toBe('admin');
+    expect(signupRes.body.isCreator).toBe(false);
+    expect(signupRes.body.user.is_creator).toBe(false);
+    expect(signupRes.body.organizationId).toBeTypeOf('string');
+    expect(signupRes.body.organizationId).not.toBe(TEST_ANCHOR_ORGANIZATION_ID);
+    expect(signupRes.body.organization.name).toBe('Living Grace Tabernacle');
+    expect(signupRes.body.evaluation.status).toBe('trial');
+    expect(signupRes.body.evaluation.daysRemaining).toBeGreaterThanOrEqual(14);
+    expect(signupRes.body.evaluation.daysRemaining).toBeLessThanOrEqual(15);
+    expect(signupRes.body.license.tier).toBe('grace_starter');
+    expect(signupRes.body.token).toBeTypeOf('string');
+    expect(JSON.stringify(signupRes.body)).not.toContain('passwordHash');
+
+    // Duplicate email rejected with 409 and does not create another session
+    const dupRes = await request(app)
+      .post('/api/auth/register-organisation')
+      .set('x-forwarded-for', '198.51.100.142')
+      .send({
+        organizationName: 'Living Grace Clone',
+        adminFirstName: 'Kwame',
+        adminLastName: 'Osei',
+        email: 'kwame.osei@livinggrace.org',
+        password: 'GraceTrialPassword#2026',
+      });
+    expect(dupRes.status).toBe(409);
+
+    // Tenant admin cannot access Creator console
+    const consoleRes = await request(app)
+      .get('/api/console/dashboard')
+      .set('Authorization', `Bearer ${signupRes.body.token}`);
+    expect(consoleRes.status).toBe(403);
+
+    // Tenant admin cannot read members belonging to a different organisation
+    const crossTenantRes = await request(app)
+      .get(`/api/members?organizationId=${TEST_ANCHOR_ORGANIZATION_ID}`)
+      .set('Authorization', `Bearer ${signupRes.body.token}`);
+    expect(crossTenantRes.status).toBe(403);
+  });
+
+  it('allows an organisation admin to inspect plans and upgrade from trial to active Cathedral Enterprise', async () => {
+    const signupRes = await request(app)
+      .post('/api/auth/register-organisation')
+      .set('x-forwarded-for', '198.51.100.151')
+      .send({
+        organizationName: 'Bethlehem Chapel International',
+        orgType: 'church',
+        city: 'Accra',
+        country: 'Ghana',
+        adminFirstName: 'Abena',
+        adminLastName: 'Boateng',
+        email: 'abena@bethlehemchapel.org',
+        password: 'ChapelUpgradePass#2026',
+        trialPlan: 'grace_starter',
+      });
+
+    expect(signupRes.status).toBe(201);
+    const adminToken = signupRes.body.token as string;
+    const orgId = signupRes.body.organizationId as string;
+
+    // Member role must be forbidden from viewing plans or upgrading organisation
+    const memberReg = await request(app)
+      .post('/api/auth/register')
+      .set('x-forwarded-for', '198.51.100.152')
+      .send({
+        firstName: 'Regular',
+        lastName: 'Parishioner',
+        email: 'parishioner.upgrade@example.org',
+        password: 'MemberPass#2026',
+        organizationId: orgId,
+      });
+    expect(memberReg.status).toBe(201);
+
+    const memberPlansRes = await request(app)
+      .get('/api/organisation/plans')
+      .set('Authorization', `Bearer ${memberReg.body.token}`);
+    expect(memberPlansRes.status).toBe(403);
+
+    const memberUpgradeRes = await request(app)
+      .post('/api/organisation/upgrade')
+      .set('Authorization', `Bearer ${memberReg.body.token}`)
+      .send({
+        tier: 'cathedral_enterprise',
+        billingCycle: 'annual',
+        paymentMethod: 'momo',
+        paymentReference: 'MOMO-UNAUTH-1',
+      });
+    expect(memberUpgradeRes.status).toBe(403);
+
+    // Admin reads plans & current trial status
+    const plansBefore = await request(app)
+      .get('/api/organisation/plans')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(plansBefore.status).toBe(200);
+    expect(plansBefore.body.plans.length).toBeGreaterThanOrEqual(3);
+    expect(plansBefore.body.evaluation.status).toBe('trial');
+    expect(plansBefore.body.evaluation.tier).toBe('grace_starter');
+
+    // Admin upgrades to Cathedral Enterprise (annual via MoMo)
+    const upgradeRes = await request(app)
+      .post('/api/organisation/upgrade')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        tier: 'cathedral_enterprise',
+        billingCycle: 'annual',
+        paymentMethod: 'momo',
+        paymentReference: 'MOMO-UPGRADE-2026',
+        currency: 'USD',
+      });
+    expect(upgradeRes.status).toBe(200);
+    expect(upgradeRes.body.success).toBe(true);
+    expect(upgradeRes.body.evaluation.status).toBe('active');
+    expect(upgradeRes.body.evaluation.tier).toBe('cathedral_enterprise');
+    expect(upgradeRes.body.evaluation.seatsLimit).toBe(2500);
+    expect(upgradeRes.body.evaluation.sitesLimit).toBe(15);
+    expect(upgradeRes.body.payment.reference).toBe('MOMO-UPGRADE-2026');
+
+    // Subsequent plans fetch reflects upgraded state
+    const plansAfter = await request(app)
+      .get('/api/organisation/plans')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(plansAfter.status).toBe(200);
+    expect(plansAfter.body.evaluation.status).toBe('active');
+    expect(plansAfter.body.evaluation.tier).toBe('cathedral_enterprise');
+    expect(plansAfter.body.evaluation.seatsLimit).toBe(2500);
+  });
 });
+

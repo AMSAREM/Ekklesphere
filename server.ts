@@ -206,6 +206,30 @@ const bootstrapCreatorSchema = z.object({
   bootstrapSecret: z.string().trim().min(1).max(256).optional(),
 });
 
+const registerOrganisationSchema = z.object({
+  organizationName: z.string().trim().min(2, 'Organisation / church name is required.').max(160),
+  orgType: z.enum(['church', 'organisation']).default('church'),
+  city: z.string().trim().max(100).optional(),
+  country: z.string().trim().max(100).optional(),
+  adminFirstName: z.string().trim().min(1, 'Administrator first name is required.').max(80),
+  adminLastName: z.string().trim().min(1, 'Administrator last name is required.').max(80),
+  email: z.string().trim().email('A valid email address is required.').max(160),
+  phone: z.string().trim().max(32).optional().or(z.literal('')),
+  password: z.string().min(8, 'Password must be at least 8 characters long.').max(256),
+  trialPlan: z
+    .enum(['grace_starter', 'ministry_pro', 'cathedral_enterprise'])
+    .default('grace_starter'),
+});
+
+const upgradeOrganisationSchema = z.object({
+  tier: z.enum(['grace_starter', 'ministry_pro', 'cathedral_enterprise']),
+  billingCycle: z.enum(['monthly', 'annual', 'lifetime']).default('annual'),
+  paymentMethod: z.enum(['momo', 'bank', 'cash']).default('momo'),
+  paymentReference: z.string().trim().min(2, 'Payment reference is required.').max(160),
+  currency: z.enum(['GHS', 'USD']).default('USD'),
+  notes: z.string().trim().max(400).optional(),
+});
+
 /**
  * PHASE 0 REMEDIATION (#2 & #4):
  * Universal Role-Based Access Control (RBAC) & Zero-Trust Organization Scope middleware.
@@ -335,6 +359,64 @@ app.post('/api/auth/register', authRegisterLimiter, async (req: Request, res: Re
     });
   }
 });
+
+// Public Self-Service Organisation / Church Sign-Up (14-Day Free Trial, Upgrade Anytime Later)
+app.post(
+  '/api/auth/register-organisation',
+  authIpBurstLimiter,
+  authRegisterLimiter,
+  async (req: Request, res: Response) => {
+    const parsed = registerOrganisationSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'invalid_input',
+        code: 'INVALID_INPUT',
+        message: parsed.error.issues[0]?.message || 'Invalid organisation sign-up fields provided.',
+      });
+    }
+
+    const ipAddress = getClientIpKey(req);
+
+    try {
+      const result = await platformStore.registerOrganisationTrial({
+        organizationName: parsed.data.organizationName,
+        orgType: parsed.data.orgType,
+        city: parsed.data.city,
+        country: parsed.data.country,
+        adminFirstName: parsed.data.adminFirstName,
+        adminLastName: parsed.data.adminLastName,
+        email: parsed.data.email,
+        phone: parsed.data.phone || undefined,
+        password: parsed.data.password,
+        trialPlan: parsed.data.trialPlan,
+        ipAddress,
+      });
+
+      return res.status(201).json({
+        token: result.token,
+        role: result.user.role,
+        organizationId: result.organization.id,
+        isCreator: false,
+        user: {
+          ...result.user,
+          organization_id: result.organization.id,
+          tenant_id: result.organization.id,
+          is_creator: false,
+        },
+        organization: result.organization,
+        license: result.license,
+        evaluation: result.evaluation,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      return res.status(status).json({
+        error: status === 409 ? 'conflict' : 'organisation_registration_failed',
+        code: err?.code || 'ORGANISATION_REGISTRATION_FAILED',
+        message: err?.message || 'Could not complete organisation trial sign-up.',
+      });
+    }
+  }
+);
 
 app.post('/api/auth/logout', authSessionLimiter, (_req: Request, res: Response) => {
   return res.status(200).json({
@@ -567,6 +649,89 @@ app.get(
       usageDaily,
       announcements,
     });
+  }
+);
+
+// Organisation Subscription Plans & Self-Service Plan Upgrade (Accessible even during expired trial so orgs can upgrade)
+app.get(
+  '/api/organisation/plans',
+  requireAuthRole('admin', 'pastor', 'finance', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    const orgId = req.organizationId!;
+    const [plans, evaluation, organization, license] = await Promise.all([
+      platformStore.listPlans(),
+      platformStore.evaluateOrganizationLicense(orgId),
+      platformStore.getOrganisationById(orgId),
+      platformStore.getLatestLicenseForOrg(orgId),
+    ]);
+
+    return res.status(200).json({
+      organizationId: orgId,
+      plans: plans.filter((p) => p.isActive),
+      evaluation,
+      organization,
+      license,
+    });
+  }
+);
+
+app.post(
+  '/api/organisation/upgrade',
+  requireAuthRole('admin', 'finance', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    const parsed = upgradeOrganisationSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        code: 'INVALID_UPGRADE_INPUT',
+        message: parsed.error.issues[0]?.message || 'Valid plan tier and payment reference are required.',
+      });
+    }
+
+    const orgId = req.organizationId!;
+    try {
+      const result = await platformStore.upgradeOrganisationSubscription({
+        organizationId: orgId,
+        tier: parsed.data.tier,
+        billingCycle: parsed.data.billingCycle,
+        paymentMethod: parsed.data.paymentMethod,
+        paymentReference: parsed.data.paymentReference,
+        currency: parsed.data.currency,
+        notes: parsed.data.notes,
+        actorId: req.user?.id,
+        actorEmail: req.user?.email || 'org-admin@ekklesphere.church',
+      });
+
+      await platformStore.appendAuditLog({
+        organizationId: orgId,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || 'org-admin@ekklesphere.church',
+        actorRole: req.user?.role || 'admin',
+        action: 'license.self_upgraded',
+        targetType: 'license',
+        targetId: result.license.id,
+        metadata: {
+          tier: parsed.data.tier,
+          billingCycle: parsed.data.billingCycle,
+          paymentMethod: parsed.data.paymentMethod,
+          paymentReference: parsed.data.paymentReference,
+          amountUSD: result.payment.amount,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      return res.status(status).json({
+        error: 'upgrade_failed',
+        code: err?.code || 'UPGRADE_FAILED',
+        message: err?.message || 'Could not complete plan upgrade.',
+      });
+    }
   }
 );
 

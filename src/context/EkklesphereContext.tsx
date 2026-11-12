@@ -121,6 +121,18 @@ interface EkklesphereContextType {
     autoCheckinOptedIn?: boolean;
     organizationSlug?: string;
   }) => Promise<AuthActionResult>;
+  registerOrganisation: (params: {
+    organizationName: string;
+    orgType?: 'church' | 'organisation';
+    city?: string;
+    country?: string;
+    adminFirstName: string;
+    adminLastName: string;
+    email: string;
+    phone?: string;
+    password: string;
+    trialPlan?: LicenseTier;
+  }) => Promise<AuthActionResult>;
   logout: () => void;
   switchUserRole: (role: UserRole) => void;
 
@@ -1065,6 +1077,97 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       );
       login(authUser);
       showToast(`Welcome to ${data.organization?.name || systemSettings.churchName || 'Ekklesphere'}, ${params.firstName.trim()}!`);
+      return { ok: true };
+    } catch {
+      const msg = 'Unable to reach the registration server. Please try again.';
+      showToast(msg);
+      return { ok: false, error: msg, code: 'NETWORK_ERROR' };
+    }
+  };
+
+  const registerOrganisation = async (params: {
+    organizationName: string;
+    orgType?: 'church' | 'organisation';
+    city?: string;
+    country?: string;
+    adminFirstName: string;
+    adminLastName: string;
+    email: string;
+    phone?: string;
+    password: string;
+    trialPlan?: LicenseTier;
+  }): Promise<AuthActionResult> => {
+    try {
+      const res = await fetch('/api/auth/register-organisation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationName: params.organizationName.trim(),
+          orgType: params.orgType || 'church',
+          city: params.city?.trim() || 'Accra',
+          country: params.country?.trim() || 'Ghana',
+          adminFirstName: params.adminFirstName.trim(),
+          adminLastName: params.adminLastName.trim(),
+          email: params.email.trim().toLowerCase(),
+          phone: params.phone?.trim() || '',
+          password: params.password,
+          trialPlan: params.trialPlan || 'grace_starter',
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.token || !data?.user) {
+        const errorMsg =
+          data?.message || 'Organisation trial sign-up failed. Please verify your details.';
+        showToast(errorMsg);
+        return {
+          ok: false,
+          error: errorMsg,
+          code: data?.code || 'ORGANISATION_REGISTRATION_FAILED',
+        };
+      }
+
+      if (data.organization) {
+        setSystemSettings((prev) => {
+          const nextSettings: SystemSettings = {
+            ...prev,
+            churchName: data.organization.name || params.organizationName.trim(),
+            campusName: data.organization.city
+              ? `${data.organization.city} Main Campus`
+              : prev.campusName || 'Main Campus',
+            seniorPastor: `${params.adminFirstName.trim()} ${params.adminLastName.trim()}`.trim(),
+            contactEmail: data.user.email || params.email.trim().toLowerCase(),
+            contactPhone: data.user.phoneE164 || params.phone?.trim() || prev.contactPhone,
+          };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+          } catch {}
+          return nextSettings;
+        });
+      }
+
+      const founderMember = normalizePersonRecord({
+        id: data.user.id,
+        tenantId: data.user.organizationId,
+        firstName: params.adminFirstName.trim(),
+        lastName: params.adminLastName.trim(),
+        email: data.user.email,
+        phoneE164: data.user.phoneE164,
+        groupName: 'Church Leadership',
+        autoCheckinOptedIn: false,
+        status: 'member',
+      });
+      setMembers([founderMember]);
+
+      const authUser = buildAuthUserFromServer(
+        data.user,
+        data.token,
+        data.organization?.name || params.organizationName.trim()
+      );
+      login(authUser);
+      showToast(
+        `${data.organization?.name || params.organizationName.trim()} 14-day free trial activated! You can upgrade anytime in Settings.`
+      );
       return { ok: true };
     } catch {
       const msg = 'Unable to reach the registration server. Please try again.';
@@ -2857,6 +2960,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         googleAuthError,
         clearGoogleAuthError,
         registerMember,
+        registerOrganisation,
         logout,
         switchUserRole,
         pushPermissionStatus,

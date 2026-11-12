@@ -1,6 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { SystemSettings, ChurchGroup, ChurchGroupCategory, Person } from '../../types/ekklesphere';
+import {
+  SystemSettings,
+  ChurchGroup,
+  ChurchGroupCategory,
+  Person,
+  ConsolePlan,
+  LicenseEvaluationResult,
+  LicenseTier,
+  SystemLicense,
+  BillingCycle,
+  PaymentMethod,
+} from '../../types/ekklesphere';
 import {
   Building2,
   Radio,
@@ -74,7 +85,94 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     currentUser?.role === 'super_admin' ||
     currentUser?.role === 'creator';
 
-  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways' | 'billing'>('general');
+  const [billingPlans, setBillingPlans] = useState<ConsolePlan[]>([]);
+  const [licenseEval, setLicenseEval] = useState<LicenseEvaluationResult | null>(null);
+  const [currentLicense, setCurrentLicense] = useState<SystemLicense | null>(null);
+  const [isLoadingBilling, setIsLoadingBilling] = useState(false);
+  const [isUpgradingPlan, setIsUpgradingPlan] = useState(false);
+  const [upgradeTier, setUpgradeTier] = useState<LicenseTier>('ministry_pro');
+  const [upgradeCycle, setUpgradeCycle] = useState<BillingCycle>('annual');
+  const [upgradeMethod, setUpgradeMethod] = useState<PaymentMethod>('momo');
+  const [upgradeReference, setUpgradeReference] = useState('');
+
+  const loadBillingDetails = useCallback(async () => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token || !isSettingsAdmin) return;
+    setIsLoadingBilling(true);
+    try {
+      const res = await fetch('/api/organisation/plans', {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.plans)) setBillingPlans(data.plans);
+      if (data?.evaluation) {
+        setLicenseEval(data.evaluation);
+        if (data.evaluation.tier) setUpgradeTier(data.evaluation.tier);
+      }
+      if (data?.license) setCurrentLicense(data.license);
+    } catch {
+      // ignore transient network failures
+    } finally {
+      setIsLoadingBilling(false);
+    }
+  }, [currentUser?.token, isSettingsAdmin]);
+
+  useEffect(() => {
+    loadBillingDetails();
+  }, [loadBillingDetails]);
+
+  const handleUpgradePlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) {
+      showToast('Sign in as an organisation administrator to upgrade.');
+      return;
+    }
+    if (!upgradeReference.trim() || upgradeReference.trim().length < 2) {
+      showToast('Enter your payment or transaction reference.');
+      return;
+    }
+
+    setIsUpgradingPlan(true);
+    try {
+      const res = await fetch('/api/organisation/upgrade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          tier: upgradeTier,
+          billingCycle: upgradeCycle,
+          paymentMethod: upgradeMethod,
+          paymentReference: upgradeReference.trim(),
+          currency: 'USD',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Could not process plan upgrade.');
+        return;
+      }
+      if (data?.evaluation) setLicenseEval(data.evaluation);
+      if (data?.license) setCurrentLicense(data.license);
+      setUpgradeReference('');
+      showToast(`Subscription upgraded to ${upgradeTier.replace('_', ' ')}!`);
+    } catch {
+      showToast('Network error upgrading subscription.');
+    } finally {
+      setIsUpgradingPlan(false);
+    }
+  };
   const [formData, setFormData] = useState<SystemSettings>({ ...systemSettings });
   const [hasChanges, setHasChanges] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState<string>('Just now');
@@ -754,6 +852,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('gateways')}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'gateways'
@@ -763,6 +862,30 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         >
           <Send className="w-3.5 h-3.5" />
           <span>SMS & Paystack Gateways</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('billing')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'billing'
+              ? 'bg-[#6D5CF2] text-white shadow-xs'
+              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+          }`}
+        >
+          <CreditCard className="w-3.5 h-3.5" />
+          <span>Plan &amp; Upgrade</span>
+          {licenseEval?.status === 'trial' && (
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                activeTab === 'billing'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+              }`}
+            >
+              Trial
+            </span>
+          )}
         </button>
       </div>
 
@@ -1874,7 +1997,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         )}
 
         {/* Save Bar Footer (for system parameters) */}
-        {activeTab !== 'groups' && (
+        {activeTab !== 'groups' && activeTab !== 'billing' && (
           <div className="p-4 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-4">
             <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
               Last saved: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{lastSavedTime}</span>
@@ -1899,6 +2022,220 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           </div>
         )}
       </form>
+
+      {/* TAB 7: Plan Status, Free Trial Countdown & Self-Service Upgrade */}
+      {activeTab === 'billing' && (
+        <div className="space-y-5 animate-in fade-in duration-200">
+          {/* Current Subscription Banner */}
+          <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              <div>
+                <h3 className="text-base font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                  <CreditCard className="w-5 h-5 text-[#6D5CF2]" />
+                  <span>Organisation Subscription &amp; Trial Status</span>
+                </h3>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                  Start with a 14-day free trial and upgrade your edition or billing cycle anytime without losing church data.
+                </p>
+              </div>
+              {licenseEval && (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wide shrink-0 ${
+                    licenseEval.status === 'active'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                      : licenseEval.status === 'trial'
+                      ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                      : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                  }`}
+                >
+                  {licenseEval.status === 'trial'
+                    ? `Free Trial · ${licenseEval.daysRemaining ?? 0}d left`
+                    : licenseEval.status}
+                </span>
+              )}
+            </div>
+
+            {isLoadingBilling ? (
+              <div className="text-xs text-[#666A86] dark:text-[#A9ACC8] py-4">
+                Loading live subscription limits...
+              </div>
+            ) : licenseEval ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <span className="text-[#666A86] dark:text-[#A9ACC8] block">Current Edition</span>
+                  <strong className="text-sm font-extrabold text-[#1D1B3A] dark:text-white capitalize">
+                    {(licenseEval.tier || 'grace_starter').replace(/_/g, ' ')}
+                  </strong>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <span className="text-[#666A86] dark:text-[#A9ACC8] block">Member Seats</span>
+                  <strong className="text-sm font-extrabold text-[#1D1B3A] dark:text-white">
+                    {licenseEval.seatsUsed} / {licenseEval.seatsLimit}
+                  </strong>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <span className="text-[#666A86] dark:text-[#A9ACC8] block">Campus Sites</span>
+                  <strong className="text-sm font-extrabold text-[#1D1B3A] dark:text-white">
+                    {licenseEval.sitesUsed} / {licenseEval.sitesLimit}
+                  </strong>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <span className="text-[#666A86] dark:text-[#A9ACC8] block">Renewal / Trial End</span>
+                  <strong className="text-sm font-extrabold text-[#1D1B3A] dark:text-white">
+                    {licenseEval.expiresDate || currentLicense?.expiresDate || '—'}
+                  </strong>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                Sign in with an organisation administrator account to view live licensing details.
+              </div>
+            )}
+          </div>
+
+          {/* Self-Service Plan Upgrade Form */}
+          <form
+            onSubmit={handleUpgradePlan}
+            className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-5"
+          >
+            <div>
+              <h4 className="text-sm font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                Upgrade or Activate Paid License
+              </h4>
+              <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                Choose the plan tier that matches your congregation size and record your Mobile Money or Bank payment reference to activate immediately.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              {(billingPlans.length > 0
+                ? billingPlans
+                : [
+                    {
+                      id: 'grace_starter' as LicenseTier,
+                      name: 'Grace Starter',
+                      description: 'Single-campus sanctuaries up to 250 members.',
+                      monthlyCostUSD: 19,
+                      annualCostUSD: 180,
+                      seatsLimit: 250,
+                      sitesLimit: 1,
+                    },
+                    {
+                      id: 'ministry_pro' as LicenseTier,
+                      name: 'Ministry Pro',
+                      description: 'Pastoral care, SMS/Push alerts, BLE beacons & MoMo giving.',
+                      monthlyCostUSD: 49,
+                      annualCostUSD: 480,
+                      seatsLimit: 800,
+                      sitesLimit: 3,
+                    },
+                    {
+                      id: 'cathedral_enterprise' as LicenseTier,
+                      name: 'Cathedral Enterprise',
+                      description: 'Multi-campus governance, custom domains & audit SLA.',
+                      monthlyCostUSD: 119,
+                      annualCostUSD: 1200,
+                      seatsLimit: 2500,
+                      sitesLimit: 15,
+                    },
+                  ]
+              ).map((plan) => {
+                const selected = upgradeTier === plan.id;
+                return (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    onClick={() => setUpgradeTier(plan.id)}
+                    className={`p-4 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+                      selected
+                        ? 'bg-[#EFEDFF]/80 dark:bg-[#24204E] border-[#6D5CF2] shadow-sm'
+                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/50'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-extrabold text-sm text-[#1D1B3A] dark:text-white">
+                          {plan.name}
+                        </span>
+                        {selected && <CheckCircle2 className="w-4 h-4 text-[#6D5CF2] shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                        {plan.description}
+                      </p>
+                    </div>
+                    <div className="pt-2 border-t border-slate-200/60 dark:border-white/10">
+                      <div className="text-sm font-black text-[#6D5CF2] dark:text-[#A594FD]">
+                        ${upgradeCycle === 'monthly' ? plan.monthlyCostUSD : plan.annualCostUSD}{' '}
+                        <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                          / {upgradeCycle === 'monthly' ? 'month' : 'year'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                        Up to {plan.seatsLimit.toLocaleString()} seats · {plan.sitesLimit} campus site(s)
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Billing Cycle
+                </label>
+                <select
+                  value={upgradeCycle}
+                  onChange={(e) => setUpgradeCycle(e.target.value as BillingCycle)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] font-semibold"
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="annual">Annual (Best Value)</option>
+                  <option value="lifetime">Lifetime Sanctuary</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Payment Method
+                </label>
+                <select
+                  value={upgradeMethod}
+                  onChange={(e) => setUpgradeMethod(e.target.value as PaymentMethod)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] font-semibold"
+                >
+                  <option value="momo">Mobile Money (MTN / Telecel / AT)</option>
+                  <option value="bank">Bank Transfer / Card</option>
+                  <option value="cash">Church Office Settlement</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Transaction Reference *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={upgradeReference}
+                  onChange={(e) => setUpgradeReference(e.target.value)}
+                  placeholder="e.g. MOMO-983412 or INV-2026"
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={isUpgradingPlan}
+                className="px-5 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-60 text-white text-xs font-extrabold shadow-md shadow-[#6D5CF2]/25 flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{isUpgradingPlan ? 'Activating Plan...' : 'Upgrade & Activate Plan'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* MODAL 1: Add / Edit Church Group */}
       {isGroupModalOpen && (

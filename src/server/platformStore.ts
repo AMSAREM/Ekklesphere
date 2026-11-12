@@ -692,7 +692,7 @@ class PlatformStore {
 
     const { data: memberRow } = await this.supabase
       .from('members')
-      .select('id, organization_id, role, full_name, first_name, last_name')
+      .select('id, organization_id, role, preferred_name, first_name, last_name')
       .or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ''}`)
       .limit(1)
       .maybeSingle();
@@ -705,7 +705,7 @@ class PlatformStore {
         resolvedRole = mapSupabaseRoleToChurchRole(memberRow.role);
       }
       const dbName =
-        memberRow.full_name ||
+        memberRow.preferred_name ||
         `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim();
       if (dbName) resolvedName = dbName;
     }
@@ -737,7 +737,7 @@ class PlatformStore {
     if (this.supabase) {
       const { data: row } = await this.supabase
         .from('members')
-        .select('organization_id, role, full_name, first_name, last_name')
+        .select('organization_id, role, preferred_name, first_name, last_name')
         .or(
           UUID_REGEX.test(userId)
             ? `user_id.eq.${userId}${cleanEmail ? `,email.ilike.${cleanEmail}` : ''}`
@@ -751,7 +751,7 @@ class PlatformStore {
           organizationId: String(row.organization_id || '').toLowerCase(),
           role: mapSupabaseRoleToChurchRole(row.role),
           name:
-            row.full_name ||
+            row.preferred_name ||
             `${row.first_name || ''} ${row.last_name || ''}`.trim() ||
             undefined,
         };
@@ -874,8 +874,8 @@ class PlatformStore {
         failed_attempts: 0,
         locked_until: null,
       });
-      if (error && (record.isCreator || record.role === 'creator')) {
-        throw new Error(`Failed to persist creator credentials in Supabase: ${error.message}`);
+      if (error) {
+        throw new Error(`Failed to persist account credentials in Supabase: ${error.message}`);
       }
     }
 
@@ -1568,6 +1568,199 @@ class PlatformStore {
         isCreator: false,
       },
       organization,
+      token,
+    };
+  }
+
+  public async registerOrganisationTrial(params: {
+    organizationName: string;
+    orgType?: OrganisationType;
+    city?: string;
+    country?: string;
+    adminFirstName: string;
+    adminLastName: string;
+    email: string;
+    phone?: string;
+    password: string;
+    trialPlan?: LicenseTier;
+    ipAddress?: string;
+  }): Promise<{
+    user: {
+      id: string;
+      email: string;
+      phoneE164?: string;
+      name: string;
+      role: ChurchRole;
+      organizationId: string;
+      isCreator: boolean;
+    };
+    organization: OrganizationRecord;
+    license: SystemLicense | null;
+    evaluation: LicenseEvaluationResult;
+    token: string;
+  }> {
+    const orgName = (params.organizationName || '').trim();
+    const firstName = (params.adminFirstName || '').trim();
+    const lastName = (params.adminLastName || '').trim();
+    const email = (params.email || '').trim().toLowerCase();
+    const rawPhone = (params.phone || '').trim();
+    const password = (params.password || '').trim();
+    const trialPlan: LicenseTier = params.trialPlan || 'grace_starter';
+
+    if (orgName.length < 2) {
+      const err: any = new Error('Organisation or church name must be at least 2 characters.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+    if (!firstName || !lastName) {
+      const err: any = new Error('Administrator first and last name are required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+    if (!email) {
+      const err: any = new Error('Administrator email address is required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+    if (password.length < 8) {
+      const err: any = new Error('Password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+
+    const normalizedPhone = normalizePhone(rawPhone);
+
+    // 1. Check duplicates BEFORE creating org/license to keep onboarding atomic
+    for (const cred of this.userCredentials.values()) {
+      if (cred.email && cred.email.toLowerCase() === email) {
+        const err: any = new Error('An account with this email address already exists. Please sign in instead.');
+        err.code = 'DUPLICATE_CREDENTIAL';
+        err.status = 409;
+        throw err;
+      }
+      if (normalizedPhone && cred.phoneE164 && cred.phoneE164 === normalizedPhone) {
+        const err: any = new Error('An account with this phone number already exists. Please sign in instead.');
+        err.code = 'DUPLICATE_CREDENTIAL';
+        err.status = 409;
+        throw err;
+      }
+    }
+
+    if (this.supabase) {
+      const orFilters: string[] = [`email.ilike.${email}`];
+      if (normalizedPhone) orFilters.push(`phone_e164.eq.${normalizedPhone}`);
+      const { data: existingCred } = await this.supabase
+        .from('account_credentials')
+        .select('id')
+        .or(orFilters.join(','))
+        .limit(1)
+        .maybeSingle();
+
+      if (existingCred) {
+        const err: any = new Error('An account with this email or phone already exists. Please sign in instead.');
+        err.code = 'DUPLICATE_CREDENTIAL';
+        err.status = 409;
+        throw err;
+      }
+    }
+
+    // 2. Provision new isolated organisation + automatic 14-day trial license
+    const fullName = `${firstName} ${lastName}`.trim();
+    const { organisation, license } = await this.createOrganisation({
+      name: orgName,
+      orgType: params.orgType || 'church',
+      city: params.city?.trim() || 'Accra',
+      country: params.country?.trim() || 'Ghana',
+      seniorPastor: fullName,
+      contactName: fullName,
+      contactEmail: email,
+      contactPhone: normalizedPhone || rawPhone || undefined,
+      initialPlan: trialPlan,
+      autoIssueTrial: true,
+    });
+
+    // 3. Provision founder/admin member record strictly scoped to this newly created organisation
+    const adminMember = await this.createMember(organisation.id, {
+      firstName,
+      lastName,
+      email,
+      phoneE164: normalizedPhone || rawPhone || undefined,
+      groupName: 'Church Leadership',
+      autoCheckinOptedIn: false,
+      role: 'admin',
+      status: 'active',
+    });
+
+    const memberId = String(adminMember.id || randomUUID());
+
+    // 4. Provision scrypt-hashed login credential record (never Creator)
+    const newCred = await this.provisionCredentialRecord({
+      id: memberId,
+      memberId,
+      organizationId: organisation.id,
+      email,
+      phoneE164: normalizedPhone || undefined,
+      name: fullName,
+      role: 'admin',
+      isCreator: false,
+      password,
+    });
+
+    await this.recordAuthAuditEvent({
+      organizationId: organisation.id,
+      accountId: newCred.id,
+      identifier: email,
+      eventType: 'register_success',
+      ipAddress: params.ipAddress,
+      success: true,
+      reason: `organisation_trial_signup:${trialPlan}`,
+    });
+
+    await this.appendAuditLog({
+      organizationId: organisation.id,
+      actorId: memberId,
+      actorEmail: email,
+      actorRole: 'admin',
+      action: 'organisation.trial_signup',
+      targetType: 'organization',
+      targetId: organisation.id,
+      metadata: {
+        organizationName: organisation.name,
+        slug: organisation.slug,
+        trialPlan,
+        licenseKey: license?.key || null,
+      },
+      ipAddress: params.ipAddress,
+    });
+
+    const evaluation = await this.evaluateOrganizationLicense(organisation.id);
+    const token = signToken({
+      id: memberId,
+      email,
+      role: 'admin',
+      organization_id: organisation.id,
+      tenant_id: organisation.id,
+      name: fullName,
+      is_creator: false,
+    });
+
+    return {
+      user: {
+        id: memberId,
+        email,
+        phoneE164: normalizedPhone || undefined,
+        name: fullName,
+        role: 'admin',
+        organizationId: organisation.id,
+        isCreator: false,
+      },
+      organization: organisation,
+      license,
+      evaluation,
       token,
     };
   }
@@ -2296,34 +2489,38 @@ class PlatformStore {
         .from('members')
         .insert({
           organization_id: orgId,
-          full_name: `${firstName} ${lastName}`.trim(),
           first_name: firstName,
           last_name: lastName,
+          preferred_name: `${firstName} ${lastName}`.trim(),
           email,
-          phone,
+          phone_e164: phone,
+          phone_number: phone,
+          home_cell_group: payload.groupName || 'General Congregation',
           role: payload.role || 'member',
           status: payload.status || 'active',
         })
         .select('*')
         .single();
 
-      if (!error && data) {
-        return {
-          ...payload,
-          id: String(data.id),
-          tenantId: orgId,
-          firstName,
-          lastName,
-          phoneE164: phone,
-          email,
-          status: payload.status || 'member',
-          groupName: payload.groupName || 'General Congregation',
-          autoCheckinOptedIn: payload.autoCheckinOptedIn ?? true,
-          avatarInitials: `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase(),
-          joinedOn: new Date().toISOString().slice(0, 10),
-          consecutiveAbsences: 0,
-        };
+      if (error || !data) {
+        throw new Error(`Failed to create member in Supabase: ${error?.message || 'Unknown error'}`);
       }
+
+      return {
+        ...payload,
+        id: String(data.id),
+        tenantId: orgId,
+        firstName,
+        lastName,
+        phoneE164: phone,
+        email,
+        status: payload.status || 'active',
+        groupName: payload.groupName || 'General Congregation',
+        autoCheckinOptedIn: payload.autoCheckinOptedIn ?? true,
+        avatarInitials: `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase(),
+        joinedOn: new Date().toISOString().slice(0, 10),
+        consecutiveAbsences: 0,
+      };
     }
 
     const newMember = {
@@ -2394,10 +2591,13 @@ class PlatformStore {
       if (updates.firstName !== undefined) patch.first_name = updates.firstName;
       if (updates.lastName !== undefined) patch.last_name = updates.lastName;
       if (updates.firstName !== undefined || updates.lastName !== undefined) {
-        patch.full_name = `${updates.firstName || ''} ${updates.lastName || ''}`.trim();
+        patch.preferred_name = `${updates.firstName || ''} ${updates.lastName || ''}`.trim();
       }
       if (updates.email !== undefined) patch.email = updates.email;
-      if (updates.phoneE164 !== undefined) patch.phone = updates.phoneE164;
+      if (updates.phoneE164 !== undefined) {
+        patch.phone_e164 = updates.phoneE164;
+        patch.phone_number = updates.phoneE164;
+      }
       if (updates.status !== undefined) patch.status = updates.status;
 
       const { data, error } = await this.supabase
@@ -2966,6 +3166,16 @@ class PlatformStore {
         phone: params.contactPhone || null,
         email: params.contactEmail || null,
         website: params.customDomain || null,
+        org_type: params.orgType || 'church',
+        country: params.country || 'Ghana',
+        city: params.city || 'Accra',
+        campus_code: params.campusCode || baseSlug.slice(0, 7).toUpperCase(),
+        senior_pastor: params.seniorPastor || params.contactName || 'Administrator',
+        contact_name: params.contactName || params.seniorPastor || '',
+        contact_email: params.contactEmail || null,
+        contact_phone: params.contactPhone || null,
+        status: shouldAutoTrial ? 'trial' : 'active',
+        custom_domain: params.customDomain || null,
         settings: orgSettings,
       });
 
@@ -2986,6 +3196,13 @@ class PlatformStore {
 
       const createdOrg = (await this.getOrganisationById(id))!;
       return { organisation: createdOrg, license: createdLic };
+    }
+
+    const hasDuplicateSlug = Array.from(this.orgs.values()).some(
+      (o) => o.slug.toLowerCase() === baseSlug
+    );
+    if (hasDuplicateSlug) {
+      baseSlug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
     }
 
     const newOrg: TenantChurch = {
@@ -3196,26 +3413,57 @@ class PlatformStore {
     const overrides = params.overrides || {};
 
     if (this.supabase) {
-      const dbStatus = status === 'trial' ? 'active' : status;
-      const { data, error } = await this.supabase
+      const canonicalPayload = {
+        organization_id: orgId,
+        license_key: key,
+        plan_id: params.tier,
+        status,
+        issued_at: now.toISOString(),
+        expires_at: expires.toISOString(),
+        grace_ends_at: graceEnds.toISOString(),
+        billing_cycle: params.billingCycle,
+        annual_cost_usd: annualCostUSD,
+        overrides,
+        notes: params.notes || null,
+      };
+
+      const fullMergedPayload = {
+        ...canonicalPayload,
+        tenant_id: orgId,
+        key,
+        tier: params.tier,
+        seats_limit: overrides.seatsLimit ?? plan.seatsLimit,
+        issued_date: now.toISOString(),
+        expires_date: expires.toISOString(),
+        enabled_features: Object.keys(plan.featureFlags).filter((k) => (plan.featureFlags as any)[k]),
+      };
+
+      let insertResult = await this.supabase
         .from('licenses')
-        .insert({
-          tenant_id: orgId,
-          key,
-          tier: params.tier,
-          seats_limit: overrides.seatsLimit ?? plan.seatsLimit,
-          status: dbStatus,
-          issued_date: now.toISOString(),
-          expires_date: expires.toISOString(),
-          billing_cycle: params.billingCycle,
-          annual_cost_usd: annualCostUSD,
-          enabled_features: Object.keys(plan.featureFlags).filter((k) => (plan.featureFlags as any)[k]),
-        })
+        .insert(fullMergedPayload)
         .select('*')
         .single();
 
-      if (error || !data) {
-        throw new Error(`Failed to issue license: ${error?.message || 'Unknown error'}`);
+      // Retry with canonical schema columns if legacy columns (e.g., key/tier/tenant_id) are absent
+      if (insertResult.error && /column .* does not exist|schema cache/i.test(insertResult.error.message)) {
+        insertResult = await this.supabase
+          .from('licenses')
+          .insert(canonicalPayload)
+          .select('*')
+          .single();
+      }
+
+      // Retry with status mapped to 'active' only if a legacy CHECK constraint rejects 'trial'
+      if (insertResult.error && status === 'trial' && /check constraint/i.test(insertResult.error.message)) {
+        insertResult = await this.supabase
+          .from('licenses')
+          .insert({ ...fullMergedPayload, status: 'active' })
+          .select('*')
+          .single();
+      }
+
+      if (insertResult.error || !insertResult.data) {
+        throw new Error(`Failed to issue license: ${insertResult.error?.message || 'Unknown error'}`);
       }
 
       return (await this.getLatestLicenseForOrg(orgId))!;
@@ -3411,6 +3659,103 @@ class PlatformStore {
     }
 
     return updated;
+  }
+
+  public async upgradeOrganisationSubscription(params: {
+    organizationId: string;
+    tier: LicenseTier;
+    billingCycle: BillingCycle;
+    paymentMethod: PaymentMethod;
+    paymentReference: string;
+    currency?: PaymentCurrency;
+    notes?: string;
+    actorId?: string;
+    actorEmail: string;
+  }): Promise<{
+    license: SystemLicense;
+    evaluation: LicenseEvaluationResult;
+    organization: TenantChurch | null;
+    payment: LicensePaymentRecord;
+  }> {
+    const orgId = params.organizationId.toLowerCase();
+    const org = await this.getOrganisationById(orgId);
+    if (!org) {
+      const err: any = new Error('Organisation not found.');
+      err.code = 'ORG_NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    const existingLic = await this.getLatestLicenseForOrg(orgId);
+    if (existingLic?.status === 'revoked') {
+      const err: any = new Error(
+        'This organisation license has been revoked by Platform Governance. Contact support.'
+      );
+      err.code = 'LICENSE_REVOKED';
+      err.status = 403;
+      throw err;
+    }
+
+    const plan = (await this.getPlan(params.tier)) || DEFAULT_PLANS[params.tier] || DEFAULT_PLANS.ministry_pro;
+    const billedAmountUSD =
+      params.billingCycle === 'monthly'
+        ? plan.monthlyCostUSD
+        : params.billingCycle === 'lifetime'
+        ? plan.annualCostUSD * 5
+        : plan.annualCostUSD;
+
+    const upgradedLicense = await this.issueLicense({
+      organizationId: orgId,
+      tier: params.tier,
+      billingCycle: params.billingCycle,
+      status: 'active',
+      notes:
+        params.notes?.trim() ||
+        `Self-service upgrade to ${plan.name} (${params.billingCycle})`,
+    });
+
+    if (this.supabase) {
+      await this.supabase
+        .from('organizations')
+        .update({
+          status: 'active',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orgId);
+    }
+
+    const memOrg = this.orgs.get(orgId);
+    if (memOrg) {
+      memOrg.status = 'active';
+      memOrg.licenseTier = params.tier;
+      memOrg.licenseKey = upgradedLicense.key;
+      memOrg.renewalDate = upgradedLicense.expiresDate;
+      memOrg.billingCycle = params.billingCycle;
+      memOrg.maxCapacity = upgradedLicense.seatsLimit;
+      memOrg.sitesLimit = upgradedLicense.sitesLimit ?? plan.sitesLimit;
+      memOrg.features = { ...plan.featureFlags };
+    }
+
+    const payment = await this.recordLicensePayment({
+      licenseId: upgradedLicense.id,
+      amount: Math.max(1, billedAmountUSD),
+      currency: params.currency || 'USD',
+      method: params.paymentMethod,
+      reference: params.paymentReference.trim(),
+      notes: `Plan upgrade to ${plan.name} (${params.billingCycle})`,
+      recordedById: params.actorId,
+      recordedByEmail: params.actorEmail,
+    });
+
+    const evaluation = await this.evaluateOrganizationLicense(orgId);
+    const updatedOrg = await this.getOrganisationById(orgId);
+
+    return {
+      license: upgradedLicense,
+      evaluation,
+      organization: updatedOrg,
+      payment,
+    };
   }
 
   public async deleteAllLicensesForOrgInTest(organizationId: string): Promise<void> {
