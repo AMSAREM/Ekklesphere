@@ -55,6 +55,18 @@ create table if not exists plans (
   updated_at timestamptz not null default now()
 );
 
+alter table plans add column if not exists name text;
+alter table plans add column if not exists description text;
+alter table plans add column if not exists monthly_cost_usd numeric(10, 2) default 0;
+alter table plans add column if not exists annual_cost_usd numeric(10, 2) default 0;
+alter table plans add column if not exists seats_limit int default 150;
+alter table plans add column if not exists sites_limit int default 1;
+alter table plans add column if not exists monthly_checkins_limit int default 2000;
+alter table plans add column if not exists feature_flags jsonb default '{}'::jsonb;
+alter table plans add column if not exists is_active boolean default true;
+alter table plans add column if not exists created_at timestamptz default now();
+alter table plans add column if not exists updated_at timestamptz default now();
+
 -- 4. ORGANIZATIONS (Canonical replacement for legacy duplicate tenants)
 create table if not exists organizations (
   id uuid primary key default gen_random_uuid(),
@@ -81,6 +93,30 @@ create table if not exists organizations (
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
 );
+
+alter table organizations add column if not exists slug text;
+alter table organizations add column if not exists org_type text default 'church';
+alter table organizations add column if not exists country text default 'Ghana';
+alter table organizations add column if not exists city text default 'Accra';
+alter table organizations add column if not exists campus_code text;
+alter table organizations add column if not exists senior_pastor text;
+alter table organizations add column if not exists contact_name text;
+alter table organizations add column if not exists contact_email text;
+alter table organizations add column if not exists contact_phone text;
+alter table organizations add column if not exists status text default 'active';
+alter table organizations add column if not exists custom_domain text;
+alter table organizations add column if not exists premise_address text;
+alter table organizations add column if not exists inner_geofence_m int default 60;
+alter table organizations add column if not exists outer_geofence_m int default 300;
+alter table organizations add column if not exists dwell_time_min int default 5;
+alter table organizations add column if not exists sms_configured boolean default false;
+alter table organizations add column if not exists push_configured boolean default true;
+alter table organizations add column if not exists settings jsonb default '{}'::jsonb;
+alter table organizations add column if not exists created_at timestamptz default now();
+alter table organizations add column if not exists updated_at timestamptz default now();
+alter table organizations add column if not exists deleted_at timestamptz;
+
+create unique index if not exists idx_organizations_slug_unique on organizations (slug);
 create index if not exists idx_organizations_slug on organizations (slug);
 create index if not exists idx_organizations_status on organizations (status);
 
@@ -98,9 +134,59 @@ create table if not exists licenses (
   annual_cost_usd numeric(10, 2) not null default 0,
   overrides jsonb not null default '{}'::jsonb,
   notes text,
+  suspended_reason text,
+  revoked_reason text,
+  created_by uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Reconcile pre-existing legacy licenses table if created prior to canonical schema
+do $$
+declare
+  legacy_col text;
+begin
+  -- Ensure all canonical columns exist on pre-existing licenses table
+  alter table licenses add column if not exists organization_id uuid references organizations(id) on delete cascade;
+  alter table licenses add column if not exists license_key text;
+  alter table licenses add column if not exists plan_id text references plans(id);
+  alter table licenses add column if not exists status text default 'trial';
+  alter table licenses add column if not exists issued_at timestamptz default now();
+  alter table licenses add column if not exists expires_at timestamptz;
+  alter table licenses add column if not exists grace_ends_at timestamptz;
+  alter table licenses add column if not exists billing_cycle text default 'annual';
+  alter table licenses add column if not exists annual_cost_usd numeric(10, 2) default 0;
+  alter table licenses add column if not exists overrides jsonb default '{}'::jsonb;
+  alter table licenses add column if not exists notes text;
+  alter table licenses add column if not exists suspended_reason text;
+  alter table licenses add column if not exists revoked_reason text;
+  alter table licenses add column if not exists created_by uuid;
+  alter table licenses add column if not exists created_at timestamptz default now();
+  alter table licenses add column if not exists updated_at timestamptz default now();
+
+  -- Drop restrictive NOT NULL constraints on legacy columns if they exist
+  foreach legacy_col in array array[
+    'key', 'tier', 'tenant_id', 'church_id', 'church_name',
+    'max_members', 'seats_limit', 'issued_date', 'expires_date', 'enabled_features'
+  ] loop
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'licenses' and column_name = legacy_col
+    ) then
+      execute format('alter table licenses alter column %I drop not null', legacy_col);
+    end if;
+  end loop;
+
+  -- Backfill canonical <-> legacy key columns if legacy key column exists
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+  ) then
+    execute 'update licenses set key = coalesce(key, license_key), license_key = coalesce(license_key, key) where key is null or license_key is null';
+  end if;
+end $$;
+
+create unique index if not exists idx_licenses_license_key on licenses (license_key);
 create index if not exists idx_licenses_org_expires on licenses (organization_id, expires_at desc);
 
 -- 6. MANUAL BILLING & PAYMENT LEDGER (Dual currency GHS/USD)
@@ -236,18 +322,19 @@ create table if not exists landing_cms_config (
 -- 15. ROW-LEVEL SECURITY & POSTGRES AUTH HELPERS
 -- ============================================================================
 
-create or replace function is_platform_creator()
+create or replace function public.is_platform_creator()
 returns boolean language sql stable as $$
   select coalesce(
     (current_setting('request.jwt.claims', true)::jsonb -> 'app_metadata' ->> 'creator')::boolean,
+    (current_setting('request.jwt.claims', true)::jsonb -> 'app_metadata' ->> 'is_super_admin')::boolean,
     false
   );
 $$;
 
-create or replace function has_organization_access(p_org_id uuid)
+create or replace function public.has_canonical_organization_access(p_org_id uuid)
 returns boolean language sql stable as $$
   select
-    is_platform_creator() or
+    public.is_platform_creator() or
     (
       current_setting('request.jwt.claims', true)::jsonb ->> 'organization_id' = p_org_id::text or
       current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id' = p_org_id::text
@@ -255,50 +342,72 @@ returns boolean language sql stable as $$
 $$;
 
 alter table plans enable row level security;
+drop policy if exists plans_public_read on plans;
 create policy plans_public_read on plans for select using (true);
-create policy plans_creator_all on plans for all using (is_platform_creator());
+drop policy if exists plans_creator_all on plans;
+create policy plans_creator_all on plans for all using (public.is_platform_creator());
 
 alter table organizations enable row level security;
-create policy org_creator_all on organizations for all using (is_platform_creator());
-create policy org_member_read on organizations for select using (has_organization_access(id));
+drop policy if exists org_creator_all on organizations;
+create policy org_creator_all on organizations for all using (public.is_platform_creator());
+drop policy if exists org_member_read on organizations;
+create policy org_member_read on organizations for select using (public.has_canonical_organization_access(id));
 
 alter table licenses enable row level security;
-create policy lic_creator_all on licenses for all using (is_platform_creator());
-create policy lic_member_read on licenses for select using (has_organization_access(organization_id));
+drop policy if exists lic_creator_all on licenses;
+create policy lic_creator_all on licenses for all using (public.is_platform_creator());
+drop policy if exists lic_member_read on licenses;
+create policy lic_member_read on licenses for select using (public.has_canonical_organization_access(organization_id));
 
 alter table license_payments enable row level security;
-create policy pay_creator_all on license_payments for all using (is_platform_creator());
-create policy pay_admin_read on license_payments for select using (has_organization_access(organization_id));
+drop policy if exists pay_creator_all on license_payments;
+create policy pay_creator_all on license_payments for all using (public.is_platform_creator());
+drop policy if exists pay_admin_read on license_payments;
+create policy pay_admin_read on license_payments for select using (public.has_canonical_organization_access(organization_id));
 
 alter table usage_daily enable row level security;
-create policy usage_creator_all on usage_daily for all using (is_platform_creator());
-create policy usage_admin_read on usage_daily for select using (has_organization_access(organization_id));
+drop policy if exists usage_creator_all on usage_daily;
+create policy usage_creator_all on usage_daily for all using (public.is_platform_creator());
+drop policy if exists usage_admin_read on usage_daily;
+create policy usage_admin_read on usage_daily for select using (public.has_canonical_organization_access(organization_id));
 
 alter table audit_log enable row level security;
-create policy audit_creator_all on audit_log for all using (is_platform_creator());
+drop policy if exists audit_creator_all on audit_log;
+create policy audit_creator_all on audit_log for all using (public.is_platform_creator());
 
 alter table alerts enable row level security;
-create policy alerts_creator_all on alerts for all using (is_platform_creator());
-create policy alerts_org_read on alerts for select using (organization_id is null or has_organization_access(organization_id));
+drop policy if exists alerts_creator_all on alerts;
+create policy alerts_creator_all on alerts for all using (public.is_platform_creator());
+drop policy if exists alerts_org_read on alerts;
+create policy alerts_org_read on alerts for select using (organization_id is null or public.has_canonical_organization_access(organization_id));
 
 alter table announcements enable row level security;
+drop policy if exists announcements_read on announcements;
 create policy announcements_read on announcements for select using (active = true);
-create policy announcements_creator_all on announcements for all using (is_platform_creator());
+drop policy if exists announcements_creator_all on announcements;
+create policy announcements_creator_all on announcements for all using (public.is_platform_creator());
 
 alter table feature_flags enable row level security;
+drop policy if exists ff_read on feature_flags;
 create policy ff_read on feature_flags for select using (true);
-create policy ff_creator_all on feature_flags for all using (is_platform_creator());
+drop policy if exists ff_creator_all on feature_flags;
+create policy ff_creator_all on feature_flags for all using (public.is_platform_creator());
 
 alter table data_requests enable row level security;
-create policy dr_creator_all on data_requests for all using (is_platform_creator());
-create policy dr_admin_read on data_requests for select using (has_organization_access(organization_id));
+drop policy if exists dr_creator_all on data_requests;
+create policy dr_creator_all on data_requests for all using (public.is_platform_creator());
+drop policy if exists dr_admin_read on data_requests;
+create policy dr_admin_read on data_requests for select using (public.has_canonical_organization_access(organization_id));
 
 alter table support_grants enable row level security;
-create policy sg_creator_all on support_grants for all using (is_platform_creator());
+drop policy if exists sg_creator_all on support_grants;
+create policy sg_creator_all on support_grants for all using (public.is_platform_creator());
 
 alter table landing_cms_config enable row level security;
+drop policy if exists landing_read on landing_cms_config;
 create policy landing_read on landing_cms_config for select using (true);
-create policy landing_creator_all on landing_cms_config for all using (is_platform_creator());
+drop policy if exists landing_creator_all on landing_cms_config;
+create policy landing_creator_all on landing_cms_config for all using (public.is_platform_creator());
 
 -- ============================================================================
 -- 16. IDEMPOTENT MIGRATION FUNCTION: migrate_legacy_tenants
@@ -530,3 +639,20 @@ insert into licenses (
   1200.00,
   'Anchor Cathedral Enterprise License'
 ) on conflict (id) do nothing;
+
+-- Keep legacy key/tier columns synced with canonical columns if present
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+  ) then
+    execute 'update licenses set key = coalesce(key, license_key) where key is null and license_key is not null';
+  end if;
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'tier'
+  ) then
+    execute 'update licenses set tier = plan_id where plan_id is not null and (tier is null or tier <> plan_id)';
+  end if;
+end $$;

@@ -9,6 +9,20 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
+-- 0. Prerequisite Guard (Requires 20261101000000 to have succeeded first)
+-- ----------------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('public.push_subscriptions') is null
+     or to_regclass('public.usage_daily') is null
+     or to_regclass('public.licenses') is null
+     or to_regprocedure('public.is_platform_creator()') is null
+     or to_regprocedure('public.has_organization_any_role(uuid, text[])') is null then
+    raise exception 'Prerequisite migration 20261101000000_creator_console_schema_and_migration.sql must be executed cleanly before 20261101000001_creator_console_rls_and_rollup.sql.';
+  end if;
+end $$;
+
+-- ----------------------------------------------------------------------------
 -- 1. Drop Broken Legacy Policies from 20261030000004_ekklesphere_master_rls.sql
 -- ----------------------------------------------------------------------------
 
@@ -39,6 +53,7 @@ begin
   loop
     if to_regclass('public.' || t) is not null then
       execute format('alter table public.%I enable row level security', t);
+      execute format('drop policy if exists %I on public.%I', t || '_creator_readonly_deprecated', t);
       execute format(
         'create policy %I on public.%I for select using (public.is_platform_creator())',
         t || '_creator_readonly_deprecated',
@@ -83,8 +98,13 @@ create policy "organizations_creator_all" on public.organizations
 
 drop policy if exists "organizations_admin_update_own" on public.organizations;
 create policy "organizations_admin_update_own" on public.organizations
-  for update using (public.has_organization_access(id, array['owner', 'admin']))
-  with check (public.has_organization_access(id, array['owner', 'admin']));
+  for update using (public.has_organization_any_role(id, array['owner', 'admin']))
+  with check (public.has_organization_any_role(id, array['owner', 'admin']));
+
+-- Remove legacy client-insert & overlapping org policies (creation uses service_role or Creator)
+drop policy if exists "org_insert_authenticated" on public.organizations;
+drop policy if exists "org_select_members" on public.organizations;
+drop policy if exists "org_update_admins" on public.organizations;
 
 -- Sites (Geofences — scoped by organization_id, never globally readable by anon)
 drop policy if exists "read sites" on public.sites;
@@ -99,11 +119,11 @@ drop policy if exists "sites_admin_manage_scoped" on public.sites;
 create policy "sites_admin_manage_scoped" on public.sites
   for all using (
     public.is_platform_creator()
-    or public.has_organization_access(organization_id, array['owner', 'admin'])
+    or public.has_organization_any_role(organization_id, array['owner', 'admin'])
   )
   with check (
     public.is_platform_creator()
-    or public.has_organization_access(organization_id, array['owner', 'admin'])
+    or public.has_organization_any_role(organization_id, array['owner', 'admin'])
   );
 
 -- Attendance Events (Raw GPS signals — strict privacy: user own or org staff, NEVER creator console)
@@ -112,21 +132,21 @@ drop policy if exists "attendance_events_select_scoped" on public.attendance_eve
 create policy "attendance_events_select_scoped" on public.attendance_events
   for select using (
     (select auth.uid()) = user_id
-    or public.has_organization_access(organization_id, array['owner', 'admin', 'pastor', 'usher'])
+    or public.has_organization_any_role(organization_id, array['owner', 'admin', 'pastor', 'usher'])
   );
 
 drop policy if exists "attendance_events_insert_scoped" on public.attendance_events;
 create policy "attendance_events_insert_scoped" on public.attendance_events
   for insert with check (
     (select auth.uid()) = user_id
-    or public.has_organization_access(organization_id, array['owner', 'admin', 'pastor', 'usher'])
+    or public.has_organization_any_role(organization_id, array['owner', 'admin', 'pastor', 'usher'])
   );
 
 -- Push Subscriptions
 drop policy if exists "push_subscriptions_scoped" on public.push_subscriptions;
 create policy "push_subscriptions_scoped" on public.push_subscriptions
   for all using (
-    public.has_organization_access(organization_id, array['owner', 'admin', 'pastor'])
+    public.has_organization_any_role(organization_id, array['owner', 'admin', 'pastor'])
   )
   with check (
     public.has_organization_access(organization_id)
@@ -154,7 +174,7 @@ create policy "licenses_creator_all" on public.licenses
 drop policy if exists "licenses_org_admin_read_own" on public.licenses;
 create policy "licenses_org_admin_read_own" on public.licenses
   for select using (
-    public.has_organization_access(organization_id, array['owner', 'admin', 'pastor'])
+    public.has_organization_any_role(organization_id, array['owner', 'admin', 'pastor'])
   );
 
 -- License Payments (Creator-only)
@@ -172,7 +192,7 @@ create policy "usage_daily_creator_all" on public.usage_daily
 drop policy if exists "usage_daily_org_admin_read_own" on public.usage_daily;
 create policy "usage_daily_org_admin_read_own" on public.usage_daily
   for select using (
-    public.has_organization_access(organization_id, array['owner', 'admin', 'pastor'])
+    public.has_organization_any_role(organization_id, array['owner', 'admin', 'pastor'])
   );
 
 -- Audit Log (Creator-only SELECT and INSERT; append-only enforced by trigger)
@@ -217,7 +237,7 @@ create policy "announcements_org_admin_read" on public.announcements
       or exists (
         select 1
         from unnest(target_organization_ids) as target_org_id
-        where public.has_organization_access(target_org_id, array['owner', 'admin', 'pastor'])
+        where public.has_organization_any_role(target_org_id, array['owner', 'admin', 'pastor'])
       )
     )
   );
@@ -241,6 +261,16 @@ drop policy if exists "landing_cms_creator_write" on public.landing_cms_config;
 create policy "landing_cms_creator_write" on public.landing_cms_config
   for all using (public.is_platform_creator())
   with check (public.is_platform_creator());
+
+-- Clean up any leftover ambiguous (uuid, text[]) overload now that policies
+-- exclusively use has_organization_access(uuid, text) and has_organization_any_role(uuid, text[])
+do $$
+begin
+  drop function if exists public.has_organization_access(uuid, text[]);
+exception
+  when dependent_objects_still_exist then
+    null;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 3. Nightly Aggregate Rollup & Proactive Alert Generator (Privacy-Safe)
@@ -277,20 +307,6 @@ begin
       o.id as organization_id,
       p_target_date as usage_date,
       coalesce((
-        select count(distinct a.member_id)
-        from public.attendance a
-        where a.organization_id = o.id
-          and a.checked_in_at >= v_start
-          and a.checked_in_at < v_end
-      ), 0) as active_users,
-      coalesce((
-        select count(*)
-        from public.attendance a
-        where a.organization_id = o.id
-          and a.checked_in_at >= v_start
-          and a.checked_in_at < v_end
-      ), 0) as checkins_count,
-      coalesce((
         select count(*)
         from public.attendance_events ae
         where ae.organization_id = o.id
@@ -325,10 +341,7 @@ begin
         from public.push_subscriptions ps
         where ps.organization_id = o.id
       ), 0) as push_subscribers,
-      greatest(
-        (select max(a.checked_in_at) from public.attendance a where a.organization_id = o.id),
-        (select max(ae.server_time) from public.attendance_events ae where ae.organization_id = o.id)
-      ) as last_activity_at
+      (select max(ae.server_time) from public.attendance_events ae where ae.organization_id = o.id) as last_activity_at
     from public.organizations o
     where o.status <> 'archived'
   ),
@@ -339,23 +352,49 @@ begin
       sites_count, push_subscribers, last_activity_at, updated_at
     )
     select
-      organization_id, usage_date, active_users, checkins_count,
+      organization_id, usage_date, 0, 0,
       flagged_count, rejected_count, mock_location_attempts,
       sites_count, push_subscribers, last_activity_at, now()
     from org_rollup
     on conflict (organization_id, usage_date) do update set
-      active_users = excluded.active_users,
-      checkins_count = excluded.checkins_count,
       flagged_count = excluded.flagged_count,
       rejected_count = excluded.rejected_count,
       mock_location_attempts = excluded.mock_location_attempts,
       sites_count = excluded.sites_count,
       push_subscribers = excluded.push_subscribers,
-      last_activity_at = excluded.last_activity_at,
+      last_activity_at = greatest(public.usage_daily.last_activity_at, excluded.last_activity_at),
       updated_at = now()
     returning 1
   )
   select count(*) into v_orgs_processed from upserted;
+
+  -- Merge canonical attendance table counts only when public.attendance exists
+  if to_regclass('public.attendance') is not null then
+    execute $q$
+      update public.usage_daily u
+      set
+        active_users = coalesce((
+          select count(distinct a.member_id)
+          from public.attendance a
+          where a.organization_id = u.organization_id
+            and a.checked_in_at >= $2
+            and a.checked_in_at < $3
+        ), 0),
+        checkins_count = coalesce((
+          select count(*)
+          from public.attendance a
+          where a.organization_id = u.organization_id
+            and a.checked_in_at >= $2
+            and a.checked_in_at < $3
+        ), 0),
+        last_activity_at = greatest(
+          u.last_activity_at,
+          (select max(a.checked_in_at) from public.attendance a where a.organization_id = u.organization_id)
+        ),
+        updated_at = now()
+      where u.usage_date = $1
+    $q$ using p_target_date, v_start, v_end;
+  end if;
 
   -- 3. Generate proactive deduplicated alerts
   -- 3a. Expiring licenses (within 30 days)

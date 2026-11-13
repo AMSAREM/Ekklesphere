@@ -770,7 +770,7 @@ create policy "org_select_members" on public.organizations
 
 drop policy if exists "org_insert_authenticated" on public.organizations;
 create policy "org_insert_authenticated" on public.organizations
-  for insert with check (auth.role() = 'authenticated');
+  for insert with check ((select auth.role()) = 'authenticated');
 
 drop policy if exists "org_update_admins" on public.organizations;
 create policy "org_update_admins" on public.organizations
@@ -784,14 +784,14 @@ drop policy if exists "members_insert_policy" on public.members;
 create policy "members_insert_policy" on public.members
   for insert with check (
     public.has_organization_access(organization_id, 'admin')
-    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+    or ((select auth.uid()) = user_id and public.has_organization_access(organization_id))
   );
 
 drop policy if exists "members_update_policy" on public.members;
 create policy "members_update_policy" on public.members
   for update using (
     public.has_organization_access(organization_id, 'admin')
-    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+    or ((select auth.uid()) = user_id and public.has_organization_access(organization_id))
   );
 
 drop policy if exists "members_delete_policy" on public.members;
@@ -818,7 +818,7 @@ drop policy if exists "attendance_insert_policy" on public.attendance;
 create policy "attendance_insert_policy" on public.attendance
   for insert with check (
     public.has_organization_access(organization_id)
-    and (auth.uid() = user_id or public.has_organization_access(organization_id, 'usher'))
+    and ((select auth.uid()) = user_id or public.has_organization_access(organization_id, 'usher'))
   );
 
 drop policy if exists "attendance_update_policy" on public.attendance;

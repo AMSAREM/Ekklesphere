@@ -321,7 +321,7 @@ create policy "org_select_members" on public.organizations
 
 create policy "org_insert_authenticated" on public.organizations
   for insert
-  with check (auth.role() = 'authenticated');
+  with check ((select auth.role()) = 'authenticated');
 
 create policy "org_update_admins" on public.organizations
   for update
@@ -341,18 +341,18 @@ create policy "members_insert_policy" on public.members
   for insert
   with check (
     public.has_organization_access(organization_id, 'admin')
-    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+    or ((select auth.uid()) = user_id and public.has_organization_access(organization_id))
   );
 
 create policy "members_update_policy" on public.members
   for update
   using (
     public.has_organization_access(organization_id, 'admin')
-    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+    or ((select auth.uid()) = user_id and public.has_organization_access(organization_id))
   )
   with check (
     public.has_organization_access(organization_id, 'admin')
-    or (auth.uid() = user_id and public.has_organization_access(organization_id))
+    or ((select auth.uid()) = user_id and public.has_organization_access(organization_id))
   );
 
 create policy "members_delete_policy" on public.members
@@ -387,7 +387,7 @@ create policy "attendance_insert_policy" on public.attendance
   with check (
     public.has_organization_access(organization_id)
     and (
-      auth.uid() = user_id 
+      (select auth.uid()) = user_id 
       or public.has_organization_access(organization_id, 'usher')
     )
   );

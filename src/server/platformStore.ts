@@ -802,6 +802,10 @@ class PlatformStore {
       .digest('hex')
       .slice(0, 24);
 
+    const hashedIp = params.ipAddress
+      ? `ip:${createHash('sha256').update(params.ipAddress.trim()).digest('hex').slice(0, 16)}`
+      : null;
+
     if (this.supabase) {
       await this.supabase
         .from('auth_audit_events')
@@ -814,11 +818,49 @@ class PlatformStore {
             params.accountId && UUID_REGEX.test(params.accountId) ? params.accountId : null,
           identifier_hash: identifierHash,
           event_type: params.eventType,
-          ip_address: params.ipAddress || null,
+          ip_address: hashedIp,
           success: params.success,
           reason: params.reason || null,
         })
         .then(undefined, () => {});
+    }
+  }
+
+  private async consumeDistributedAuthRateLimit(
+    rateKey: string,
+    maxAttempts: number,
+    windowSeconds: number,
+    lockoutSeconds: number
+  ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
+    if (!this.supabase) {
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    try {
+      const { data, error } = await this.supabase.rpc('consume_auth_rate_limit', {
+        p_rate_key: rateKey,
+        p_max_attempts: maxAttempts,
+        p_window_seconds: windowSeconds,
+        p_lockout_seconds: lockoutSeconds,
+      });
+      if (error || !Array.isArray(data) || data.length === 0) {
+        return { allowed: true, retryAfterSeconds: 0 };
+      }
+      const row = data[0] as { allowed?: boolean; retry_after_seconds?: number };
+      return {
+        allowed: row.allowed !== false,
+        retryAfterSeconds: Number(row.retry_after_seconds || 0),
+      };
+    } catch {
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+  }
+
+  private async resetDistributedAuthRateLimit(rateKey: string): Promise<void> {
+    if (!this.supabase) return;
+    try {
+      await this.supabase.rpc('reset_auth_rate_limit', { p_rate_key: rateKey });
+    } catch {
+      // Ignore if RPC is not yet deployed in Supabase
     }
   }
 
@@ -1286,11 +1328,20 @@ class PlatformStore {
     }
 
     const passwordMatches = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
+    const distributedRateKey = `login:${foundCred.id}`;
     if (!passwordMatches) {
       const nextAttempts = (foundCred.failedAttempts || 0) + 1;
       foundCred.failedAttempts = nextAttempts;
 
-      const isNowLocked = nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS;
+      const lockoutSeconds = Math.ceil(LOGIN_LOCKOUT_MS / 1000);
+      const distributedLimit = await this.consumeDistributedAuthRateLimit(
+        distributedRateKey,
+        MAX_FAILED_LOGIN_ATTEMPTS,
+        lockoutSeconds,
+        lockoutSeconds
+      );
+
+      const isNowLocked = !distributedLimit.allowed || nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS;
       const lockedUntilIso = isNowLocked ? new Date(Date.now() + LOGIN_LOCKOUT_MS).toISOString() : null;
       if (isNowLocked) {
         foundCred.lockedUntil = lockedUntilIso;
@@ -1319,7 +1370,7 @@ class PlatformStore {
       });
 
       if (isNowLocked) {
-        const retryAfterSeconds = Math.ceil(LOGIN_LOCKOUT_MS / 1000);
+        const retryAfterSeconds = distributedLimit.retryAfterSeconds || lockoutSeconds;
         const err: any = new Error(
           'Too many failed login attempts. Account locked for 15 minutes for your security.'
         );
@@ -1335,10 +1386,11 @@ class PlatformStore {
       throw err;
     }
 
-    // Valid login: reset failed attempts counter
+    // Valid login: reset failed attempts counter + distributed rate limit window
     foundCred.failedAttempts = 0;
     foundCred.lockedUntil = null;
     this.userCredentials.set(foundCred.id, foundCred);
+    await this.resetDistributedAuthRateLimit(distributedRateKey);
 
     if (this.supabase) {
       await this.supabase
@@ -3427,7 +3479,7 @@ class PlatformStore {
         notes: params.notes || null,
       };
 
-      const fullMergedPayload = {
+      const attemptPayload: Record<string, unknown> = {
         ...canonicalPayload,
         tenant_id: orgId,
         key,
@@ -3440,26 +3492,50 @@ class PlatformStore {
 
       let insertResult = await this.supabase
         .from('licenses')
-        .insert(fullMergedPayload)
+        .insert(attemptPayload)
         .select('*')
         .single();
 
-      // Retry with canonical schema columns if legacy columns (e.g., key/tier/tenant_id) are absent
-      if (insertResult.error && /column .* does not exist|schema cache/i.test(insertResult.error.message)) {
-        insertResult = await this.supabase
-          .from('licenses')
-          .insert(canonicalPayload)
-          .select('*')
-          .single();
-      }
+      // Iteratively strip only the specific optional/legacy columns absent in the target schema
+      for (let attempt = 0; attempt < 8 && insertResult.error; attempt++) {
+        const msg = insertResult.error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
 
-      // Retry with status mapped to 'active' only if a legacy CHECK constraint rejects 'trial'
-      if (insertResult.error && status === 'trial' && /check constraint/i.test(insertResult.error.message)) {
-        insertResult = await this.supabase
-          .from('licenses')
-          .insert({ ...fullMergedPayload, status: 'active' })
-          .select('*')
-          .single();
+        if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(attemptPayload, colMatch[1])) {
+          delete attemptPayload[colMatch[1]];
+          insertResult = await this.supabase
+            .from('licenses')
+            .insert(attemptPayload)
+            .select('*')
+            .single();
+          continue;
+        }
+
+        if (attemptPayload.status === 'trial' && /check constraint/i.test(msg)) {
+          attemptPayload.status = 'active';
+          insertResult = await this.supabase
+            .from('licenses')
+            .insert(attemptPayload)
+            .select('*')
+            .single();
+          continue;
+        }
+
+        if (/column .* does not exist|schema cache/i.test(msg)) {
+          // Final fallback keeping canonicalPayload plus key if not already removed
+          const fallbackPayload: Record<string, unknown> = { ...canonicalPayload };
+          if (Object.prototype.hasOwnProperty.call(attemptPayload, 'key')) {
+            fallbackPayload.key = key;
+          }
+          insertResult = await this.supabase
+            .from('licenses')
+            .insert(fallbackPayload)
+            .select('*')
+            .single();
+        }
+        break;
       }
 
       if (insertResult.error || !insertResult.data) {

@@ -7,6 +7,8 @@
 -- ============================================================================
 
 create extension if not exists pgcrypto;
+create extension if not exists postgis;
+create extension if not exists citext;
 
 -- ----------------------------------------------------------------------------
 -- 1. Canonical Auth & RLS Helper Functions (app_metadata claims ONLY)
@@ -29,15 +31,101 @@ $$;
 revoke all on function public.is_platform_creator() from public;
 grant execute on function public.is_platform_creator() to authenticated, service_role;
 
+-- Drop any previously created conflicting text[] overload if nothing depends on it
+do $$
+begin
+  drop function if exists public.has_organization_access(uuid, text[]);
+exception
+  when dependent_objects_still_exist then
+    null;
+end $$;
+
+-- Keep the canonical single (uuid, text default null) signature so 1-arg and
+-- 2-arg text calls across all migrations never collide with ERROR 42725.
 create or replace function public.has_organization_access(
   target_org_id uuid,
-  required_roles text[] default null
+  required_role text default null
 )
 returns boolean
 language plpgsql
 stable
 security definer
-set search_path = public, pg_temp
+set search_path = public, auth, extensions, pg_temp
+as $$
+declare
+  v_user_id uuid;
+  v_member_role text;
+begin
+  if target_org_id is null then
+    return false;
+  end if;
+
+  if public.is_platform_creator() then
+    return true;
+  end if;
+
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    return false;
+  end if;
+
+  select m.role
+  into v_member_role
+  from public.members m
+  where m.organization_id = target_org_id
+    and m.user_id = v_user_id
+    and coalesce(m.status, 'active') not in ('suspended', 'inactive', 'archived', 'deceased')
+  limit 1;
+
+  if v_member_role is null then
+    return false;
+  end if;
+
+  if required_role is null or required_role = '' then
+    return true;
+  end if;
+
+  if v_member_role = 'owner' then
+    return true;
+  end if;
+
+  if required_role = 'admin' then
+    return v_member_role in ('owner', 'admin');
+  end if;
+
+  if required_role = 'pastor' then
+    return v_member_role in ('owner', 'admin', 'pastor');
+  end if;
+
+  if required_role = 'usher' then
+    return v_member_role in ('owner', 'admin', 'pastor', 'usher');
+  end if;
+
+  if required_role = 'leader' then
+    return v_member_role in ('owner', 'admin', 'pastor', 'leader', 'group_leader');
+  end if;
+
+  if required_role = 'member' then
+    return true;
+  end if;
+
+  return v_member_role = required_role;
+end;
+$$;
+
+revoke all on function public.has_organization_access(uuid, text) from public;
+grant execute on function public.has_organization_access(uuid, text) to authenticated, service_role;
+
+-- Dedicated array-role helper (distinct name avoids Postgres 42725 overload ambiguity)
+create or replace function public.has_organization_any_role(
+  target_org_id uuid,
+  required_roles text[]
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public, auth, extensions, pg_temp
 as $$
 begin
   if target_org_id is null then
@@ -57,7 +145,7 @@ begin
     from public.members m
     where m.organization_id = target_org_id
       and m.user_id = auth.uid()
-      and coalesce(m.status, 'active') not in ('suspended', 'inactive', 'deceased')
+      and coalesce(m.status, 'active') not in ('suspended', 'inactive', 'archived', 'deceased')
       and (
         required_roles is null
         or array_length(required_roles, 1) is null
@@ -67,8 +155,8 @@ begin
 end;
 $$;
 
-revoke all on function public.has_organization_access(uuid, text[]) from public;
-grant execute on function public.has_organization_access(uuid, text[]) to authenticated, service_role;
+revoke all on function public.has_organization_any_role(uuid, text[]) from public;
+grant execute on function public.has_organization_any_role(uuid, text[]) to authenticated, service_role;
 
 -- ----------------------------------------------------------------------------
 -- 2. Extend Canonical public.organizations Table
@@ -119,7 +207,7 @@ begin
   ) then
     alter table public.organizations
       add constraint organizations_status_check
-      check (status in ('active', 'trial', 'suspended', 'archived'));
+      check (status in ('active', 'trial', 'grace_period', 'suspended', 'maintenance', 'archived'));
   end if;
 end $$;
 
@@ -141,32 +229,87 @@ values (
   '+233240000000',
   'active'
 )
-on conflict (id) do nothing;
+on conflict do nothing;
 
 -- ----------------------------------------------------------------------------
 -- 3. Operational Tables (Sites, Raw Geofence Events, Push Subscriptions)
 --    Replaces all volatile in-memory / os.tmpdir() server state.
 -- ----------------------------------------------------------------------------
 
-alter table if exists public.sites
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'event_type') then
+    create type event_type as enum ('enter', 'exit', 'manual_in', 'manual_out');
+  end if;
+  if not exists (select 1 from pg_type where typname = 'event_status') then
+    create type event_status as enum ('accepted', 'flagged', 'rejected');
+  end if;
+end $$;
+
+create table if not exists public.sites (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid references public.organizations(id) on delete cascade,
+  name text not null,
+  address text,
+  lat double precision,
+  lng double precision,
+  location geography(Point, 4326),
+  radius_m int not null default 100,
+  outer_radius_m int not null default 300,
+  dwell_min int not null default 5,
+  active boolean not null default true,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.sites
   add column if not exists organization_id uuid references public.organizations(id) on delete cascade,
   add column if not exists address text,
   add column if not exists lat double precision,
   add column if not exists lng double precision,
+  add column if not exists radius_m int not null default 100,
   add column if not exists outer_radius_m int not null default 300,
   add column if not exists dwell_min int not null default 5,
+  add column if not exists active boolean not null default true,
   add column if not exists updated_by text,
   add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists idx_sites_organization_id on public.sites(organization_id);
 
-alter table if exists public.attendance_events
+create table if not exists public.attendance_events (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid references public.organizations(id) on delete cascade,
+  client_event_id uuid not null default gen_random_uuid(),
+  user_id uuid not null default gen_random_uuid(),
+  site_id uuid references public.sites(id) on delete cascade,
+  person_id text,
+  person_name text,
+  service_instance_id text,
+  type text not null default 'enter',
+  source text not null default 'geofence',
+  platform text,
+  lat double precision,
+  lng double precision,
+  location geography(Point, 4326),
+  accuracy_m real,
+  distance_m real,
+  is_mock boolean not null default false,
+  device_time timestamptz,
+  server_time timestamptz not null default now(),
+  status text not null default 'accepted',
+  flag_reasons text[] not null default '{}'
+);
+
+alter table public.attendance_events
   add column if not exists organization_id uuid references public.organizations(id) on delete cascade,
   add column if not exists person_id text,
   add column if not exists person_name text,
   add column if not exists service_instance_id text,
   add column if not exists lat double precision,
-  add column if not exists lng double precision;
+  add column if not exists lng double precision,
+  add column if not exists is_mock boolean not null default false,
+  add column if not exists server_time timestamptz not null default now();
 
 create index if not exists idx_attendance_events_org_time
   on public.attendance_events(organization_id, server_time desc);
@@ -204,6 +347,19 @@ create table if not exists public.plans (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.plans
+  add column if not exists name text,
+  add column if not exists description text not null default '',
+  add column if not exists monthly_cost_usd numeric(10, 2) not null default 0,
+  add column if not exists annual_cost_usd numeric(10, 2) not null default 0,
+  add column if not exists seats_limit int not null default 250,
+  add column if not exists sites_limit int not null default 1,
+  add column if not exists monthly_checkins_limit int not null default 3000,
+  add column if not exists feature_flags jsonb not null default '{}'::jsonb,
+  add column if not exists is_active boolean not null default true,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
 
 insert into public.plans (
   id, name, description, monthly_cost_usd, annual_cost_usd,
@@ -295,6 +451,102 @@ alter table public.licenses
   add column if not exists created_by uuid,
   add column if not exists updated_at timestamptz not null default now();
 
+-- Reconcile legacy NOT NULL constraints (e.g. `key`, `tier`, `issued_date`, `expires_date`)
+-- and backfill canonical license_key / plan_id / organization_id so inserts never hit ERROR 23502.
+do $$
+declare
+  v_col text;
+  v_has_key boolean := false;
+  v_has_tier boolean := false;
+  v_has_tenant_id boolean := false;
+  v_has_issued_date boolean := false;
+  v_has_expires_date boolean := false;
+begin
+  foreach v_col in array array[
+    'key', 'tier', 'tenant_id', 'church_id', 'church_name',
+    'max_members', 'seats_limit', 'issued_date', 'expires_date', 'enabled_features'
+  ]
+  loop
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'licenses'
+        and column_name = v_col
+        and is_nullable = 'NO'
+    ) then
+      execute format('alter table public.licenses alter column %I drop not null', v_col);
+    end if;
+  end loop;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+  ) into v_has_key;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'tier'
+  ) into v_has_tier;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'tenant_id'
+  ) into v_has_tenant_id;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'issued_date'
+  ) into v_has_issued_date;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'expires_date'
+  ) into v_has_expires_date;
+
+  if v_has_key then
+    execute 'update public.licenses set license_key = key where license_key is null and key is not null';
+    execute 'update public.licenses set key = license_key where key is null and license_key is not null';
+  end if;
+
+  if v_has_tier then
+    execute $q$
+      update public.licenses
+      set plan_id = case
+        when tier in ('grace_starter', 'ministry_pro', 'cathedral_enterprise') then tier
+        else 'grace_starter'
+      end
+      where plan_id is null
+    $q$;
+  else
+    execute $q$
+      update public.licenses set plan_id = 'grace_starter' where plan_id is null
+    $q$;
+  end if;
+
+  if v_has_tenant_id then
+    execute $q$
+      update public.licenses l
+      set organization_id = l.tenant_id
+      where l.organization_id is null
+        and l.tenant_id is not null
+        and exists (select 1 from public.organizations o where o.id = l.tenant_id)
+    $q$;
+  end if;
+
+  if v_has_issued_date then
+    execute 'update public.licenses set issued_at = coalesce(issued_at, issued_date, now()) where issued_at is null';
+  end if;
+
+  if v_has_expires_date then
+    execute 'update public.licenses set expires_at = coalesce(expires_at, expires_date, now() + interval ''14 days'') where expires_at is null';
+  end if;
+end $$;
+
+create unique index if not exists idx_licenses_license_key_unique
+  on public.licenses(license_key)
+  where license_key is not null;
+
 -- Normalize constraints on licenses.status and licenses.billing_cycle
 do $$
 begin
@@ -375,6 +627,14 @@ begin
       0,
       'Auto-provisioned 14-day onboarding trial (+7d expiry grace)'
     );
+
+    -- Keep legacy `key` column synchronized if present
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+    ) then
+      execute 'update public.licenses set key = $1 where license_key = $1 and key is null' using v_key;
+    end if;
   end if;
   return new;
 end;
@@ -413,8 +673,26 @@ select
   1200.00,
   'Primary anchor sanctuary license'
 where not exists (
-  select 1 from public.licenses where organization_id = 'e0000000-0000-0000-0000-000000000001'
-);
+  select 1
+  from public.licenses
+  where organization_id = 'e0000000-0000-0000-0000-000000000001'
+     or license_key = 'EKKLE-PIWC-KWADASO-ENT-2026'
+)
+on conflict do nothing;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+  ) then
+    execute $q$
+      update public.licenses
+      set key = license_key
+      where key is null and license_key is not null
+    $q$;
+  end if;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 7. Aggregate-Only Daily Usage, Append-Only Audit Log & Platform Governance
@@ -604,7 +882,7 @@ create or replace function public.migrate_tenants_to_organizations(p_dry_run boo
 returns jsonb
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   v_has_tenants boolean := to_regclass('public.tenants') is not null;
