@@ -243,6 +243,11 @@ export const EventsAndNews: React.FC<EventsAndNewsProps> = ({
               </h3>
 
               <ul className="mt-5 divide-y" style={{ borderColor: 'var(--border)' }}>
+                {filteredNews.length === 0 && (
+                  <li className="py-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+                    No parish news posts published yet.
+                  </li>
+                )}
                 {filteredNews.map((post) => {
                   const parts = getDateParts(post.publishedAt);
                   return (

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEMO_CHURCH_HOME } from '../src/data/demoChurchHome';
+import { DEMO_CHURCH_HOME, DEMO_CHURCH_REGISTRY } from '../src/data/demoChurchHome';
 import {
   buildThemeCssVariables,
   computeNextServiceCountdown,
+  resolveRequestedChurchSlug,
   startGiving,
   validateMobileMoneyPhone,
 } from '../src/services/churchHomeService';
@@ -77,5 +78,12 @@ describe('Public Church Home Service', () => {
 
     expect(darkVars['--bg']).not.toBe(lightVars['--bg']);
     expect(darkVars['--text']).not.toBe(lightVars['--text']);
+  });
+
+  it('contains zero hardcoded organisation slugs or demo church registries', () => {
+    expect(DEMO_CHURCH_HOME.id).toBe('');
+    expect(DEMO_CHURCH_HOME.slug).toBe('');
+    expect(Object.keys(DEMO_CHURCH_REGISTRY)).toHaveLength(0);
+    expect(resolveRequestedChurchSlug()).toBe('');
   });
 });

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
+import { MemberAvatar } from '../common/MemberAvatar';
 import {
   SystemSettings,
   ChurchGroup,
@@ -2597,9 +2598,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       className="p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-3"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="w-8 h-8 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-xs flex items-center justify-center shrink-0">
-                          {m.avatarInitials}
-                        </span>
+                        <MemberAvatar
+                          src={m.imageUrl}
+                          name={`${m.firstName} ${m.lastName}`}
+                          initials={m.avatarInitials}
+                          sizeClass="w-8 h-8"
+                          textClass="text-xs font-bold"
+                        />
                         <div className="min-w-0 truncate">
                           <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                             {m.firstName} {m.lastName} {m.preferredName ? `(${m.preferredName})` : ''}

@@ -46,6 +46,7 @@ import { LiveAttendanceInsights } from './LiveAttendanceInsights';
 import { WeeklyAttendanceTrendChart } from './WeeklyAttendanceTrendChart';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 import { Person } from '../../types/ekklesphere';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 export const AdminDashboard: React.FC = () => {
 
@@ -1042,17 +1043,27 @@ export const AdminDashboard: React.FC = () => {
                   <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Live readiness</h2>
                   <div className="flex -space-x-2">
                     {members.slice(0, 3).map((m) => (
-                      <span
+                      <MemberAvatar
                         key={m.id}
-                        className="w-6 h-6 rounded-full bg-[#6D5CF2] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]"
-                      >
-                        {m.avatarInitials}
-                      </span>
+                        src={m.imageUrl}
+                        name={`${m.firstName} ${m.lastName}`}
+                        initials={m.avatarInitials}
+                        sizeClass="w-6 h-6"
+                        textClass="text-[10px] font-bold"
+                        bgClass="bg-[#6D5CF2] text-white"
+                        borderClass="border-2 border-white dark:border-[#1D1D3D]"
+                      />
                     ))}
                     {members.length === 0 && currentUser && (
-                      <span className="w-6 h-6 rounded-full bg-[#6D5CF2] text-white text-[10px] font-bold flex items-center justify-center border-2 border-white dark:border-[#1D1D3D]">
-                        {currentUser.initials}
-                      </span>
+                      <MemberAvatar
+                        src={currentUser.avatar}
+                        name={currentUser.name}
+                        initials={currentUser.initials}
+                        sizeClass="w-6 h-6"
+                        textClass="text-[10px] font-bold"
+                        bgClass="bg-[#6D5CF2] text-white"
+                        borderClass="border-2 border-white dark:border-[#1D1D3D]"
+                      />
                     )}
                   </div>
                 </div>

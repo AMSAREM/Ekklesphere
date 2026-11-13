@@ -365,6 +365,37 @@ export const CreatorsPanel: React.FC = () => {
   const [isLogDataRequestOpen, setIsLogDataRequestOpen] = useState<boolean>(false);
   const [isEditFeatureFlagOpen, setIsEditFeatureFlagOpen] = useState<boolean>(false);
   const [editingFeatureFlag, setEditingFeatureFlag] = useState<PlatformFeatureFlag | null>(null);
+  const [isOrgAdminCredModalOpen, setIsOrgAdminCredModalOpen] = useState<boolean>(false);
+  const [isSavingOrgAdminCred, setIsSavingOrgAdminCred] = useState<boolean>(false);
+  const [loadingOrgAdminCreds, setLoadingOrgAdminCreds] = useState<boolean>(false);
+  const [orgAdminCreds, setOrgAdminCreds] = useState<
+    Array<{
+      id: string;
+      memberId?: string;
+      organizationId: string;
+      email?: string;
+      username?: string;
+      phoneE164?: string;
+      fullName: string;
+      role: string;
+      status: string;
+      mustChangePassword: boolean;
+      lockedUntil: string | null;
+      lastLoginAt: string | null;
+    }>
+  >([]);
+  const [orgAdminCredForm, setOrgAdminCredForm] = useState({
+    organizationId: '',
+    organizationName: '',
+    fullName: '',
+    email: '',
+    username: '',
+    phone: '',
+    role: 'admin' as 'admin' | 'pastor',
+    password: '',
+    confirmPassword: '',
+    requirePasswordChange: false,
+  });
 
   // Forms State
   const [newOrgForm, setNewOrgForm] = useState({
@@ -725,6 +756,27 @@ export const CreatorsPanel: React.FC = () => {
     loadConsoleData();
   }, [loadConsoleData]);
 
+  const loadOrgAdminCreds = useCallback(
+    async (orgId: string) => {
+      setLoadingOrgAdminCreds(true);
+      try {
+        const headers = await getConsoleHeaders();
+        const res = await fetch(`/api/console/organisations/${orgId}/admin-credentials`, { headers });
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          const data = await res.json();
+          setOrgAdminCreds(Array.isArray(data.credentials) ? data.credentials : []);
+        } else {
+          setOrgAdminCreds([]);
+        }
+      } catch {
+        setOrgAdminCreds([]);
+      } finally {
+        setLoadingOrgAdminCreds(false);
+      }
+    },
+    [getConsoleHeaders]
+  );
+
   // Load selected organisation detail (6-tab payload)
   const loadOrgDetail = useCallback(
     async (orgId: string) => {
@@ -732,7 +784,10 @@ export const CreatorsPanel: React.FC = () => {
       setSelectedOrgId(orgId);
       try {
         const headers = await getConsoleHeaders();
-        const res = await fetch(`/api/console/organisations/${orgId}`, { headers });
+        const [res] = await Promise.all([
+          fetch(`/api/console/organisations/${orgId}`, { headers }),
+          loadOrgAdminCreds(orgId),
+        ]);
         if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
           const data = await res.json();
           setSelectedOrgDetail(data);
@@ -781,8 +836,88 @@ export const CreatorsPanel: React.FC = () => {
         setLoadingOrgDetail(false);
       }
     },
-    [getConsoleHeaders, organisations, licenses, showToast]
+    [getConsoleHeaders, loadOrgAdminCreds, organisations, licenses, showToast]
   );
+
+  const openOrgAdminCredModal = (existing?: {
+    fullName?: string;
+    email?: string;
+    username?: string;
+    phoneE164?: string;
+    role?: string;
+    mustChangePassword?: boolean;
+  }) => {
+    if (!selectedOrgDetail) return;
+    const org = selectedOrgDetail.organisation;
+    setOrgAdminCredForm({
+      organizationId: org.id,
+      organizationName: org.name,
+      fullName: existing?.fullName || org.contactName || `${org.name} Admin`,
+      email: existing?.email ?? org.contactEmail ?? '',
+      username: existing?.username || '',
+      phone: existing?.phoneE164 ?? org.contactPhone ?? '',
+      role: existing?.role === 'pastor' ? 'pastor' : 'admin',
+      password: '',
+      confirmPassword: '',
+      requirePasswordChange: Boolean(existing?.mustChangePassword),
+    });
+    setIsOrgAdminCredModalOpen(true);
+  };
+
+  const handleSaveOrgAdminCred = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orgAdminCredForm.organizationId) return;
+    if (!orgAdminCredForm.email.trim() && !orgAdminCredForm.phone.trim()) {
+      showToast('Enter at least an administrator email or phone number.');
+      return;
+    }
+    if (orgAdminCredForm.password.trim().length < 8) {
+      showToast('Password must be at least 8 characters long.');
+      return;
+    }
+    if (orgAdminCredForm.password !== orgAdminCredForm.confirmPassword) {
+      showToast('Passwords do not match.');
+      return;
+    }
+
+    setIsSavingOrgAdminCred(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(
+        `/api/console/organisations/${orgAdminCredForm.organizationId}/admin-credentials`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            fullName: orgAdminCredForm.fullName.trim(),
+            email: orgAdminCredForm.email.trim() || undefined,
+            username: orgAdminCredForm.username.trim() || undefined,
+            phone: orgAdminCredForm.phone.trim() || undefined,
+            password: orgAdminCredForm.password.trim(),
+            role: orgAdminCredForm.role,
+            requirePasswordChange: orgAdminCredForm.requirePasswordChange,
+          }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.message || 'Failed to save organisation admin credentials.');
+        return;
+      }
+      showToast(
+        data.resetExisting
+          ? `Reset password & unlocked ${data.credential?.email || data.credential?.phoneE164 || 'admin'}!`
+          : `Provisioned admin login for ${orgAdminCredForm.organizationName}!`
+      );
+      setIsOrgAdminCredModalOpen(false);
+      await loadOrgAdminCreds(orgAdminCredForm.organizationId);
+      await loadOrgDetail(orgAdminCredForm.organizationId);
+    } catch {
+      showToast('Network error saving organisation administrator credentials.');
+    } finally {
+      setIsSavingOrgAdminCred(false);
+    }
+  };
 
   // Trigger Nightly Rollup
   const triggerManualRollup = async () => {
@@ -2210,6 +2345,15 @@ export const CreatorsPanel: React.FC = () => {
                   {/* Workspace Header Actions */}
                   <div className="flex flex-wrap items-center gap-2">
                     <button
+                      type="button"
+                      onClick={() => openOrgAdminCredModal(orgAdminCreds[0])}
+                      className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] text-white font-bold text-xs hover:bg-[#5b4be0] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>Provision / Reset Admin Login</span>
+                    </button>
+
+                    <button
                       onClick={() => {
                         setSupportGrantForm({
                           organizationId: selectedOrgDetail.organisation.id,
@@ -2506,6 +2650,96 @@ export const CreatorsPanel: React.FC = () => {
                           {selectedOrgDetail.usersSummary.staffAccounts.length}
                         </span>
                       </div>
+                    </div>
+
+                    {/* Organisation Admin Credentials Card */}
+                    <div className="pt-4 border-t border-slate-100 dark:border-white/10 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h5 className="font-extrabold text-xs text-[#1D1B3A] dark:text-white flex items-center gap-1.5">
+                            <KeyRound className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                            <span>Organisation Administrator Login Credentials</span>
+                          </h5>
+                          <p className="text-[11px] text-[#666A86]">
+                            Provision a church administrator account or rotate/unlock a locked password in{' '}
+                            <code className="font-mono">account_credentials</code>.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openOrgAdminCredModal()}
+                          className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>New Admin Login</span>
+                        </button>
+                      </div>
+
+                      {loadingOrgAdminCreds ? (
+                        <div className="text-xs text-[#666A86] py-3">Checking credential records...</div>
+                      ) : orgAdminCreds.length === 0 ? (
+                        <div className="p-4 rounded-2xl border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="text-xs text-amber-900 dark:text-amber-200">
+                            <span className="font-bold block">No database admin credential found for {selectedOrgDetail.organisation.name}.</span>
+                            <span className="text-[11px] opacity-90">
+                              Seeded contact email ({selectedOrgDetail.organisation.contactEmail || 'none'}) is metadata only until an admin password is provisioned.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openOrgAdminCredModal()}
+                            className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold shrink-0 cursor-pointer"
+                          >
+                            Provision Admin Now
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {orgAdminCreds.map((cred) => {
+                            const isLocked = Boolean(
+                              cred.lockedUntil && new Date(cred.lockedUntil).getTime() > Date.now()
+                            );
+                            return (
+                              <div
+                                key={cred.id}
+                                className="p-3.5 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                              >
+                                <div className="space-y-0.5 text-xs">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-bold text-[#1D1B3A] dark:text-white">
+                                      {cred.fullName}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-[#EFEDFF] dark:bg-[#202046] text-[#6D5CF2]">
+                                      {cred.role}
+                                    </span>
+                                    {isLocked ? (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-600">
+                                        LOCKED
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600">
+                                        {cred.status.toUpperCase()}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] font-mono text-[#666A86] flex flex-wrap gap-x-3 gap-y-0.5">
+                                    {cred.email && <span>{cred.email}</span>}
+                                    {cred.phoneE164 && <span>{cred.phoneE164}</span>}
+                                    {cred.username && <span>@{cred.username}</span>}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => openOrgAdminCredModal(cred)}
+                                  className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-white dark:bg-[#141430] border border-[#D8DAE8] dark:border-[#2D2D58] hover:border-[#6D5CF2] text-xs font-bold text-[#1D1B3A] dark:text-white cursor-pointer"
+                                >
+                                  Reset Password / Unlock
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -4884,6 +5118,160 @@ export const CreatorsPanel: React.FC = () => {
                 <span>Yes, Sign Out</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PROVISION OR RESET ORGANISATION ADMIN CREDENTIALS */}
+      {isOrgAdminCredModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-[#6D5CF2]" />
+                <div>
+                  <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                    Provision / Reset Org Admin Login
+                  </h3>
+                  <p className="text-[11px] text-[#666A86]">
+                    {orgAdminCredForm.organizationName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOrgAdminCredModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveOrgAdminCred} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">Administrator Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={orgAdminCredForm.fullName}
+                  onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, fullName: e.target.value }))}
+                  placeholder="Church Administrator"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Admin Email</label>
+                  <input
+                    type="email"
+                    value={orgAdminCredForm.email}
+                    onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, email: e.target.value }))}
+                    placeholder="admin@yourchurch.org"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Phone (Optional)</label>
+                  <input
+                    type="tel"
+                    value={orgAdminCredForm.phone}
+                    onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="+233240000000"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Username (Optional)</label>
+                  <input
+                    type="text"
+                    value={orgAdminCredForm.username}
+                    onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, username: e.target.value }))}
+                    placeholder="church_admin"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Assigned Role</label>
+                  <select
+                    value={orgAdminCredForm.role}
+                    onChange={(e) =>
+                      setOrgAdminCredForm((p) => ({ ...p, role: e.target.value as 'admin' | 'pastor' }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-bold"
+                  >
+                    <option value="admin">Church Admin</option>
+                    <option value="pastor">Lead Pastor</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">New Password (min 8 chars) *</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={orgAdminCredForm.password}
+                    onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, password: e.target.value }))}
+                    placeholder="••••••••"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Confirm Password *</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={orgAdminCredForm.confirmPassword}
+                    onChange={(e) => setOrgAdminCredForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                    placeholder="••••••••"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={orgAdminCredForm.requirePasswordChange}
+                  onChange={(e) =>
+                    setOrgAdminCredForm((p) => ({ ...p, requirePasswordChange: e.target.checked }))
+                  }
+                  className="rounded border-slate-300 text-[#6D5CF2] focus:ring-[#6D5CF2]"
+                />
+                <span className="font-semibold text-[#1D1B3A] dark:text-[#D8DAE8]">
+                  Require administrator to change password on next sign-in
+                </span>
+              </label>
+
+              <div className="p-3 rounded-xl bg-indigo-500/10 text-[#6D5CF2] text-[11px] font-bold">
+                Saves hashed credentials directly into Supabase <code className="font-mono">account_credentials</code> &amp; clears any brute-force lockouts.
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOrgAdminCredModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingOrgAdminCred}
+                  className="px-4 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] disabled:opacity-60 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingOrgAdminCred ? 'Saving...' : 'Save Admin Login'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -20,7 +20,7 @@ import type {
 const DEFAULT_SLUG =
   (typeof import.meta !== 'undefined' &&
     (import.meta as { env?: Record<string, string> }).env?.VITE_DEFAULT_CHURCH_SLUG?.trim()) ||
-  'accra-central';
+  '';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -41,7 +41,7 @@ function mergeTheme(rawTheme: unknown): Theme {
 }
 
 /**
- * Resolve the requested church slug from URL query (`?church=slug`), env default, or demo default.
+ * Resolve the requested church slug from URL query (`?church=slug`) or env default.
  */
 export function resolveRequestedChurchSlug(): string {
   if (typeof window !== 'undefined') {
@@ -54,13 +54,13 @@ export function resolveRequestedChurchSlug(): string {
 
 /**
  * Loads published public Home content strictly from Supabase (`supabaseBrowserClient`).
- * Falls back cleanly to local seed data if Supabase is unconfigured or the migration is not yet applied.
+ * Returns neutral empty-state template if Supabase is unconfigured or no church is published yet.
  */
 export async function loadPublicChurchHome(
   requestedSlug?: string
 ): Promise<{ church: Church; source: 'supabase' | 'demo' }> {
-  const slug = (requestedSlug || resolveRequestedChurchSlug()).toLowerCase();
-  const demoFallback = DEMO_CHURCH_REGISTRY[slug] || DEMO_CHURCH_HOME;
+  const slug = (requestedSlug !== undefined ? requestedSlug : resolveRequestedChurchSlug()).toLowerCase();
+  const demoFallback = (slug && DEMO_CHURCH_REGISTRY[slug]) || DEMO_CHURCH_HOME;
 
   if (!isSupabaseBrowserConfigured || !supabaseBrowserClient) {
     return { church: demoFallback, source: 'demo' };
@@ -68,7 +68,7 @@ export async function loadPublicChurchHome(
 
   try {
     // 1. Lookup published church public profile joined with organization metadata
-    const { data: orgRow, error: orgErr } = await supabaseBrowserClient
+    let orgQuery = supabaseBrowserClient
       .from('organizations')
       .select(
         `
@@ -100,9 +100,15 @@ export async function loadPublicChurchHome(
           is_published
         )
       `
-      )
-      .eq('slug', slug)
-      .maybeSingle();
+      );
+
+    if (slug) {
+      orgQuery = orgQuery.eq('slug', slug);
+    } else {
+      orgQuery = orgQuery.order('created_at', { ascending: true }).limit(1);
+    }
+
+    const { data: orgRow, error: orgErr } = await orgQuery.maybeSingle();
 
     if (orgErr || !orgRow) {
       return { church: demoFallback, source: 'demo' };

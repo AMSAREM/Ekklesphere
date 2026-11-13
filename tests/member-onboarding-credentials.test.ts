@@ -327,8 +327,23 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
     const storeAny = platformStore as any;
     const prevSupabase = storeAny.supabase;
     const calls: Array<{ table: string; op: string; payload: any }> = [];
+    let persistedRow: Record<string, any> | null = null;
+    const authCalls: string[] = [];
 
     storeAny.supabase = {
+      auth: {
+        admin: {
+          createUser: async () => {
+            authCalls.push('createUser');
+            return { data: { user: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } }, error: null };
+          },
+          updateUserById: async () => {
+            authCalls.push('updateUserById');
+            return { data: { user: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } }, error: null };
+          },
+          listUsers: async () => ({ data: { users: [] }, error: null }),
+        },
+      },
       from: (table: string) => {
         if (table === 'auth_audit_events' || table === 'auth_rate_limits') {
           return {
@@ -340,14 +355,17 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
         return {
           upsert: async (payload: any) => {
             calls.push({ table, op: 'upsert', payload });
-            if ('must_change_password' in payload) {
-              return {
-                error: {
-                  message:
-                    "Could not find the 'must_change_password' column of 'account_credentials' in the schema cache",
-                },
-              };
+            if ('must_change_password' in payload || 'auth_user_id' in payload) {
+              if ('must_change_password' in payload) {
+                return {
+                  error: {
+                    message:
+                      "Could not find the 'must_change_password' column of 'account_credentials' in the schema cache",
+                  },
+                };
+              }
             }
+            persistedRow = { ...(persistedRow || {}), ...payload };
             return { error: null };
           },
           update: (payload: any) => ({
@@ -361,16 +379,28 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
                   },
                 };
               }
+              persistedRow = { ...(persistedRow || {}), ...payload };
               return { error: null };
             },
           }),
           select: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({ data: null }),
+            eq: (col: string, val: any) => ({
+              maybeSingle: async () => ({
+                data: persistedRow && persistedRow[col] === val ? persistedRow : null,
+                error: null,
+              }),
             }),
-            or: () => ({
+            or: (filterStr: string) => ({
               limit: () => ({
-                maybeSingle: async () => ({ data: null }),
+                maybeSingle: async () => ({
+                  data:
+                    persistedRow &&
+                    (filterStr.includes(String(persistedRow.id)) ||
+                      (persistedRow.email && filterStr.includes(String(persistedRow.email))))
+                      ? persistedRow
+                      : null,
+                  error: null,
+                }),
               }),
             }),
           }),
@@ -391,6 +421,7 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
 
       expect(saved.email).toBe('cache-fallback@example.org');
       expect(saved.mustChangePassword).toBe(true);
+      expect(authCalls).toContain('createUser');
       expect(calls.filter((c) => c.op === 'upsert')).toHaveLength(2);
       expect('must_change_password' in calls[0].payload).toBe(true);
       expect('must_change_password' in calls[1].payload).toBe(false);
@@ -401,6 +432,7 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
         newPassword: 'UpdatedPassword!2026',
       });
       expect(pwdRes.success).toBe(true);
+      expect(authCalls).toContain('updateUserById');
       expect(calls.filter((c) => c.op === 'update')).toHaveLength(2);
       expect('must_change_password' in calls[2].payload).toBe(true);
       expect('must_change_password' in calls[3].payload).toBe(false);

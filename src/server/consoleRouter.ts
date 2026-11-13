@@ -88,6 +88,21 @@ const UpdateOrgSchema = z.object({
   reason: z.string().trim().max(400).optional(),
 });
 
+const ProvisionOrgAdminSchema = z
+  .object({
+    fullName: z.string().trim().min(2, 'Administrator full name is required').max(160),
+    email: z.string().trim().email('Valid email address required').max(160).optional().or(z.literal('')),
+    username: z.string().trim().max(80).optional().or(z.literal('')),
+    phone: z.string().trim().max(32).optional().or(z.literal('')),
+    password: z.string().min(8, 'Password must be at least 8 characters').max(256),
+    role: z.enum(['admin', 'pastor']).default('admin'),
+    requirePasswordChange: z.boolean().default(false),
+  })
+  .refine(
+    (data) => Boolean((data.email && data.email.trim()) || (data.phone && data.phone.trim())),
+    { message: 'Either an administrator email address or phone number is required.', path: ['email'] }
+  );
+
 const LicenseOverridesSchema = z
   .object({
     seatsLimit: z.number().int().positive().max(250000).optional(),
@@ -419,6 +434,76 @@ consoleRouter.patch('/organisations/:orgId', async (req: Request, res: Response)
     return res.status(200).json({ organisation: updated });
   } catch (err: any) {
     return res.status(404).json({ error: 'not_found', message: err?.message || 'Organisation not found' });
+  }
+});
+
+consoleRouter.get('/organisations/:orgId/admin-credentials', async (req: Request, res: Response) => {
+  const org = await platformStore.getOrganisationById(req.params.orgId);
+  if (!org) {
+    return res.status(404).json({ error: 'not_found', message: 'Organisation not found.' });
+  }
+  const credentials = await platformStore.listOrganisationAdminCredentials(org.id);
+  return res.status(200).json({
+    organizationId: org.id,
+    credentials,
+  });
+});
+
+consoleRouter.post('/organisations/:orgId/admin-credentials', async (req: Request, res: Response) => {
+  const parsed = ProvisionOrgAdminSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'validation_error',
+      message: parsed.error.issues[0]?.message || 'Invalid administrator credential fields.',
+      details: parsed.error.flatten(),
+    });
+  }
+
+  try {
+    const result = await platformStore.provisionOrganisationAdminCredentials({
+      organizationId: req.params.orgId,
+      fullName: parsed.data.fullName,
+      email: parsed.data.email || undefined,
+      username: parsed.data.username || undefined,
+      phone: parsed.data.phone || undefined,
+      password: parsed.data.password,
+      role: parsed.data.role,
+      requirePasswordChange: parsed.data.requirePasswordChange,
+      ipAddress: clientIp(req),
+    });
+
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: result.resetExisting
+        ? 'organisation.admin_credentials_reset'
+        : 'organisation.admin_credentials_provisioned',
+      targetType: 'account_credentials',
+      targetId: result.credential.id,
+      organizationId: result.credential.organizationId,
+      metadata: {
+        email: result.credential.email || null,
+        username: result.credential.username || null,
+        hasPhone: Boolean(result.credential.phoneE164),
+        role: result.credential.role,
+        requirePasswordChange: result.credential.mustChangePassword,
+        persistedInSupabase: result.persistedInSupabase,
+      },
+      ipAddress: clientIp(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: 'org_admin_provision_failed',
+      code: err?.code || 'PROVISION_FAILED',
+      message: err?.message || 'Could not provision organisation administrator credentials.',
+    });
   }
 });
 

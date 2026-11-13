@@ -499,5 +499,180 @@ describe('Authentication, Brute-Force Lockout, Rate Limiting & RLS Hardening', (
     expect(plansAfter.body.evaluation.tier).toBe('cathedral_enterprise');
     expect(plansAfter.body.evaluation.seatsLimit).toBe(2500);
   });
+
+  it('persists uploaded member photos via PATCH /api/members/me/profile and exposes them on /api/auth/me and /api/members', async () => {
+    const signupRes = await request(app)
+      .post('/api/auth/register-organisation')
+      .set('x-forwarded-for', '198.51.100.161')
+      .send({
+        organizationName: 'Covenant Light Assembly',
+        adminFirstName: 'Yaw',
+        adminLastName: 'Mensah',
+        email: 'yaw.admin@covenantlight.org',
+        password: 'CovenantAdmin#2026',
+      });
+    expect(signupRes.status).toBe(201);
+    const adminToken = signupRes.body.token as string;
+    const orgId = signupRes.body.organizationId as string;
+
+    const memberReg = await request(app)
+      .post('/api/auth/register')
+      .set('x-forwarded-for', '198.51.100.162')
+      .send({
+        firstName: 'Akosua',
+        lastName: 'Frimpong',
+        email: 'akosua.photo@covenantlight.org',
+        password: 'AkosuaPhotoPass#2026',
+        organizationId: orgId,
+      });
+    expect(memberReg.status).toBe(201);
+    const memberToken = memberReg.body.token as string;
+
+    const sampleAvatarDataUrl = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/';
+    const patchRes = await request(app)
+      .patch('/api/members/me/profile')
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        imageUrl: sampleAvatarDataUrl,
+        dateOfBirth: '1994-11-13',
+      });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.imageUrl).toBe(sampleAvatarDataUrl);
+
+    const meRes = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${memberToken}`);
+    expect(meRes.status).toBe(200);
+    expect(meRes.body.user.avatar).toBe(sampleAvatarDataUrl);
+    expect(meRes.body.memberProfile?.imageUrl).toBe(sampleAvatarDataUrl);
+
+    const membersRes = await request(app)
+      .get('/api/members')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(membersRes.status).toBe(200);
+    const akosua = membersRes.body.find((m: any) => m.email === 'akosua.photo@covenantlight.org');
+    expect(akosua).toBeDefined();
+    expect(akosua.imageUrl).toBe(sampleAvatarDataUrl);
+  });
+
+  it('allows Platform Creator to provision, reset, and unlock an organisation admin login while blocking non-creators', async () => {
+    const creator = await platformStore.upsertCreatorCredentials({
+      email: 'creator.ops@ekklesphere.test',
+      password: 'CreatorMasterPass#2026',
+      name: 'Platform Creator',
+    });
+
+    // Provision a target organisation without an admin login yet
+    const createdOrg = await platformStore.createOrganisation({
+      name: 'PIWC Kwadaso Annex',
+      city: 'Kumasi',
+      country: 'Ghana',
+      contactEmail: 'admin@piwckwadaso-annex.org',
+      initialPlan: 'cathedral_enterprise',
+      autoIssueTrial: true,
+    });
+    const orgId = createdOrg.organisation.id;
+
+    // 1. Inspect initially empty org admin credentials list
+    const initialListRes = await request(app)
+      .get(`/api/console/organisations/${orgId}/admin-credentials`)
+      .set('Authorization', `Bearer ${creator.token}`);
+    expect(initialListRes.status).toBe(200);
+    expect(initialListRes.body.credentials).toHaveLength(0);
+
+    // 2. Provision org admin credentials as Creator
+    const provisionRes = await request(app)
+      .post(`/api/console/organisations/${orgId}/admin-credentials`)
+      .set('Authorization', `Bearer ${creator.token}`)
+      .send({
+        fullName: 'Kwadaso Admin',
+        email: 'admin@piwckwadaso-annex.org',
+        phone: '+233249998877',
+        password: 'FirstOrgAdminPass#2026',
+        role: 'admin',
+      });
+    expect(provisionRes.status).toBe(200);
+    expect(provisionRes.body.success).toBe(true);
+    expect(provisionRes.body.resetExisting).toBe(false);
+    expect(provisionRes.body.credential.email).toBe('admin@piwckwadaso-annex.org');
+    expect(provisionRes.body.credential.role).toBe('admin');
+
+    // 3. New admin signs in cleanly and is scoped to that organisation
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .set('x-forwarded-for', '198.51.100.171')
+      .send({
+        identifier: 'admin@piwckwadaso-annex.org',
+        password: 'FirstOrgAdminPass#2026',
+      });
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.role).toBe('admin');
+    expect(loginRes.body.isCreator).toBe(false);
+    expect(loginRes.body.organizationId).toBe(orgId);
+
+    // 4. Non-creator org admin must be blocked (403) from Console admin-credentials routes
+    const blockedRes = await request(app)
+      .post(`/api/console/organisations/${orgId}/admin-credentials`)
+      .set('Authorization', `Bearer ${loginRes.body.token}`)
+      .send({
+        fullName: 'Rogue Admin',
+        email: 'rogue@piwckwadaso-annex.org',
+        password: 'RoguePassword#2026',
+      });
+    expect(blockedRes.status).toBe(403);
+
+    // 5. Simulate lockout after 5 wrong passwords, then Creator resets & unlocks
+    for (let i = 0; i < 5; i++) {
+      await request(app)
+        .post('/api/auth/login')
+        .set('x-forwarded-for', '198.51.100.172')
+        .send({ identifier: 'admin@piwckwadaso-annex.org', password: 'WrongPassword#00' });
+    }
+    const lockedRes = await request(app)
+      .post('/api/auth/login')
+      .set('x-forwarded-for', '198.51.100.172')
+      .send({ identifier: 'admin@piwckwadaso-annex.org', password: 'FirstOrgAdminPass#2026' });
+    expect(lockedRes.status).toBe(429);
+
+    const resetRes = await request(app)
+      .post(`/api/console/organisations/${orgId}/admin-credentials`)
+      .set('Authorization', `Bearer ${creator.token}`)
+      .send({
+        fullName: 'Kwadaso Admin',
+        email: 'admin@piwckwadaso-annex.org',
+        phone: '+233249998877',
+        password: 'RotatedOrgAdminPass#2026',
+        role: 'admin',
+      });
+    expect(resetRes.status).toBe(200);
+    expect(resetRes.body.resetExisting).toBe(true);
+
+    // Unlocked immediately and new password works
+    const unlockedLoginRes = await request(app)
+      .post('/api/auth/login')
+      .set('x-forwarded-for', '198.51.100.173')
+      .send({
+        identifier: '+233249998877',
+        password: 'RotatedOrgAdminPass#2026',
+      });
+    expect(unlockedLoginRes.status).toBe(200);
+    expect(unlockedLoginRes.body.organizationId).toBe(orgId);
+  });
+
+  it('includes SQL migration linking account_credentials to Supabase Auth users and deleting hardcoded organisations', () => {
+    const cleanupMigrationPath = path.resolve(
+      process.cwd(),
+      'supabase/migrations/20261118000000_remove_hardcoded_organizations.sql'
+    );
+    const sql = fs.readFileSync(cleanupMigrationPath, 'utf-8');
+
+    expect(sql).toContain('add column if not exists auth_user_id uuid');
+    expect(sql).toContain('EKKLE-PIWC-KWADASO-ENT-2026');
+    expect(sql).toContain("'piwc-kwadaso'");
+    expect(sql).toContain("'primary-church'");
+    expect(sql).toContain("'accra-central'");
+    expect(sql).toContain("'kumasi-grace'");
+    expect(sql).toContain('public.landing_cms_config');
+  });
 });
 

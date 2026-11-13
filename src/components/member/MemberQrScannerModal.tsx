@@ -23,6 +23,7 @@ import { Person } from '../../types/ekklesphere';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { getCanonicalMemberId, findMemberByScannedId } from './DigitalMemberCard';
 import { CameraQrScanner } from '../common/CameraQrScanner';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 interface MemberQrScannerModalProps {
   isOpen: boolean;
@@ -370,9 +371,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                         className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-left transition-all group cursor-pointer flex flex-col justify-between"
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="w-6 h-6 rounded-full bg-[#6D5CF2]/20 text-[#8C7DFF] font-bold text-[10px] flex items-center justify-center">
-                            {member.avatarInitials}
-                          </span>
+                          <MemberAvatar
+                            src={member.imageUrl}
+                            name={`${member.firstName} ${member.lastName}`}
+                            initials={member.avatarInitials}
+                            sizeClass="w-7 h-7"
+                            textClass="text-[10px] font-bold"
+                            bgClass="bg-[#6D5CF2]/20 text-[#8C7DFF]"
+                            borderClass="border border-white/15"
+                          />
                           {isChecked ? (
                             <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
                               Present

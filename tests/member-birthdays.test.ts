@@ -100,4 +100,68 @@ describe('MemberApp Birthdays Module & Church Wall', () => {
     expect(amenRes.status).toBe(200);
     expect(amenRes.body.post?.amens).toContain('mem-bday-1');
   });
+
+  it('returns empty posts on GET /api/church-wall and 503 JSON on POST when public.church_wall_posts is missing from Supabase schema cache', async () => {
+    const { churchWallStore } = await import('../src/server/churchWallStore.ts');
+    const wallAny = churchWallStore as any;
+    const prevSupabase = wallAny.supabase;
+
+    wallAny.supabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            order: () => ({
+              limit: async () => ({
+                data: null,
+                error: {
+                  code: 'PGRST205',
+                  message: "Could not find the table 'public.church_wall_posts' in the schema cache",
+                },
+              }),
+            }),
+          }),
+        }),
+        insert: () => ({
+          select: () => ({
+            single: async () => ({
+              data: null,
+              error: {
+                code: 'PGRST205',
+                message: "Could not find the table 'public.church_wall_posts' in the schema cache",
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+
+    try {
+      const memberToken = signToken({
+        id: 'mem-bday-2',
+        email: 'kofi.bday@example.org',
+        name: 'Kofi Owusu',
+        role: 'member',
+        organization_id: TEST_ANCHOR_ORGANIZATION_ID,
+        tenant_id: TEST_ANCHOR_ORGANIZATION_ID,
+      });
+
+      const listRes = await request(app)
+        .get('/api/church-wall')
+        .set('Authorization', `Bearer ${memberToken}`);
+      expect(listRes.status).toBe(200);
+      expect(listRes.body.posts).toEqual([]);
+
+      const createRes = await request(app)
+        .post('/api/church-wall')
+        .set('Authorization', `Bearer ${memberToken}`)
+        .send({
+          category: 'birthday',
+          message: 'Happy Birthday!',
+        });
+      expect(createRes.status).toBe(503);
+      expect(createRes.body.error).toBe('CHURCH_WALL_TABLE_MISSING');
+    } finally {
+      wallAny.supabase = prevSupabase;
+    }
+  });
 });

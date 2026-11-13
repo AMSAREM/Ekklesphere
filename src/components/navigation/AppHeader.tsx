@@ -19,6 +19,7 @@ import {
   Sparkles,
   KeyRound,
 } from 'lucide-react';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 export const AppHeader: React.FC = () => {
   const {
@@ -320,9 +321,15 @@ export const AppHeader: React.FC = () => {
                 aria-haspopup="true"
                 aria-label="User account menu"
               >
-                <div className="w-7 h-7 rounded-lg bg-[#6D5CF2] text-white text-xs font-bold flex items-center justify-center shadow-xs">
-                  {currentUser.initials}
-                </div>
+                <MemberAvatar
+                  src={currentUser.avatar}
+                  name={currentUser.name}
+                  initials={currentUser.initials}
+                  sizeClass="w-7 h-7"
+                  textClass="text-xs font-bold"
+                  bgClass="bg-[#6D5CF2] text-white"
+                  borderClass="border border-[#6D5CF2]/20 shadow-xs"
+                />
                 <span className="hidden sm:inline text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                   {currentUser.name.split(' ')[0]}
                 </span>

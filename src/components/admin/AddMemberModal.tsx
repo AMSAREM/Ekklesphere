@@ -12,7 +12,10 @@ import {
   Shield,
   Loader2,
   AlertCircle,
+  Camera,
+  Upload,
 } from 'lucide-react';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 interface AddMemberModalProps {
   isOpen: boolean;
@@ -158,6 +161,52 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [savingMode, setSavingMode] = useState<'close' | 'another' | null>(null);
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
+
+  const handlePhotoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setSubmitError('Please select a valid JPG, PNG, or WebP image file.');
+      return;
+    }
+
+    setIsProcessingPhoto(true);
+    setSubmitError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const targetSize = 256;
+          canvas.width = targetSize;
+          canvas.height = targetSize;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const minSide = Math.min(img.width, img.height);
+            const sx = (img.width - minSide) / 2;
+            const sy = (img.height - minSide) / 2;
+            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
+            setImageUrl(canvas.toDataURL('image/jpeg', 0.86));
+          }
+        } finally {
+          setIsProcessingPhoto(false);
+          e.target.value = '';
+        }
+      };
+      img.onerror = () => {
+        setIsProcessingPhoto(false);
+        setSubmitError('Unable to decode selected image file.');
+      };
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => {
+      setIsProcessingPhoto(false);
+      setSubmitError('Unable to read selected image file.');
+    };
+    reader.readAsDataURL(file);
+  };
 
   const resetFormFields = (source?: Person | null) => {
     setActiveTab('basic');
@@ -610,7 +659,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     type="text"
                     value={placeOfResidence}
                     onChange={(e) => setPlaceOfResidence(e.target.value)}
-                    placeholder="e.g. Kwadaso, Kumasi"
+                    placeholder="e.g. City Center"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -878,17 +927,60 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                  IMAGE (Photo URL)
+              <div className="space-y-2.5">
+                <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  IMAGE (Member Photo Upload or URL)
                 </label>
-                <input
-                  type="url"
-                  value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
-                  placeholder="https://.../photo.jpg"
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                />
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  <MemberAvatar
+                    src={imageUrl || undefined}
+                    name={`${firstName} ${lastName}`.trim() || 'Member'}
+                    initials={`${firstName[0] || 'M'}${lastName[0] || 'B'}`.toUpperCase()}
+                    sizeClass="w-14 h-14"
+                    textClass="text-base font-bold"
+                  />
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold cursor-pointer transition-colors">
+                        {isProcessingPhoto ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isProcessingPhoto ? 'Processing...' : 'Upload Photo'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={handlePhotoFileUpload}
+                          className="sr-only"
+                        />
+                      </label>
+                      {imageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setImageUrl('')}
+                          className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs font-bold hover:bg-rose-50 cursor-pointer"
+                        >
+                          Remove Photo
+                        </button>
+                      )}
+                      {!imageUrl && (
+                        <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                          <Camera className="w-3 h-3" />
+                          <span>Or paste an image link below</span>
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      value={imageUrl.startsWith('data:image/') ? 'Uploaded portrait image attached' : imageUrl}
+                      readOnly={imageUrl.startsWith('data:image/')}
+                      onChange={(e) => setImageUrl(e.target.value)}
+                      placeholder="https://.../photo.jpg"
+                      className="w-full px-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}

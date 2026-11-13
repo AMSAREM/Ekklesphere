@@ -651,7 +651,7 @@ export const UnifiedAuthScreen: React.FC = () => {
                         type="text"
                         value={regOrgSlug}
                         onChange={(e) => setRegOrgSlug(e.target.value)}
-                        placeholder="e.g. accra-central"
+                        placeholder="e.g. your-church-slug"
                         className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                       />
                     </div>

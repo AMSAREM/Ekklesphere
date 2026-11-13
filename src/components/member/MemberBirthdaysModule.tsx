@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { ChurchWallPost, Person } from '../../types/ekklesphere';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 export interface UpcomingBirthdayItem {
   member: Person;
@@ -388,9 +389,14 @@ export const MemberBirthdaysModule: React.FC<MemberBirthdaysModuleProps> = ({
                   className="flex items-center justify-between gap-3 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-9 h-9 rounded-full bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] flex items-center justify-center text-xs font-bold shrink-0">
-                      {item.member.avatarInitials || item.member.firstName.charAt(0)}
-                    </div>
+                    <MemberAvatar
+                      src={item.member.imageUrl}
+                      name={`${item.member.firstName} ${item.member.lastName}`}
+                      initials={item.member.avatarInitials || item.member.firstName.charAt(0)}
+                      sizeClass="w-9 h-9"
+                      textClass="text-xs font-bold"
+                      bgClass="bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF]"
+                    />
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                         {item.member.firstName} {item.member.lastName}
@@ -470,6 +476,8 @@ export const MemberBirthdaysModule: React.FC<MemberBirthdaysModuleProps> = ({
             <ul className="space-y-2.5">
               {wallPosts.slice(0, 8).map((post) => {
                 const reacted = post.amens.includes(currentActorId);
+                const authorMember = members.find((m) => m.id === post.authorId);
+                const authorAvatarSrc = post.authorAvatar || authorMember?.imageUrl;
                 return (
                   <li
                     key={post.id}
@@ -477,9 +485,14 @@ export const MemberBirthdaysModule: React.FC<MemberBirthdaysModuleProps> = ({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] flex items-center justify-center text-[11px] font-bold shrink-0">
-                          {post.authorInitials}
-                        </div>
+                        <MemberAvatar
+                          src={authorAvatarSrc}
+                          name={post.authorName}
+                          initials={post.authorInitials}
+                          sizeClass="w-8 h-8"
+                          textClass="text-[11px] font-bold"
+                          bgClass="bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF]"
+                        />
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                             {post.authorName}

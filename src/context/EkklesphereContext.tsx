@@ -82,6 +82,8 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     String(raw.avatarInitials ?? raw.avatar_initials ?? '').trim() ||
     `${firstName[0] || 'M'}${lastName[0] || ''}`.toUpperCase() ||
     'MB';
+  const rawImg = raw.imageUrl ?? raw.image_url ?? raw.photo_url ?? raw.photoUrl ?? raw.avatar;
+  const imageUrl = typeof rawImg === 'string' && rawImg.trim().length > 0 ? rawImg.trim() : undefined;
 
   return {
     ...(raw as Person),
@@ -93,6 +95,7 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     groupName,
     homeCellGroup: String(raw.homeCellGroup ?? raw.home_cell_group ?? groupName),
     avatarInitials,
+    imageUrl,
     status: (raw.status as Person['status']) || 'member',
     consecutiveAbsences: typeof raw.consecutiveAbsences === 'number' ? raw.consecutiveAbsences : 0,
     autoCheckinOptedIn: Boolean(raw.autoCheckinOptedIn ?? raw.auto_checkin_opted_in ?? false),
@@ -550,52 +553,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return headers;
   };
 
-  // Multi-Tenant Platform Management (clean live environment)
-  const [tenants, setTenants] = useState<TenantChurch[]>(() => {
-    try {
-      const saved = localStorage.getItem('ekklesphere_tenants');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const clean = parsed.filter(
-            (t: TenantChurch) =>
-              t &&
-              !t.id.includes('demo') &&
-              !t.slug.includes('demo') &&
-              !t.name.toLowerCase().includes('demo') &&
-              !t.name.toLowerCase().includes('kwadaso')
-          );
-          if (clean.length > 0) return clean;
-        }
-      }
-    } catch {
-      // fallback
-    }
-    return [];
-  });
-
-  const [licenses, setLicenses] = useState<SystemLicense[]>(() => {
-    try {
-      const saved = localStorage.getItem('ekklesphere_licenses');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const clean = parsed.filter(
-            (l: SystemLicense) =>
-              l &&
-              !l.id.includes('demo') &&
-              !l.key.includes('DEMO') &&
-              !l.tenantName.toLowerCase().includes('demo') &&
-              !l.tenantName.toLowerCase().includes('kwadaso')
-          );
-          if (clean.length > 0) return clean;
-        }
-      }
-    } catch {
-      // fallback
-    }
-    return [];
-  });
+  // Multi-Tenant Platform Management (loaded strictly from server/Supabase API)
+  const [tenants, setTenants] = useState<TenantChurch[]>([]);
+  const [licenses, setLicenses] = useState<SystemLicense[]>([]);
 
   const [landingConfig, setLandingConfig] = useState<LandingPageConfig>(() => {
     try {
@@ -812,6 +772,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isCreator?: boolean;
       is_creator?: boolean;
       username?: string;
+      avatar?: string;
       mustChangePassword?: boolean;
     },
     token: string,
@@ -845,6 +806,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       mustChangePassword: Boolean(payload.mustChangePassword),
       token,
       username: payload.username,
+      avatar: payload.avatar || matchedMember?.imageUrl,
       initials,
       memberId: matchedMember?.id || payload.id,
       organization_id: orgId,
@@ -1378,12 +1340,22 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 role: data.user.role,
                 organizationId: data.organizationId || data.user.organization_id,
                 isCreator: data.isCreator,
+                avatar: data.user.avatar || data.memberProfile?.imageUrl,
                 mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
               },
               storedToken
             );
             setCurrentUser(hydrated);
             localStorage.setItem('ekklesphere_user', JSON.stringify(hydrated));
+            if (data.memberProfile?.id) {
+              const normalizedProfile = normalizePersonRecord(data.memberProfile);
+              setMembers((prev) => {
+                const exists = prev.some((m) => m.id === normalizedProfile.id);
+                return exists
+                  ? prev.map((m) => (m.id === normalizedProfile.id ? { ...m, ...normalizedProfile } : m))
+                  : [normalizedProfile, ...prev];
+              });
+            }
           }
         })
         .catch(() => {});
@@ -2148,21 +2120,47 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     let updatedPerson: Person | null = null;
     try {
-      const res = await fetch(`/api/members/${encodeURIComponent(memberId)}`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(mergedPayload),
-      });
+      const canUseAdminEndpoint =
+        currentUser?.role === 'admin' ||
+        currentUser?.role === 'pastor' ||
+        currentUser?.role === 'super_admin' ||
+        currentUser?.role === 'creator' ||
+        currentUser?.is_creator;
 
-      if (res.ok) {
-        updatedPerson = (await res.json().catch(() => ({}))) as Person;
+      if (canUseAdminEndpoint) {
+        const res = await fetch(`/api/members/${encodeURIComponent(memberId)}`, {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(mergedPayload),
+        });
+
+        if (res.ok) {
+          const rawUpdated = await res.json().catch(() => null);
+          if (rawUpdated) updatedPerson = normalizePersonRecord(rawUpdated);
+        }
+      }
+
+      if (!updatedPerson) {
+        const selfRes = await fetch('/api/members/me/profile', {
+          method: 'PATCH',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            imageUrl: updates.imageUrl,
+            dateOfBirth: updates.dateOfBirth,
+            preferredName: updates.preferredName,
+          }),
+        });
+        if (selfRes.ok) {
+          const rawSelfUpdated = await selfRes.json().catch(() => null);
+          if (rawSelfUpdated) updatedPerson = normalizePersonRecord(rawSelfUpdated);
+        }
       }
     } catch {
       // fallback
     }
 
     if (!updatedPerson) {
-      updatedPerson = mergedPayload as Person;
+      updatedPerson = normalizePersonRecord(mergedPayload as Person);
     }
 
     // Direct write to Firestore as cloud backup

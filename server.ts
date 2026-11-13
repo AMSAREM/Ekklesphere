@@ -2685,6 +2685,73 @@ app.post(
   }
 );
 
+const updateOwnProfileSchema = z.object({
+  imageUrl: z
+    .string()
+    .trim()
+    .max(600000, 'Uploaded image is too large (max ~450KB)')
+    .refine(
+      (v) =>
+        v === '' ||
+        v.startsWith('data:image/') ||
+        v.startsWith('https://') ||
+        v.startsWith('http://'),
+      'Photo must be a valid uploaded image or http(s) URL'
+    )
+    .nullable()
+    .optional(),
+  dateOfBirth: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be YYYY-MM-DD')
+    .optional(),
+  preferredName: z.string().trim().min(1).max(120).optional(),
+});
+
+app.get(
+  '/api/members/me/profile',
+  requireUser,
+  enforceOrganizationScope,
+  async (req: Request, res: Response) => {
+    const profile = await platformStore.getMemberProfileForSession(
+      req.organizationId!,
+      req.user!.id,
+      req.user!.email
+    );
+    return res.status(200).json({ profile });
+  }
+);
+
+app.patch(
+  '/api/members/me/profile',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = updateOwnProfileSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid profile update payload.',
+      });
+    }
+
+    try {
+      const updated = await platformStore.updateOwnMemberProfile(
+        req.organizationId!,
+        req.user!.id,
+        req.user!.email,
+        parsed.data
+      );
+      return res.status(200).json(updated);
+    } catch (err: any) {
+      return res.status(err?.status || 400).json({
+        error: err?.code || 'profile_update_failed',
+        message: err?.message || 'Could not update your member profile.',
+      });
+    }
+  }
+);
+
 app.put(
   '/api/members/:id',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
@@ -2707,8 +2774,15 @@ app.delete(
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   requireActiveLicense,
   async (req: Request, res: Response) => {
-    await platformStore.deleteMember(req.organizationId!, req.params.id);
-    return res.status(200).json({ success: true });
+    try {
+      await platformStore.deleteMember(req.organizationId!, req.params.id);
+      return res.status(200).json({ success: true });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'member_delete_failed',
+        message: err?.message || 'Failed to delete member.',
+      });
+    }
   }
 );
 
@@ -2727,8 +2801,15 @@ app.get(
   '/api/church-wall',
   requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
   async (req: Request, res: Response) => {
-    const posts = await churchWallStore.listPosts(req.organizationId!);
-    return res.status(200).json({ posts });
+    try {
+      const posts = await churchWallStore.listPosts(req.organizationId!);
+      return res.status(200).json({ posts });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'church_wall_fetch_failed',
+        message: err?.message || 'Failed to load church wall posts.',
+      });
+    }
   }
 );
 
@@ -2744,16 +2825,23 @@ app.post(
       });
     }
 
-    const post = await churchWallStore.createPost(req.organizationId!, {
-      authorId: req.user!.id,
-      authorName: req.user!.name || req.user!.email || 'Church Member',
-      category: parsed.data.category,
-      message: parsed.data.message,
-      targetMemberId: parsed.data.targetMemberId,
-      targetMemberName: parsed.data.targetMemberName,
-    });
+    try {
+      const post = await churchWallStore.createPost(req.organizationId!, {
+        authorId: req.user!.id,
+        authorName: req.user!.name || req.user!.email || 'Church Member',
+        category: parsed.data.category,
+        message: parsed.data.message,
+        targetMemberId: parsed.data.targetMemberId,
+        targetMemberName: parsed.data.targetMemberName,
+      });
 
-    return res.status(201).json({ post });
+      return res.status(201).json({ post });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'church_wall_create_failed',
+        message: err?.message || 'Failed to create church wall post.',
+      });
+    }
   }
 );
 
@@ -2761,11 +2849,18 @@ app.post(
   '/api/church-wall/:id/amen',
   requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
   async (req: Request, res: Response) => {
-    const post = await churchWallStore.toggleAmen(req.organizationId!, req.params.id, req.user!.id);
-    if (!post) {
-      return res.status(404).json({ error: 'not_found', message: 'Church wall post not found.' });
+    try {
+      const post = await churchWallStore.toggleAmen(req.organizationId!, req.params.id, req.user!.id);
+      if (!post) {
+        return res.status(404).json({ error: 'not_found', message: 'Church wall post not found.' });
+      }
+      return res.status(200).json({ post });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'church_wall_amen_failed',
+        message: err?.message || 'Failed to update church wall reaction.',
+      });
     }
-    return res.status(200).json({ post });
   }
 );
 
@@ -2786,21 +2881,28 @@ app.post(
       return res.status(400).json({ error: 'invalid_subscription', message: 'endpoint or id required' });
     }
 
-    const saved = await platformStore.upsertPushSubscription(req.organizationId!, {
-      id,
-      endpoint: endpoint || id,
-      keys: body.keys,
-      personId: body.personId || req.user?.id,
-      personName: body.personName || req.user?.name,
-      userAgent: body.userAgent,
-      subscribedAt: new Date().toISOString(),
-    });
+    try {
+      const saved = await platformStore.upsertPushSubscription(req.organizationId!, {
+        id,
+        endpoint: endpoint || id,
+        keys: body.keys,
+        personId: body.personId || req.user?.id,
+        personName: body.personName || req.user?.name,
+        userAgent: body.userAgent,
+        subscribedAt: new Date().toISOString(),
+      });
 
-    return res.status(200).json({
-      success: true,
-      subscription: saved.subscription,
-      totalSubscribers: saved.totalSubscribers,
-    });
+      return res.status(200).json({
+        success: true,
+        subscription: saved.subscription,
+        totalSubscribers: saved.totalSubscribers,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'notification_subscribe_failed',
+        message: err?.message || 'Failed to subscribe for notifications.',
+      });
+    }
   }
 );
 
@@ -2809,11 +2911,18 @@ app.get(
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   requireActiveLicense,
   async (req: Request, res: Response) => {
-    const subscriptions = await platformStore.getPushSubscriptions(req.organizationId!);
-    return res.status(200).json({
-      subscribersCount: subscriptions.length,
-      subscriptions,
-    });
+    try {
+      const subscriptions = await platformStore.getPushSubscriptions(req.organizationId!);
+      return res.status(200).json({
+        subscribersCount: subscriptions.length,
+        subscriptions,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'notification_list_failed',
+        message: err?.message || 'Failed to load notification subscriptions.',
+      });
+    }
   }
 );
 
@@ -2827,18 +2936,25 @@ app.post(
       return res.status(400).json({ error: 'invalid_notification', message: 'title and body are required' });
     }
 
-    const subscriptions = await platformStore.getPushSubscriptions(req.organizationId!);
-    const targets = personId ? subscriptions.filter((s) => s.personId === personId) : subscriptions;
-    const count = targets.length > 0 ? targets.length : 1;
+    try {
+      const subscriptions = await platformStore.getPushSubscriptions(req.organizationId!);
+      const targets = personId ? subscriptions.filter((s) => s.personId === personId) : subscriptions;
+      const count = targets.length > 0 ? targets.length : 1;
 
-    return res.status(200).json({
-      success: true,
-      title,
-      body,
-      dispatchedTo: count,
-      topic: topic || 'general',
-      timestamp: new Date().toISOString(),
-    });
+      return res.status(200).json({
+        success: true,
+        title,
+        body,
+        dispatchedTo: count,
+        topic: topic || 'general',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'notification_send_failed',
+        message: err?.message || 'Failed to send push notification.',
+      });
+    }
   }
 );
 
@@ -2848,30 +2964,37 @@ app.post(
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const orgId = req.organizationId!;
-    const [premiseData, eventsList, subscriptions] = await Promise.all([
-      platformStore.getPremiseSettings(orgId),
-      platformStore.getEvents(orgId),
-      platformStore.getPushSubscriptions(orgId),
-    ]);
+    try {
+      const [premiseData, eventsList, subscriptions] = await Promise.all([
+        platformStore.getPremiseSettings(orgId),
+        platformStore.getEvents(orgId),
+        platformStore.getPushSubscriptions(orgId),
+      ]);
 
-    const memberName = req.body?.personName || req.user?.name || 'Church Member';
-    const campus = premiseData.premiseSettings?.campusName || 'Sanctuary Campus';
-    const service = eventsList[0]?.name || 'Sunday Service';
+      const memberName = req.body?.personName || req.user?.name || 'Church Member';
+      const campus = premiseData.premiseSettings?.campusName || 'Sanctuary Campus';
+      const service = eventsList[0]?.name || 'Sunday Service';
 
-    const testPayload = {
-      title: `Welcome, ${memberName}!`,
-      body: `You are checked in for ${service} at ${campus}. Sanctuary presence confirmed.`,
-      icon: '/icon.svg',
-      tag: 'test-arrival',
-      timestamp: new Date().toISOString(),
-    };
+      const testPayload = {
+        title: `Welcome, ${memberName}!`,
+        body: `You are checked in for ${service} at ${campus}. Sanctuary presence confirmed.`,
+        icon: '/icon.svg',
+        tag: 'test-arrival',
+        timestamp: new Date().toISOString(),
+      };
 
-    return res.status(200).json({
-      success: true,
-      message: 'Test push payload generated and validated',
-      payload: testPayload,
-      activeSubscribers: subscriptions.length,
-    });
+      return res.status(200).json({
+        success: true,
+        message: 'Test push payload generated and validated',
+        payload: testPayload,
+        activeSubscribers: subscriptions.length,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'notification_test_failed',
+        message: err?.message || 'Failed to generate test push notification.',
+      });
+    }
   }
 );
 
@@ -2880,26 +3003,47 @@ app.post(
 // =========================================================================
 
 app.get('/api/auth/me', requireUser, enforceOrganizationScope, async (req: Request, res: Response) => {
-  const credStatus = await platformStore.getCredentialStatus(req.user!.id, req.user!.email);
-  return res.status(200).json({
-    user: {
-      ...req.user,
+  try {
+    const [credStatus, memberProfile] = await Promise.all([
+      platformStore.getCredentialStatus(req.user!.id, req.user!.email),
+      req.organizationId
+        ? platformStore.getMemberProfileForSession(req.organizationId, req.user!.id, req.user!.email)
+        : Promise.resolve(null),
+    ]);
+    return res.status(200).json({
+      user: {
+        ...req.user,
+        avatar: memberProfile?.imageUrl || undefined,
+        mustChangePassword: credStatus.mustChangePassword,
+      },
+      memberProfile,
+      organizationId: req.organizationId,
+      isCreator: isCreatorClaim(req.user),
       mustChangePassword: credStatus.mustChangePassword,
-    },
-    organizationId: req.organizationId,
-    isCreator: isCreatorClaim(req.user),
-    mustChangePassword: credStatus.mustChangePassword,
-    hasPasswordCredential: credStatus.hasPasswordCredential,
-    authenticated: true,
-  });
+      hasPasswordCredential: credStatus.hasPasswordCredential,
+      authenticated: true,
+    });
+  } catch (err: any) {
+    return res.status(err?.status || 500).json({
+      error: err?.code || 'auth_me_failed',
+      message: err?.message || 'Failed to resolve authenticated session.',
+    });
+  }
 });
 
 app.get('/api/license/status', requireUser, enforceOrganizationScope, async (req: Request, res: Response) => {
-  const evaluation = await platformStore.evaluateOrganizationLicense(req.organizationId!);
-  return res.status(evaluation.httpStatus).json({
-    ...evaluation,
-    tenantId: evaluation.organizationId,
-  });
+  try {
+    const evaluation = await platformStore.evaluateOrganizationLicense(req.organizationId!);
+    return res.status(evaluation.httpStatus).json({
+      ...evaluation,
+      tenantId: evaluation.organizationId,
+    });
+  } catch (err: any) {
+    return res.status(err?.status || 500).json({
+      error: err?.code || 'license_status_failed',
+      message: err?.message || 'Failed to evaluate organisation license status.',
+    });
+  }
 });
 
 app.post(
@@ -2925,6 +3069,14 @@ app.get(['/api/health', '/api/db/status'], (_req: Request, res: Response) => {
     app: 'Ekklesphere Church Management',
     storageBackend: platformStore.storageBackend,
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  const status = typeof err?.status === 'number' ? err.status : 500;
+  return res.status(status).json({
+    error: err?.code || 'internal_server_error',
+    message: err?.message || 'Unexpected server error.',
   });
 });
 

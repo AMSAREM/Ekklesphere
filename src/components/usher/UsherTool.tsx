@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { getCanonicalMemberId, findMemberByScannedId } from '../member/DigitalMemberCard';
 import { CameraQrScanner } from '../common/CameraQrScanner';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -57,6 +58,7 @@ export const UsherTool: React.FC = () => {
     name: string;
     group: string;
     initials: string;
+    imageUrl?: string;
     isOfflineSaved: boolean;
   } | null>(null);
 
@@ -111,6 +113,7 @@ export const UsherTool: React.FC = () => {
       name: `${person.firstName || ''} ${person.lastName || ''}`.trim() || 'Registered Member',
       group: person.groupName || person.homeCellGroup || 'General Congregation',
       initials: person.avatarInitials || 'MB',
+      imageUrl: person.imageUrl,
       isOfflineSaved: !isUsherOnline,
     });
 
@@ -711,9 +714,15 @@ export const UsherTool: React.FC = () => {
           role="status"
           aria-live="assertive"
         >
-          <div className="w-28 h-28 rounded-full bg-white text-[#1E7A5F] text-4xl font-black flex items-center justify-center shadow-2xl mb-4 animate-in zoom-in-75">
-            {confirmationMember.initials}
-          </div>
+          <MemberAvatar
+            src={confirmationMember.imageUrl}
+            name={confirmationMember.name}
+            initials={confirmationMember.initials}
+            sizeClass="w-28 h-28 mb-4 shadow-2xl animate-in zoom-in-75"
+            textClass="text-4xl font-black"
+            bgClass="bg-white text-[#1E7A5F]"
+            borderClass="border-4 border-white/80"
+          />
           <h2 className="text-3xl sm:text-4xl font-extrabold mb-1 tracking-tight">{confirmationMember.name}</h2>
           <p className="text-lg opacity-95">{confirmationMember.group}</p>
           <p className="text-base font-bold bg-white/20 px-5 py-1.5 rounded-full mt-4">

@@ -95,9 +95,11 @@ export const Footer: React.FC<FooterProps> = ({
           <p>
             © {year} {church.name}. All rights reserved.
           </p>
-          <p>
-            {church.phone} · {church.email}
-          </p>
+          {[church.phone, church.email].filter(Boolean).length > 0 && (
+            <p>
+              {[church.phone, church.email].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
       </div>
     </footer>
