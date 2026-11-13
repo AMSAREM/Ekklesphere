@@ -212,21 +212,29 @@ end $$;
 
 -- ----------------------------------------------------------------------------
 -- 4. Lock down public.spatial_ref_sys safely (PostGIS extension lookup table)
---    Note: In hosted Supabase, `public.spatial_ref_sys` is owned by
---    `supabase_admin`, so the dashboard `postgres` role cannot ALTER TABLE
---    directly. Do NOT blindly enable restrictive RLS if PostGIS views/RPCs
---    rely on lookup reads; revoke client write/API exposure safely if permitted.
+--    Verified: Zero frontend/client code queries `spatial_ref_sys` directly;
+--    geofence PostGIS queries execute server-side (`service_role`).
+--    In hosted Supabase, `public.spatial_ref_sys` is owned by `supabase_admin`,
+--    so the SQL Editor `postgres` role cannot ALTER TABLE or REVOKE directly.
 -- ----------------------------------------------------------------------------
 do $$
 begin
-  if to_regclass('public.spatial_ref_sys') is not null then
-    begin
-      revoke insert, update, delete, truncate on table public.spatial_ref_sys from public, anon, authenticated;
-    exception
-      when insufficient_privilege then
-        raise notice 'Could not alter grants on public.spatial_ref_sys (managed by supabase_admin).';
-    end;
+  if exists (
+    select 1
+    from pg_tables
+    where schemaname = 'public'
+      and tablename = 'spatial_ref_sys'
+      and tableowner = current_user
+  ) then
+    alter table public.spatial_ref_sys enable row level security;
+    drop policy if exists "allow_read_spatial_ref_sys" on public.spatial_ref_sys;
+    revoke all on table public.spatial_ref_sys from public, anon, authenticated;
+  else
+    raise notice 'Skipping public.spatial_ref_sys RLS/grant update (owned by PostGIS extension owner supabase_admin).';
   end if;
+exception
+  when insufficient_privilege then
+    raise notice 'Skipping public.spatial_ref_sys RLS/grant update (insufficient privilege).';
 end $$;
 
 commit;

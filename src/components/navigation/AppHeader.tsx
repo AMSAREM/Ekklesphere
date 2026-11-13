@@ -17,6 +17,7 @@ import {
   Settings,
   Bell,
   Sparkles,
+  KeyRound,
 } from 'lucide-react';
 
 export const AppHeader: React.FC = () => {
@@ -38,6 +39,7 @@ export const AppHeader: React.FC = () => {
     setViewMode,
     followupTasks,
     setIsFollowupModalOpen,
+    setIsChangePasswordModalOpen,
     members,
     attendanceRecords,
   } = useEkklesphere();
@@ -397,6 +399,21 @@ export const AppHeader: React.FC = () => {
                         <span>System Settings</span>
                       </button>
                     )}
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsChangePasswordModalOpen(true);
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl text-xs text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-50 dark:hover:bg-white/5 transition-all cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <KeyRound className="w-3.5 h-3.5 text-[#666A86] dark:text-[#A9ACC8]" />
+                        <span>{currentUser.mustChangePassword ? 'Set Personal Password' : 'Change Password'}</span>
+                      </span>
+                      {currentUser.mustChangePassword && (
+                        <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" title="Temporary password active" />
+                      )}
+                    </button>
                     <button
                       onClick={() => {
                         setIsUserMenuOpen(false);

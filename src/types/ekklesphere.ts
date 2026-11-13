@@ -29,6 +29,7 @@ export interface AuthUser {
   permissions: string[];
   token?: string;
   is_creator?: boolean;
+  mustChangePassword?: boolean;
 }
 
 export interface AuthActionResult {
@@ -129,6 +130,15 @@ export interface Person {
   joinedOn: string;
   consecutiveAbsences: number;
   notes?: string;
+  onboardingCredentials?: OnboardingCredentialSummary;
+}
+
+export interface OnboardingCredentialSummary {
+  provisioned: boolean;
+  status: 'created' | 'already_exists' | 'skipped_no_contact';
+  identifiers: string[];
+  temporaryPassword?: string;
+  mustChangePassword: boolean;
 }
 
 export interface MembershipColumnDef {

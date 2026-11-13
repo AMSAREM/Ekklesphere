@@ -588,6 +588,13 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   {errors.email && <span className="text-[10px] text-rose-500">{errors.email}</span>}
                 </div>
               </div>
+
+              {!initialData && (
+                <div className="p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Member Portal Access:</span>{' '}
+                  Onboarded members with a phone number or email address automatically receive a Member account with a temporary generic password they can change on sign-in.
+                </div>
+              )}
             </div>
           )}
 

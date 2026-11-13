@@ -30,6 +30,7 @@ import {
   Sparkles,
   Send,
   Cake,
+  KeyRound,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
@@ -83,6 +84,7 @@ export const MemberApp: React.FC = () => {
     churchWallPosts,
     addChurchWallPost,
     toggleChurchWallAmen,
+    setIsChangePasswordModalOpen,
   } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
@@ -1517,6 +1519,32 @@ export const MemberApp: React.FC = () => {
                 <span>Delete My Record</span>
               </button>
             </div>
+          </div>
+
+          {/* Account Security & Password */}
+          <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                <span>Account Password & Security</span>
+              </h2>
+              <span className="text-[11px] font-semibold text-[#5B5F7A] dark:text-[#A9ACC8]">
+                {currentUser?.mustChangePassword ? 'Temporary Password Active' : 'Personal Password'}
+              </span>
+            </div>
+            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] leading-relaxed">
+              {currentUser?.mustChangePassword
+                ? 'Your account was provisioned with a temporary onboarding password. Update it to a personal password at any time.'
+                : 'Sign in with your registered email address or phone number. You can update your password whenever needed.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsChangePasswordModalOpen(true)}
+              className="w-full py-2.5 rounded-2xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>{currentUser?.mustChangePassword ? 'Set Personal Password' : 'Change Password'}</span>
+            </button>
           </div>
 
           {/* Account Session & Verified Portal Switcher */}

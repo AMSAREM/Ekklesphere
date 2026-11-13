@@ -43,6 +43,13 @@ import type {
   TenantStatus,
   UsageDailyAggregate,
 } from '../types/ekklesphere.ts';
+import {
+  validateMemberImportBatch,
+  type ExistingMemberIndexEntry,
+  type ImportDuplicateMode,
+  type MemberImportValidationSummary,
+  type ValidatedImportRow,
+} from '../shared/memberImportValidation.ts';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRACE_PERIOD_DAYS = 7;
@@ -84,6 +91,16 @@ export function verifyPassword(password: string, hash: string, salt: string): bo
 
 export type OrganizationRecord = TenantChurch;
 
+export const DEFAULT_MEMBER_ONBOARDING_PASSWORD = 'Ekklesphere@2026';
+
+export interface OnboardingCredentialResult {
+  provisioned: boolean;
+  status: 'created' | 'already_exists' | 'skipped_no_contact';
+  identifiers: string[];
+  temporaryPassword?: string;
+  mustChangePassword: boolean;
+}
+
 export interface UserCredentialRecord {
   id: string;
   memberId?: string;
@@ -97,6 +114,8 @@ export interface UserCredentialRecord {
   passwordHash: string;
   passwordSalt: string;
   status: 'active' | 'suspended' | 'locked';
+  mustChangePassword?: boolean;
+  passwordUpdatedAt?: string | null;
   failedAttempts?: number;
   lockedUntil?: string | null;
   createdAt?: string;
@@ -792,7 +811,9 @@ class PlatformStore {
       | 'register_success'
       | 'register_rejected'
       | 'token_exchanged'
-      | 'logout';
+      | 'logout'
+      | 'account_auto_provisioned'
+      | 'password_changed';
     ipAddress?: string;
     success: boolean;
     reason?: string;
@@ -864,6 +885,14 @@ class PlatformStore {
     }
   }
 
+  public getGenericOnboardingPassword(): string {
+    const configured = (process.env.MEMBER_DEFAULT_ONBOARDING_PASSWORD || '').trim();
+    if (configured.length >= 8) {
+      return configured;
+    }
+    return DEFAULT_MEMBER_ONBOARDING_PASSWORD;
+  }
+
   public async provisionCredentialRecord(params: {
     id?: string;
     memberId?: string;
@@ -875,6 +904,8 @@ class PlatformStore {
     role: ChurchRole;
     isCreator?: boolean;
     password: string;
+    mustChangePassword?: boolean;
+    passwordUpdatedAt?: string | null;
   }): Promise<UserCredentialRecord> {
     const { hash, salt } = hashPassword(params.password);
     const id = params.id || randomUUID();
@@ -891,13 +922,15 @@ class PlatformStore {
       passwordHash: hash,
       passwordSalt: salt,
       status: 'active',
+      mustChangePassword: Boolean(params.mustChangePassword),
+      passwordUpdatedAt: params.passwordUpdatedAt ?? null,
       failedAttempts: 0,
       lockedUntil: null,
       createdAt: new Date().toISOString(),
     };
 
     if (this.supabase) {
-      const { error } = await this.supabase.from('account_credentials').upsert({
+      const baseRow = {
         id: UUID_REGEX.test(id) ? id : toDeterministicUuid(id),
         member_id: record.memberId && UUID_REGEX.test(record.memberId) ? record.memberId : null,
         organization_id:
@@ -915,7 +948,19 @@ class PlatformStore {
         status: record.status,
         failed_attempts: 0,
         locked_until: null,
+      };
+
+      let { error } = await this.supabase.from('account_credentials').upsert({
+        ...baseRow,
+        must_change_password: Boolean(record.mustChangePassword),
+        password_updated_at: record.passwordUpdatedAt ?? null,
       });
+
+      if (error && /column .* does not exist/i.test(error.message || '')) {
+        const retry = await this.supabase.from('account_credentials').upsert(baseRow);
+        error = retry.error;
+      }
+
       if (error) {
         throw new Error(`Failed to persist account credentials in Supabase: ${error.message}`);
       }
@@ -923,6 +968,312 @@ class PlatformStore {
 
     this.userCredentials.set(record.id, record);
     return record;
+  }
+
+  private async findCredentialByContactOrMember(params: {
+    memberId?: string;
+    email?: string;
+    phoneE164?: string;
+  }): Promise<UserCredentialRecord | undefined> {
+    const cleanEmail = params.email ? params.email.trim().toLowerCase() : '';
+    const cleanPhone = params.phoneE164 ? normalizePhone(params.phoneE164) : '';
+    const cleanMemberId = params.memberId ? params.memberId.trim() : '';
+
+    for (const cred of this.userCredentials.values()) {
+      if (cleanMemberId && (cred.memberId === cleanMemberId || cred.id === cleanMemberId)) {
+        return cred;
+      }
+      if (cleanEmail && cred.email && cred.email.toLowerCase() === cleanEmail) {
+        return cred;
+      }
+      if (cleanPhone && cred.phoneE164 && cred.phoneE164 === cleanPhone) {
+        return cred;
+      }
+    }
+
+    if (this.supabase) {
+      const orFilters: string[] = [];
+      if (cleanMemberId && UUID_REGEX.test(cleanMemberId)) {
+        orFilters.push(`id.eq.${cleanMemberId}`, `member_id.eq.${cleanMemberId}`);
+      }
+      if (cleanEmail) {
+        orFilters.push(`email.ilike.${cleanEmail}`);
+      }
+      if (cleanPhone) {
+        orFilters.push(`phone_e164.eq.${cleanPhone}`);
+      }
+      if (orFilters.length > 0) {
+        const { data: row } = await this.supabase
+          .from('account_credentials')
+          .select('*')
+          .or(orFilters.join(','))
+          .limit(1)
+          .maybeSingle();
+
+        if (row && row.password_hash && row.password_salt) {
+          const loaded: UserCredentialRecord = {
+            id: String(row.id),
+            memberId: row.member_id ? String(row.member_id) : undefined,
+            organizationId: String(row.organization_id || '').toLowerCase(),
+            email: row.email ? String(row.email).toLowerCase() : undefined,
+            username: row.username ? String(row.username).toLowerCase() : undefined,
+            phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
+            name: String(row.full_name || 'Member'),
+            role: mapSupabaseRoleToChurchRole(row.role),
+            isCreator: Boolean(row.is_creator || row.role === 'creator' || row.role === 'super_admin'),
+            passwordHash: String(row.password_hash),
+            passwordSalt: String(row.password_salt),
+            status: (row.status as UserCredentialRecord['status']) || 'active',
+            mustChangePassword: Boolean(row.must_change_password),
+            passwordUpdatedAt: row.password_updated_at ? String(row.password_updated_at) : null,
+            failedAttempts: Number(row.failed_attempts || 0),
+            lockedUntil: row.locked_until ? String(row.locked_until) : null,
+            createdAt: row.created_at ? String(row.created_at) : undefined,
+          };
+          this.userCredentials.set(loaded.id, loaded);
+          return loaded;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  public async autoProvisionMemberCredentials(params: {
+    organizationId: string;
+    memberId: string;
+    firstName: string;
+    lastName: string;
+    email?: string | null;
+    phoneE164?: string | null;
+    initialPassword?: string;
+  }): Promise<OnboardingCredentialResult> {
+    const cleanEmail = params.email ? String(params.email).trim().toLowerCase() : '';
+    const cleanPhone = params.phoneE164 ? normalizePhone(String(params.phoneE164)) : '';
+    const identifiers = [cleanEmail, cleanPhone].filter(Boolean);
+
+    if (identifiers.length === 0) {
+      return {
+        provisioned: false,
+        status: 'skipped_no_contact',
+        identifiers: [],
+        mustChangePassword: false,
+      };
+    }
+
+    const existing = await this.findCredentialByContactOrMember({
+      memberId: params.memberId,
+      email: cleanEmail || undefined,
+      phoneE164: cleanPhone || undefined,
+    });
+
+    if (existing) {
+      return {
+        provisioned: false,
+        status: 'already_exists',
+        identifiers,
+        mustChangePassword: Boolean(existing.mustChangePassword),
+      };
+    }
+
+    const temporaryPassword =
+      params.initialPassword && params.initialPassword.trim().length >= 8
+        ? params.initialPassword.trim()
+        : this.getGenericOnboardingPassword();
+    const fullName = `${params.firstName || ''} ${params.lastName || ''}`.trim() || 'Congregation Member';
+    const credId = UUID_REGEX.test(params.memberId) ? params.memberId : randomUUID();
+
+    try {
+      const createdCred = await this.provisionCredentialRecord({
+        id: credId,
+        memberId: params.memberId,
+        organizationId: params.organizationId,
+        email: cleanEmail || undefined,
+        phoneE164: cleanPhone || undefined,
+        name: fullName,
+        role: 'member',
+        isCreator: false,
+        password: temporaryPassword,
+        mustChangePassword: true,
+        passwordUpdatedAt: null,
+      });
+
+      await this.recordAuthAuditEvent({
+        organizationId: params.organizationId,
+        accountId: createdCred.id,
+        identifier: cleanEmail || cleanPhone || params.memberId,
+        eventType: 'account_auto_provisioned',
+        success: true,
+        reason: 'member_onboarding_generic_password',
+      });
+
+      return {
+        provisioned: true,
+        status: 'created',
+        identifiers,
+        temporaryPassword,
+        mustChangePassword: true,
+      };
+    } catch (err: any) {
+      // Handle rare concurrent duplicate insert gracefully without failing member onboarding
+      if (/duplicate|unique|23505/i.test(String(err?.message || ''))) {
+        return {
+          provisioned: false,
+          status: 'already_exists',
+          identifiers,
+          mustChangePassword: false,
+        };
+      }
+      throw err;
+    }
+  }
+
+  public async getCredentialStatus(
+    userId: string,
+    email?: string
+  ): Promise<{
+    hasPasswordCredential: boolean;
+    mustChangePassword: boolean;
+    passwordUpdatedAt: string | null;
+  }> {
+    const matched = await this.findCredentialByContactOrMember({
+      memberId: userId,
+      email: email || undefined,
+    });
+    if (!matched) {
+      return {
+        hasPasswordCredential: false,
+        mustChangePassword: false,
+        passwordUpdatedAt: null,
+      };
+    }
+    return {
+      hasPasswordCredential: true,
+      mustChangePassword: Boolean(matched.mustChangePassword),
+      passwordUpdatedAt: matched.passwordUpdatedAt ?? null,
+    };
+  }
+
+  public async changePasswordForUser(params: {
+    userId: string;
+    email?: string;
+    currentPassword: string;
+    newPassword: string;
+    ipAddress?: string;
+  }): Promise<{
+    success: true;
+    mustChangePassword: false;
+    passwordUpdatedAt: string;
+  }> {
+    const currentPassword = (params.currentPassword || '').trim();
+    const newPassword = (params.newPassword || '').trim();
+
+    if (!currentPassword) {
+      const err: any = new Error('Current password is required.');
+      err.code = 'INVALID_CURRENT_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+
+    if (newPassword.length < 8) {
+      const err: any = new Error('New password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+
+    const cred = await this.findCredentialByContactOrMember({
+      memberId: params.userId,
+      email: params.email || undefined,
+    });
+
+    if (!cred) {
+      const err: any = new Error('No password-based account credentials found for your session.');
+      err.code = 'CREDENTIAL_NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    if (!verifyPassword(currentPassword, cred.passwordHash, cred.passwordSalt)) {
+      await this.recordAuthAuditEvent({
+        organizationId: cred.organizationId,
+        accountId: cred.id,
+        identifier: cred.email || cred.phoneE164 || cred.id,
+        eventType: 'password_changed',
+        ipAddress: params.ipAddress,
+        success: false,
+        reason: 'current_password_mismatch',
+      });
+      const err: any = new Error('Current password is incorrect.');
+      err.code = 'INVALID_CURRENT_PASSWORD';
+      err.status = 401;
+      throw err;
+    }
+
+    if (newPassword === currentPassword) {
+      const err: any = new Error('Please choose a new password that differs from your current password.');
+      err.code = 'PASSWORD_UNCHANGED';
+      err.status = 400;
+      throw err;
+    }
+
+    const { hash, salt } = hashPassword(newPassword);
+    const nowIso = new Date().toISOString();
+
+    cred.passwordHash = hash;
+    cred.passwordSalt = salt;
+    cred.mustChangePassword = false;
+    cred.passwordUpdatedAt = nowIso;
+    cred.failedAttempts = 0;
+    cred.lockedUntil = null;
+    this.userCredentials.set(cred.id, cred);
+
+    if (this.supabase) {
+      const baseUpdate = {
+        password_hash: hash,
+        password_salt: salt,
+        failed_attempts: 0,
+        locked_until: null,
+        updated_at: nowIso,
+      };
+
+      let { error } = await this.supabase
+        .from('account_credentials')
+        .update({
+          ...baseUpdate,
+          must_change_password: false,
+          password_updated_at: nowIso,
+        })
+        .eq('id', cred.id);
+
+      if (error && /column .* does not exist/i.test(error.message || '')) {
+        const retry = await this.supabase
+          .from('account_credentials')
+          .update(baseUpdate)
+          .eq('id', cred.id);
+        error = retry.error;
+      }
+
+      if (error) {
+        throw new Error(`Failed to update password in Supabase: ${error.message}`);
+      }
+    }
+
+    await this.resetDistributedAuthRateLimit(`login:${cred.id}`);
+    await this.recordAuthAuditEvent({
+      organizationId: cred.organizationId,
+      accountId: cred.id,
+      identifier: cred.email || cred.phoneE164 || cred.id,
+      eventType: 'password_changed',
+      ipAddress: params.ipAddress,
+      success: true,
+    });
+
+    return {
+      success: true,
+      mustChangePassword: false,
+      passwordUpdatedAt: nowIso,
+    };
   }
 
   public async upsertCreatorCredentials(params: {
@@ -1211,6 +1562,7 @@ class PlatformStore {
       role: ChurchRole;
       organizationId: string;
       isCreator: boolean;
+      mustChangePassword: boolean;
     };
     organization: OrganizationRecord | null;
     token: string;
@@ -1271,6 +1623,8 @@ class PlatformStore {
           name: String(credRow.full_name || 'Member'),
           isCreator: Boolean(credRow.is_creator || credRow.role === 'creator' || credRow.role === 'super_admin'),
           status: (credRow.status as UserCredentialRecord['status']) || 'active',
+          mustChangePassword: Boolean(credRow.must_change_password),
+          passwordUpdatedAt: credRow.password_updated_at ? String(credRow.password_updated_at) : null,
           failedAttempts: Number(credRow.failed_attempts || 0),
           lockedUntil: credRow.locked_until ? String(credRow.locked_until) : null,
           createdAt: credRow.created_at ? String(credRow.created_at) : undefined,
@@ -1438,6 +1792,7 @@ class PlatformStore {
         role: foundCred.role,
         organizationId: foundCred.organizationId,
         isCreator: foundCred.isCreator,
+        mustChangePassword: Boolean(foundCred.mustChangePassword),
       },
       organization,
       token,
@@ -1464,6 +1819,7 @@ class PlatformStore {
       role: ChurchRole;
       organizationId: string;
       isCreator: boolean;
+      mustChangePassword: boolean;
     };
     organization: OrganizationRecord | null;
     token: string;
@@ -1562,16 +1918,20 @@ class PlatformStore {
     }
 
     // Self-registration ALWAYS forces least-privilege role: 'member' (never trusts client role)
-    const member = await this.createMember(targetOrgId, {
-      firstName,
-      lastName,
-      email: email || undefined,
-      phoneE164: normalizedPhone || phone || undefined,
-      groupName: params.groupName || 'General Congregation',
-      autoCheckinOptedIn: params.autoCheckinOptedIn ?? true,
-      role: 'member',
-      status: 'active',
-    });
+    const member = await this.createMember(
+      targetOrgId,
+      {
+        firstName,
+        lastName,
+        email: email || undefined,
+        phoneE164: normalizedPhone || phone || undefined,
+        groupName: params.groupName || 'General Congregation',
+        autoCheckinOptedIn: params.autoCheckinOptedIn ?? true,
+        role: 'member',
+        status: 'active',
+      },
+      { skipAutoCredentials: true }
+    );
 
     const memberId = String(member.id || randomUUID());
     const fullName = `${firstName} ${lastName}`.trim();
@@ -1586,6 +1946,7 @@ class PlatformStore {
       role: 'member',
       isCreator: false,
       password,
+      mustChangePassword: false,
     });
 
     await this.recordAuthAuditEvent({
@@ -1618,6 +1979,7 @@ class PlatformStore {
         role: 'member',
         organizationId: targetOrgId,
         isCreator: false,
+        mustChangePassword: false,
       },
       organization,
       token,
@@ -1645,6 +2007,7 @@ class PlatformStore {
       role: ChurchRole;
       organizationId: string;
       isCreator: boolean;
+      mustChangePassword: boolean;
     };
     organization: OrganizationRecord;
     license: SystemLicense | null;
@@ -1736,16 +2099,20 @@ class PlatformStore {
     });
 
     // 3. Provision founder/admin member record strictly scoped to this newly created organisation
-    const adminMember = await this.createMember(organisation.id, {
-      firstName,
-      lastName,
-      email,
-      phoneE164: normalizedPhone || rawPhone || undefined,
-      groupName: 'Church Leadership',
-      autoCheckinOptedIn: false,
-      role: 'admin',
-      status: 'active',
-    });
+    const adminMember = await this.createMember(
+      organisation.id,
+      {
+        firstName,
+        lastName,
+        email,
+        phoneE164: normalizedPhone || rawPhone || undefined,
+        groupName: 'Church Leadership',
+        autoCheckinOptedIn: false,
+        role: 'admin',
+        status: 'active',
+      },
+      { skipAutoCredentials: true }
+    );
 
     const memberId = String(adminMember.id || randomUUID());
 
@@ -1760,6 +2127,7 @@ class PlatformStore {
       role: 'admin',
       isCreator: false,
       password,
+      mustChangePassword: false,
     });
 
     await this.recordAuthAuditEvent({
@@ -1809,6 +2177,7 @@ class PlatformStore {
         role: 'admin',
         organizationId: organisation.id,
         isCreator: false,
+        mustChangePassword: false,
       },
       organization: organisation,
       license,
@@ -2468,6 +2837,146 @@ class PlatformStore {
     return [...(this.rawEventsByOrg.get(orgId) || [])];
   }
 
+  private mapPersonStatusToDbStatus(status?: string): 'active' | 'inactive' | 'archived' | 'pending' {
+    const s = String(status || '').trim().toLowerCase();
+    if (s === 'inactive') return 'inactive';
+    if (s === 'pending') return 'pending';
+    if (s === 'archived' || s === 'transferred' || s === 'deceased') return 'archived';
+    return 'active';
+  }
+
+  private mapDbStatusToPersonStatus(
+    dbStatus?: string,
+    customAttrs?: Record<string, unknown>
+  ): string {
+    const customStatus = customAttrs?.memberStatus;
+    if (typeof customStatus === 'string' && customStatus.trim()) {
+      return customStatus.trim();
+    }
+    if (!dbStatus || dbStatus === 'active') return 'member';
+    if (dbStatus === 'archived') return 'inactive';
+    return dbStatus;
+  }
+
+  private extractMemberCustomAttributes(
+    payload: Record<string, any>,
+    existingCustom?: Record<string, unknown>
+  ): Record<string, unknown> {
+    const next: Record<string, unknown> = { ...(existingCustom || {}) };
+    const extendedKeys = [
+      'middleName',
+      'specificLocation',
+      'remarks',
+      'memberId',
+      'squads',
+      'department',
+      'officerName',
+      'placeOfResidence',
+      'residentialDigitalAddress',
+      'hometown',
+      'occupation',
+      'homeCellGroup',
+      'groupName',
+      'monthOfBirth',
+      'maritalStatus',
+      'spouseName',
+      'numberOfChildren',
+      'emergencyContactPerson',
+      'emergencyContactPhone',
+      'imageUrl',
+      'dateOfBaptism',
+      'dateOfMarriage',
+      'dateOfSalvation',
+      'dateOfMembership',
+      'autoCheckinOptedIn',
+      'consecutiveAbsences',
+    ];
+    for (const key of extendedKeys) {
+      if (payload[key] !== undefined && payload[key] !== null && payload[key] !== '') {
+        next[key] = payload[key];
+      }
+    }
+    if (payload.status !== undefined) {
+      next.memberStatus = payload.status;
+    }
+    return next;
+  }
+
+  private mapSupabaseMemberRow(orgId: string, row: Record<string, any>): Record<string, any> {
+    const custom =
+      row.custom_attributes && typeof row.custom_attributes === 'object'
+        ? (row.custom_attributes as Record<string, any>)
+        : {};
+    const firstName =
+      row.first_name ||
+      row.firstName ||
+      (row.full_name ? String(row.full_name).split(' ')[0] : 'Member');
+    const lastName =
+      row.last_name ||
+      row.lastName ||
+      (row.full_name ? String(row.full_name).split(' ').slice(1).join(' ') : '');
+    const groupName =
+      row.group_name ||
+      row.home_cell_group ||
+      custom.homeCellGroup ||
+      custom.groupName ||
+      'General Congregation';
+    const phoneE164 = row.phone || row.phone_e164 || row.phoneE164 || '';
+
+    return {
+      ...custom,
+      ...row,
+      id: String(row.id),
+      tenantId: orgId,
+      firstName,
+      middleName: row.middle_name ?? custom.middleName,
+      lastName,
+      email: row.email ?? custom.email ?? undefined,
+      phoneE164,
+      phoneNumber: row.phone_number ?? phoneE164,
+      memberId: row.member_id ?? custom.memberId,
+      department: row.department ?? custom.department ?? 'General Congregation',
+      squads: row.squads ?? custom.squads,
+      officerName: row.member_officer_name ?? custom.officerName,
+      specificLocation: row.specific_location ?? custom.specificLocation,
+      remarks: row.remarks ?? custom.remarks,
+      gender: row.gender ?? custom.gender ?? 'other',
+      dateOfBirth: row.date_of_birth ?? custom.dateOfBirth,
+      placeOfResidence: row.place_of_residence ?? custom.placeOfResidence,
+      residentialDigitalAddress:
+        row.residential_digital_address ?? custom.residentialDigitalAddress,
+      hometown: row.hometown ?? custom.hometown,
+      occupation: row.occupation ?? custom.occupation,
+      homeCellGroup: groupName,
+      groupName,
+      monthOfBirth: row.month_of_birth ?? custom.monthOfBirth,
+      maritalStatus: row.marital_status ?? custom.maritalStatus ?? 'Single',
+      spouseName: row.spouse_name ?? custom.spouseName,
+      numberOfChildren:
+        typeof row.number_of_children === 'number'
+          ? row.number_of_children
+          : typeof custom.numberOfChildren === 'number'
+          ? custom.numberOfChildren
+          : 0,
+      emergencyContactPerson:
+        row.emergency_contact_person ?? custom.emergencyContactPerson,
+      emergencyContactPhone:
+        row.emergency_phone ?? custom.emergencyContactPhone,
+      imageUrl: row.image_url ?? row.photo_url ?? custom.imageUrl,
+      dateOfBaptism: row.date_of_baptism ?? custom.dateOfBaptism,
+      dateOfMarriage: row.date_of_marriage ?? custom.dateOfMarriage,
+      dateOfSalvation: row.date_of_salvation ?? custom.dateOfSalvation,
+      dateOfMembership:
+        row.date_of_membership ??
+        custom.dateOfMembership ??
+        (row.joined_at ? String(row.joined_at).slice(0, 10) : undefined),
+      autoCheckinOptedIn: custom.autoCheckinOptedIn ?? true,
+      consecutiveAbsences:
+        typeof custom.consecutiveAbsences === 'number' ? custom.consecutiveAbsences : 0,
+      status: this.mapDbStatusToPersonStatus(row.status, custom),
+    };
+  }
+
   public async getMembers(organizationId: string): Promise<Record<string, any>[]> {
     const orgId = organizationId.toLowerCase();
     if (this.supabase) {
@@ -2477,16 +2986,7 @@ class PlatformStore {
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false });
       if (!error && Array.isArray(data)) {
-        return data.map((row) => ({
-          ...row,
-          id: String(row.id),
-          tenantId: orgId,
-          firstName: row.first_name || row.firstName || (row.full_name ? String(row.full_name).split(' ')[0] : 'Member'),
-          lastName: row.last_name || row.lastName || (row.full_name ? String(row.full_name).split(' ').slice(1).join(' ') : ''),
-          phoneE164: row.phone || row.phone_e164 || row.phoneE164 || '',
-          groupName: row.group_name || row.home_cell_group || 'General Congregation',
-          status: row.status || 'member',
-        }));
+        return data.map((row) => this.mapSupabaseMemberRow(orgId, row));
       }
     }
     return [...(this.membersByOrg.get(orgId) || [])];
@@ -2510,7 +3010,8 @@ class PlatformStore {
 
   public async createMember(
     organizationId: string,
-    payload: Record<string, any>
+    payload: Record<string, any>,
+    options?: { skipAutoCredentials?: boolean }
   ): Promise<Record<string, any>> {
     const orgId = organizationId.toLowerCase();
     const evalRes = await this.evaluateOrganizationLicense(orgId);
@@ -2533,81 +3034,246 @@ class PlatformStore {
 
     const firstName = String(payload.firstName ?? payload.first_name ?? '').trim();
     const lastName = String(payload.lastName ?? payload.last_name ?? '').trim();
-    const phone = payload.phoneE164 || payload.phoneNumber || payload.phone || null;
+    const rawPhone = payload.phoneE164 || payload.phoneNumber || payload.phone || null;
+    const phone = rawPhone ? normalizePhone(String(rawPhone)) || String(rawPhone).trim() : null;
     const email = payload.email ? String(payload.email).trim().toLowerCase() : null;
+    const genderVal =
+      payload.gender && ['male', 'female', 'other'].includes(String(payload.gender).toLowerCase())
+        ? String(payload.gender).toLowerCase()
+        : null;
+    const dobVal =
+      payload.dateOfBirth && /^\d{4}-\d{2}-\d{2}$/.test(String(payload.dateOfBirth))
+        ? String(payload.dateOfBirth)
+        : null;
+    const customAttributes = this.extractMemberCustomAttributes(payload);
+
+    let createdMember: Record<string, any>;
 
     if (this.supabase) {
-      const { data, error } = await this.supabase
+      const baseInsert: Record<string, unknown> = {
+        organization_id: orgId,
+        first_name: firstName,
+        last_name: lastName,
+        preferred_name: `${firstName} ${lastName}`.trim(),
+        email,
+        phone_e164: phone,
+        role: payload.role && ['owner', 'admin', 'pastor', 'usher', 'leader', 'member', 'guest'].includes(payload.role)
+          ? payload.role
+          : 'member',
+        status: this.mapPersonStatusToDbStatus(payload.status),
+        gender: genderVal,
+        date_of_birth: dobVal,
+        photo_url: payload.imageUrl || null,
+        custom_attributes: customAttributes,
+      };
+
+      const extendedInsert: Record<string, unknown> = {
+        ...baseInsert,
+        phone_number: phone,
+        home_cell_group: payload.homeCellGroup || payload.groupName || 'General Congregation',
+        department: payload.department || 'General Congregation',
+        member_id: payload.memberId || null,
+        middle_name: payload.middleName || null,
+        specific_location: payload.specificLocation || null,
+        remarks: payload.remarks || null,
+        squads: payload.squads || null,
+        member_officer_name: payload.officerName || null,
+        place_of_residence: payload.placeOfResidence || null,
+        residential_digital_address: payload.residentialDigitalAddress || null,
+        hometown: payload.hometown || null,
+        occupation: payload.occupation || null,
+        month_of_birth: payload.monthOfBirth || null,
+        marital_status: payload.maritalStatus || null,
+        spouse_name: payload.spouseName || null,
+        number_of_children:
+          typeof payload.numberOfChildren === 'number' ? payload.numberOfChildren : 0,
+        emergency_contact_person: payload.emergencyContactPerson || null,
+        emergency_phone: payload.emergencyContactPhone || null,
+        image_url: payload.imageUrl || null,
+        date_of_baptism: payload.dateOfBaptism || null,
+        date_of_marriage: payload.dateOfMarriage || null,
+        date_of_salvation: payload.dateOfSalvation || null,
+        date_of_membership: payload.dateOfMembership || null,
+      };
+
+      let { data, error } = await this.supabase
         .from('members')
-        .insert({
-          organization_id: orgId,
-          first_name: firstName,
-          last_name: lastName,
-          preferred_name: `${firstName} ${lastName}`.trim(),
-          email,
-          phone_e164: phone,
-          phone_number: phone,
-          home_cell_group: payload.groupName || 'General Congregation',
-          role: payload.role || 'member',
-          status: payload.status || 'active',
-        })
+        .insert(extendedInsert)
         .select('*')
         .single();
+
+      // Fall back to base columns + custom_attributes JSONB if optional extended columns are absent
+      if (error && /column .* does not exist/i.test(error.message || '')) {
+        const retry = await this.supabase
+          .from('members')
+          .insert(baseInsert)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error || !data) {
         throw new Error(`Failed to create member in Supabase: ${error?.message || 'Unknown error'}`);
       }
 
-      return {
+      createdMember = {
+        ...this.mapSupabaseMemberRow(orgId, data),
+        avatarInitials: `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase(),
+        joinedOn:
+          payload.dateOfMembership || new Date().toISOString().slice(0, 10),
+      };
+    } else {
+      const newMember = {
         ...payload,
-        id: String(data.id),
+        id: payload.id || randomUUID(),
         tenantId: orgId,
         firstName,
         lastName,
         phoneE164: phone,
+        phoneNumber: phone,
         email,
-        status: payload.status || 'active',
-        groupName: payload.groupName || 'General Congregation',
+        status: payload.status || 'member',
+        groupName: payload.groupName || payload.homeCellGroup || 'General Congregation',
+        homeCellGroup: payload.homeCellGroup || payload.groupName || 'General Congregation',
         autoCheckinOptedIn: payload.autoCheckinOptedIn ?? true,
         avatarInitials: `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase(),
-        joinedOn: new Date().toISOString().slice(0, 10),
+        joinedOn: payload.dateOfMembership || new Date().toISOString().slice(0, 10),
         consecutiveAbsences: 0,
       };
+
+      const list = this.membersByOrg.get(orgId) || [];
+      list.unshift(newMember);
+      this.membersByOrg.set(orgId, list);
+
+      const org = this.orgs.get(orgId);
+      if (org) {
+        org.memberCount = list.length;
+      }
+
+      createdMember = newMember;
     }
 
-    const newMember = {
-      ...payload,
-      id: payload.id || randomUUID(),
-      tenantId: orgId,
+    if (options?.skipAutoCredentials) {
+      return createdMember;
+    }
+
+    const onboardingCredentials = await this.autoProvisionMemberCredentials({
+      organizationId: orgId,
+      memberId: String(createdMember.id),
       firstName,
       lastName,
-      phoneE164: phone,
-      email,
-      status: payload.status || 'member',
-      groupName: payload.groupName || 'General Congregation',
-      autoCheckinOptedIn: payload.autoCheckinOptedIn ?? true,
-      avatarInitials: `${firstName[0] || 'M'}${lastName[0] || 'M'}`.toUpperCase(),
-      joinedOn: new Date().toISOString().slice(0, 10),
-      consecutiveAbsences: 0,
+      email: createdMember.email || email,
+      phoneE164: createdMember.phoneE164 || phone,
+      initialPassword:
+        typeof payload.initialPassword === 'string' ? payload.initialPassword : undefined,
+    });
+
+    return {
+      ...createdMember,
+      onboardingCredentials,
     };
+  }
 
-    const list = this.membersByOrg.get(orgId) || [];
-    list.unshift(newMember);
-    this.membersByOrg.set(orgId, list);
+  public async validateMemberImport(
+    organizationId: string,
+    incomingMembers: Record<string, any>[],
+    duplicateMode: ImportDuplicateMode = 'skip'
+  ): Promise<{
+    summary: MemberImportValidationSummary;
+    rows: ValidatedImportRow[];
+    license: {
+      allowed: boolean;
+      code: string;
+      message: string;
+      seatsUsed: number;
+      seatsLimit: number;
+      remainingSeats: number | null;
+      wouldExceedSeatLimit: boolean;
+    };
+  }> {
+    const orgId = organizationId.toLowerCase();
+    const [existingMembers, evalRes] = await Promise.all([
+      this.getMembers(orgId),
+      this.evaluateOrganizationLicense(orgId),
+    ]);
 
-    const org = this.orgs.get(orgId);
-    if (org) {
-      org.memberCount = list.length;
-    }
+    const existingIndex: ExistingMemberIndexEntry[] = existingMembers.map((m) => ({
+      id: String(m.id),
+      memberId: m.memberId ? String(m.memberId) : undefined,
+      phoneE164: m.phoneE164 ? String(m.phoneE164) : undefined,
+      email: m.email ? String(m.email) : undefined,
+    }));
 
-    return newMember;
+    const { rows, summary } = validateMemberImportBatch(
+      incomingMembers,
+      existingIndex,
+      duplicateMode
+    );
+
+    const remainingSeats =
+      evalRes.seatsLimit > 0 ? Math.max(0, evalRes.seatsLimit - evalRes.seatsUsed) : null;
+    const wouldExceedSeatLimit =
+      evalRes.seatsLimit > 0 &&
+      summary.newInserts > 0 &&
+      evalRes.seatsUsed + summary.newInserts > evalRes.seatsLimit;
+
+    return {
+      summary,
+      rows,
+      license: {
+        allowed: evalRes.allowed,
+        code: evalRes.code,
+        message: evalRes.message,
+        seatsUsed: evalRes.seatsUsed,
+        seatsLimit: evalRes.seatsLimit,
+        remainingSeats,
+        wouldExceedSeatLimit,
+      },
+    };
   }
 
   public async batchImportMembers(
     organizationId: string,
-    incomingMembers: Record<string, any>[]
-  ): Promise<Record<string, any>[]> {
+    incomingMembers: Record<string, any>[],
+    options?: {
+      duplicateMode?: ImportDuplicateMode;
+      dryRun?: boolean;
+    }
+  ): Promise<{
+    dryRun: boolean;
+    summary: MemberImportValidationSummary;
+    rows: ValidatedImportRow[];
+    license: {
+      allowed: boolean;
+      code: string;
+      message: string;
+      seatsUsed: number;
+      seatsLimit: number;
+      remainingSeats: number | null;
+      wouldExceedSeatLimit: boolean;
+    };
+    members: Record<string, any>[];
+    importedCount: number;
+    updatedCount: number;
+    skippedCount: number;
+    invalidCount: number;
+    credentialsProvisionedCount: number;
+    credentialsExistingCount: number;
+    credentialsSkippedCount: number;
+    temporaryPassword?: string;
+    errors: Array<{
+      rowIndex: number;
+      firstName?: string;
+      lastName?: string;
+      phoneE164?: string;
+      errors: string[];
+    }>;
+  }> {
     const orgId = organizationId.toLowerCase();
+    const duplicateMode: ImportDuplicateMode = options?.duplicateMode || 'skip';
+    const dryRun = Boolean(options?.dryRun);
+
     const evalRes = await this.evaluateOrganizationLicense(orgId);
     if (!evalRes.allowed) {
       const err: any = new Error(evalRes.message);
@@ -2616,20 +3282,115 @@ class PlatformStore {
       throw err;
     }
 
-    if (evalRes.seatsLimit > 0 && evalRes.seatsUsed + incomingMembers.length > evalRes.seatsLimit) {
+    const validation = await this.validateMemberImport(orgId, incomingMembers, duplicateMode);
+    const { summary, rows, license } = validation;
+
+    const rowErrors = rows
+      .filter((r) => !r.isValid)
+      .map((r) => ({
+        rowIndex: r.rowIndex,
+        firstName: r.data.firstName,
+        lastName: r.data.lastName,
+        phoneE164: r.data.phoneE164,
+        errors: r.errors,
+      }));
+
+    if (dryRun) {
+      return {
+        dryRun: true,
+        summary,
+        rows,
+        license,
+        members: await this.getMembers(orgId),
+        importedCount: 0,
+        updatedCount: 0,
+        skippedCount: summary.skipped,
+        invalidCount: summary.invalid,
+        credentialsProvisionedCount: 0,
+        credentialsExistingCount: 0,
+        credentialsSkippedCount: 0,
+        errors: rowErrors,
+      };
+    }
+
+    if (summary.newInserts > 0 && license.wouldExceedSeatLimit) {
       const err: any = new Error(
-        `Batch import exceeds seat limit (${evalRes.seatsUsed + incomingMembers.length}/${evalRes.seatsLimit}). Upgrade your license plan or reduce batch size.`
+        `Batch import exceeds seat limit (${evalRes.seatsUsed + summary.newInserts}/${evalRes.seatsLimit}). Only ${license.remainingSeats ?? 0} seat(s) remaining.`
       );
       err.code = 'SEAT_LIMIT_REACHED';
       err.status = 403;
-      err.details = { seatsUsed: evalRes.seatsUsed, seatsLimit: evalRes.seatsLimit, attempted: incomingMembers.length };
+      err.details = {
+        seatsUsed: evalRes.seatsUsed,
+        seatsLimit: evalRes.seatsLimit,
+        remainingSeats: license.remainingSeats,
+        attemptedNewInserts: summary.newInserts,
+        updates: summary.updates,
+        skipped: summary.skipped,
+      };
       throw err;
     }
 
-    for (const item of incomingMembers) {
-      await this.createMember(orgId, item);
+    if (summary.newInserts === 0 && summary.updates === 0 && summary.invalid > 0) {
+      const firstErrorMsg = rowErrors[0]?.errors?.[0] || 'All rows failed validation.';
+      const err: any = new Error(
+        `Import rejected: 0 valid importable rows (${summary.invalid} failed validation). First issue (Row ${rowErrors[0]?.rowIndex}): ${firstErrorMsg}`
+      );
+      err.code = 'IMPORT_VALIDATION_FAILED';
+      err.status = 422;
+      err.details = { summary, errors: rowErrors };
+      throw err;
     }
-    return this.getMembers(orgId);
+
+    let importedCount = 0;
+    let updatedCount = 0;
+    let credentialsProvisionedCount = 0;
+    let credentialsExistingCount = 0;
+    let credentialsSkippedCount = 0;
+    let temporaryPassword: string | undefined;
+
+    for (const row of rows) {
+      if (row.action === 'insert') {
+        const created = await this.createMember(orgId, row.data);
+        importedCount += 1;
+        const credInfo = created.onboardingCredentials as OnboardingCredentialResult | undefined;
+        if (credInfo?.status === 'created') {
+          credentialsProvisionedCount += 1;
+          temporaryPassword = temporaryPassword || credInfo.temporaryPassword;
+        } else if (credInfo?.status === 'already_exists') {
+          credentialsExistingCount += 1;
+        } else {
+          credentialsSkippedCount += 1;
+        }
+      } else if (row.action === 'update' && row.matchedMemberId) {
+        const updated = await this.updateMember(orgId, row.matchedMemberId, row.data);
+        updatedCount += 1;
+        const credInfo = updated.onboardingCredentials as OnboardingCredentialResult | undefined;
+        if (credInfo?.status === 'created') {
+          credentialsProvisionedCount += 1;
+          temporaryPassword = temporaryPassword || credInfo.temporaryPassword;
+        } else if (credInfo?.status === 'already_exists') {
+          credentialsExistingCount += 1;
+        }
+      }
+    }
+
+    const members = await this.getMembers(orgId);
+    return {
+      dryRun: false,
+      summary,
+      rows,
+      license,
+      members,
+      importedCount,
+      updatedCount,
+      skippedCount: summary.skipped,
+      invalidCount: summary.invalid,
+      credentialsProvisionedCount,
+      credentialsExistingCount,
+      credentialsSkippedCount,
+      ...(temporaryPassword ? { temporaryPassword } : {}),
+      errors: rowErrors,
+    };
   }
 
   public async updateMember(
@@ -2638,19 +3399,56 @@ class PlatformStore {
     updates: Record<string, any>
   ): Promise<Record<string, any>> {
     const orgId = organizationId.toLowerCase();
+    let updatedMember: Record<string, any> | null = null;
+
     if (this.supabase && UUID_REGEX.test(memberId)) {
-      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const { data: existingRow } = await this.supabase
+        .from('members')
+        .select('*')
+        .eq('organization_id', orgId)
+        .eq('id', memberId)
+        .maybeSingle();
+
+      const existingCustom =
+        existingRow?.custom_attributes && typeof existingRow.custom_attributes === 'object'
+          ? (existingRow.custom_attributes as Record<string, unknown>)
+          : {};
+
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+        custom_attributes: this.extractMemberCustomAttributes(updates, existingCustom),
+      };
+      const firstName = updates.firstName ?? existingRow?.first_name;
+      const lastName = updates.lastName ?? existingRow?.last_name;
       if (updates.firstName !== undefined) patch.first_name = updates.firstName;
       if (updates.lastName !== undefined) patch.last_name = updates.lastName;
       if (updates.firstName !== undefined || updates.lastName !== undefined) {
-        patch.preferred_name = `${updates.firstName || ''} ${updates.lastName || ''}`.trim();
+        patch.preferred_name = `${firstName || ''} ${lastName || ''}`.trim();
       }
-      if (updates.email !== undefined) patch.email = updates.email;
+      if (updates.email !== undefined) {
+        patch.email = updates.email ? String(updates.email).trim().toLowerCase() : null;
+      }
       if (updates.phoneE164 !== undefined) {
-        patch.phone_e164 = updates.phoneE164;
-        patch.phone_number = updates.phoneE164;
+        patch.phone_e164 = updates.phoneE164 ? normalizePhone(String(updates.phoneE164)) || updates.phoneE164 : null;
       }
-      if (updates.status !== undefined) patch.status = updates.status;
+      if (
+        updates.gender !== undefined &&
+        ['male', 'female', 'other'].includes(String(updates.gender).toLowerCase())
+      ) {
+        patch.gender = String(updates.gender).toLowerCase();
+      }
+      if (
+        updates.dateOfBirth !== undefined &&
+        /^\d{4}-\d{2}-\d{2}$/.test(String(updates.dateOfBirth))
+      ) {
+        patch.date_of_birth = String(updates.dateOfBirth);
+      }
+      if (updates.imageUrl !== undefined) {
+        patch.photo_url = updates.imageUrl;
+      }
+      if (updates.status !== undefined) {
+        patch.status = this.mapPersonStatusToDbStatus(updates.status);
+      }
 
       const { data, error } = await this.supabase
         .from('members')
@@ -2661,21 +3459,56 @@ class PlatformStore {
         .maybeSingle();
 
       if (!error && data) {
-        return { ...updates, id: String(data.id), tenantId: orgId };
+        updatedMember = this.mapSupabaseMemberRow(orgId, data);
       }
     }
 
-    const list = this.membersByOrg.get(orgId) || [];
-    const idx = list.findIndex((m) => m.id === memberId);
-    if (idx < 0) {
-      const notFoundErr: any = new Error('Member not found in organisation');
-      notFoundErr.status = 404;
-      throw notFoundErr;
+    if (!updatedMember) {
+      const list = this.membersByOrg.get(orgId) || [];
+      const idx = list.findIndex((m) => m.id === memberId);
+      if (idx < 0) {
+        const notFoundErr: any = new Error('Member not found in organisation');
+        notFoundErr.status = 404;
+        throw notFoundErr;
+      }
+      const nextPhone =
+        updates.phoneE164 !== undefined
+          ? normalizePhone(String(updates.phoneE164)) || updates.phoneE164
+          : list[idx].phoneE164;
+      const nextEmail =
+        updates.email !== undefined
+          ? updates.email
+            ? String(updates.email).trim().toLowerCase()
+            : undefined
+          : list[idx].email;
+
+      const merged = {
+        ...list[idx],
+        ...updates,
+        email: nextEmail,
+        phoneE164: nextPhone,
+        phoneNumber: nextPhone,
+        id: memberId,
+        tenantId: orgId,
+      };
+      list[idx] = merged;
+      this.membersByOrg.set(orgId, list);
+      updatedMember = merged;
     }
-    const merged = { ...list[idx], ...updates, id: memberId, tenantId: orgId };
-    list[idx] = merged;
-    this.membersByOrg.set(orgId, list);
-    return merged;
+
+    const onboardingCredentials = await this.autoProvisionMemberCredentials({
+      organizationId: orgId,
+      memberId: String(updatedMember.id),
+      firstName: String(updatedMember.firstName || 'Congregation'),
+      lastName: String(updatedMember.lastName || 'Member'),
+      email: updatedMember.email ? String(updatedMember.email) : undefined,
+      phoneE164: updatedMember.phoneE164 ? String(updatedMember.phoneE164) : undefined,
+    });
+
+    return {
+      ...updatedMember,
+      onboardingCredentials,
+    };
   }
 
   public async deleteMember(organizationId: string, memberId: string): Promise<void> {

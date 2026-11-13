@@ -31,6 +31,7 @@ import {
 import { requireActiveLicense } from './src/server/licenseMiddleware.ts';
 import { consoleRouter } from './src/server/consoleRouter.ts';
 import { churchWallStore } from './src/server/churchWallStore.ts';
+import type { ImportDuplicateMode } from './src/shared/memberImportValidation.ts';
 
 dotenv.config();
 
@@ -180,6 +181,12 @@ const loginRequestSchema = z
     message: 'Email, phone, or username is required.',
   });
 
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required.').max(256),
+  newPassword: z.string().min(8, 'New password must be at least 8 characters long.').max(256),
+  confirmPassword: z.string().max(256).optional(),
+});
+
 const registerRequestSchema = z
   .object({
     firstName: z.string().trim().min(1, 'First name is required.').max(80),
@@ -287,11 +294,13 @@ app.post(
         role: result.user.role,
         organizationId: result.user.organizationId,
         isCreator: result.user.isCreator,
+        mustChangePassword: Boolean(result.user.mustChangePassword),
         user: {
           ...result.user,
           organization_id: result.user.organizationId,
           tenant_id: result.user.organizationId,
           is_creator: result.user.isCreator,
+          mustChangePassword: Boolean(result.user.mustChangePassword),
         },
         organization: result.organization,
       });
@@ -342,11 +351,13 @@ app.post('/api/auth/register', authRegisterLimiter, async (req: Request, res: Re
       role: 'member',
       organizationId: result.user.organizationId,
       isCreator: false,
+      mustChangePassword: false,
       user: {
         ...result.user,
         organization_id: result.user.organizationId,
         tenant_id: result.user.organizationId,
         is_creator: false,
+        mustChangePassword: false,
       },
       organization: result.organization,
     });
@@ -397,11 +408,13 @@ app.post(
         role: result.user.role,
         organizationId: result.organization.id,
         isCreator: false,
+        mustChangePassword: false,
         user: {
           ...result.user,
           organization_id: result.organization.id,
           tenant_id: result.organization.id,
           is_creator: false,
+          mustChangePassword: false,
         },
         organization: result.organization,
         license: result.license,
@@ -423,6 +436,52 @@ app.post('/api/auth/logout', authSessionLimiter, (_req: Request, res: Response) 
     success: true,
     message: 'Session cleared successfully.',
   });
+});
+
+app.post('/api/auth/change-password', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
+  const parsed = changePasswordSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'invalid_input',
+      code: 'INVALID_INPUT',
+      message: parsed.error.issues[0]?.message || 'Current password and valid new password are required.',
+    });
+  }
+
+  if (
+    parsed.data.confirmPassword !== undefined &&
+    parsed.data.confirmPassword !== parsed.data.newPassword
+  ) {
+    return res.status(400).json({
+      error: 'password_mismatch',
+      code: 'PASSWORD_MISMATCH',
+      message: 'New password and confirmation do not match.',
+    });
+  }
+
+  try {
+    const result = await platformStore.changePasswordForUser({
+      userId: req.user!.id,
+      email: req.user!.email,
+      currentPassword: parsed.data.currentPassword,
+      newPassword: parsed.data.newPassword,
+      ipAddress: getClientIpKey(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      mustChangePassword: result.mustChangePassword,
+      passwordUpdatedAt: result.passwordUpdatedAt,
+      message: 'Password updated successfully.',
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: status === 401 ? 'unauthorized' : status === 404 ? 'not_found' : 'password_change_failed',
+      code: err?.code || 'PASSWORD_CHANGE_FAILED',
+      message: err?.message || 'Could not update password.',
+    });
+  }
 });
 
 // Token refresh/exchange endpoint: requires a verified Bearer token (Supabase JWT or session JWT).
@@ -2093,6 +2152,52 @@ app.post(
   }
 );
 
+const normalizeImportDuplicateMode = (raw: unknown): ImportDuplicateMode | null => {
+  if (raw === undefined || raw === null || raw === '') return 'skip';
+  const mode = String(raw).trim().toLowerCase();
+  if (mode === 'skip' || mode === 'update' || mode === 'error') {
+    return mode;
+  }
+  return null;
+};
+
+app.post(
+  '/api/members/import/validate',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const incoming = Array.isArray(req.body?.members) ? req.body.members : [];
+    if (incoming.length === 0) {
+      return res.status(400).json({ error: 'validation_error', message: 'members array is required' });
+    }
+    const duplicateMode = normalizeImportDuplicateMode(req.body?.duplicateMode);
+    if (!duplicateMode) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'duplicateMode must be one of: skip, update, error',
+      });
+    }
+
+    try {
+      const report = await platformStore.validateMemberImport(
+        req.organizationId!,
+        incoming,
+        duplicateMode
+      );
+      return res.status(200).json({
+        success: true,
+        duplicateMode,
+        ...report,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'import_validation_error',
+        message: err?.message || 'Could not validate import batch.',
+      });
+    }
+  }
+);
+
 app.post(
   '/api/members/import',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
@@ -2102,9 +2207,25 @@ app.post(
     if (incoming.length === 0) {
       return res.status(400).json({ error: 'validation_error', message: 'members array is required' });
     }
+    const duplicateMode = normalizeImportDuplicateMode(req.body?.duplicateMode);
+    if (!duplicateMode) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'duplicateMode must be one of: skip, update, error',
+      });
+    }
+    const dryRun = Boolean(req.body?.dryRun);
+
     try {
-      const members = await platformStore.batchImportMembers(req.organizationId!, incoming);
-      return res.status(200).json({ success: true, members });
+      const result = await platformStore.batchImportMembers(req.organizationId!, incoming, {
+        duplicateMode,
+        dryRun,
+      });
+      return res.status(200).json({
+        success: true,
+        duplicateMode,
+        ...result,
+      });
     } catch (err: any) {
       if (err?.code === 'SEAT_LIMIT_REACHED') {
         return res.status(403).json({
@@ -2114,9 +2235,18 @@ app.post(
           details: err.details,
         });
       }
+      if (err?.code === 'IMPORT_VALIDATION_FAILED') {
+        return res.status(422).json({
+          error: 'import_validation_failed',
+          code: 'IMPORT_VALIDATION_FAILED',
+          message: err.message,
+          details: err.details,
+        });
+      }
       return res.status(err?.status || 500).json({
         error: err?.code || 'import_failed',
         message: err?.message || 'Could not import members.',
+        details: err?.details,
       });
     }
   }
@@ -2316,11 +2446,17 @@ app.post(
 // AUTH & FAIL-CLOSED LICENSE STATUS ENDPOINTS (PHASE 0 #6)
 // =========================================================================
 
-app.get('/api/auth/me', requireUser, enforceOrganizationScope, (req: Request, res: Response) => {
+app.get('/api/auth/me', requireUser, enforceOrganizationScope, async (req: Request, res: Response) => {
+  const credStatus = await platformStore.getCredentialStatus(req.user!.id, req.user!.email);
   return res.status(200).json({
-    user: req.user,
+    user: {
+      ...req.user,
+      mustChangePassword: credStatus.mustChangePassword,
+    },
     organizationId: req.organizationId,
     isCreator: isCreatorClaim(req.user),
+    mustChangePassword: credStatus.mustChangePassword,
+    hasPasswordCredential: credStatus.hasPasswordCredential,
     authenticated: true,
   });
 });

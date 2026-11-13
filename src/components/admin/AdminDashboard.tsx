@@ -79,6 +79,7 @@ export const AdminDashboard: React.FC = () => {
     logout,
     setIsHelpModalOpen,
     deleteMember,
+    validateMemberImportRemote,
     batchImportMembers,
     attendanceRecords,
     telemetrySummary,
@@ -1861,9 +1862,8 @@ export const AdminDashboard: React.FC = () => {
       <ImportMembersModal
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
-        onImportComplete={(imported) => {
-          batchImportMembers(imported);
-        }}
+        onValidateRemote={validateMemberImportRemote}
+        onImportComplete={(imported, options) => batchImportMembers(imported, options)}
         existingMembers={members}
       />
     </main>

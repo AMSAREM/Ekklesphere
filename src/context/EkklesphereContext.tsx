@@ -32,6 +32,12 @@ import {
   AuthActionResult,
 } from '../types/ekklesphere';
 import { pushNotificationService } from '../services/pushNotificationService';
+import {
+  validateMemberImportBatch,
+  type ImportDuplicateMode,
+  type MemberImportValidationSummary,
+  type ValidatedImportRow,
+} from '../shared/memberImportValidation';
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -134,6 +140,11 @@ interface EkklesphereContextType {
     trialPlan?: LicenseTier;
   }) => Promise<AuthActionResult>;
   logout: () => void;
+  changePassword: (
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword?: string
+  ) => Promise<AuthActionResult>;
   switchUserRole: (role: UserRole) => void;
 
   // Navigation & Layout Shell
@@ -156,6 +167,8 @@ interface EkklesphereContextType {
   setIsHelpModalOpen: (open: boolean) => void;
   isSettingsModalOpen: boolean;
   setIsSettingsModalOpen: (open: boolean) => void;
+  isChangePasswordModalOpen: boolean;
+  setIsChangePasswordModalOpen: (open: boolean) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
   toggleTheme: () => void;
@@ -181,7 +194,27 @@ interface EkklesphereContextType {
   refreshMembers: () => Promise<void>;
   addVisitor: (name: string, phone: string, howHeard: string) => Promise<void>;
   addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Promise<Person>;
-  batchImportMembers: (newMembers: Person[]) => Promise<Person[]>;
+  validateMemberImportRemote: (
+    candidateMembers: Record<string, unknown>[],
+    duplicateMode?: ImportDuplicateMode
+  ) => Promise<{
+    summary: MemberImportValidationSummary;
+    rows: ValidatedImportRow[];
+    license?: {
+      allowed: boolean;
+      code: string;
+      message: string;
+      seatsUsed: number;
+      seatsLimit: number;
+      remainingSeats: number | null;
+      wouldExceedSeatLimit: boolean;
+    };
+    source: 'server' | 'local';
+  }>;
+  batchImportMembers: (
+    newMembers: Person[],
+    options?: { duplicateMode?: ImportDuplicateMode }
+  ) => Promise<Person[]>;
   updateMember: (memberId: string, updates: Partial<Person>) => Promise<Person>;
   deleteMember: (memberId: string) => Promise<void>;
   updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => void;
@@ -418,6 +451,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState<boolean>(false);
 
   // Platform view navigation: '/' defaults to the Ekklesphere App ('app');
   // '/home' (or ?church=...) renders ChurchHomePage; '/creator' is Creator Console.
@@ -772,6 +806,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isCreator?: boolean;
       is_creator?: boolean;
       username?: string;
+      mustChangePassword?: boolean;
     },
     token: string,
     campusNameOverride?: string
@@ -801,6 +836,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       role,
       verifiedRole: role,
       is_creator: isCreator,
+      mustChangePassword: Boolean(payload.mustChangePassword),
       token,
       username: payload.username,
       initials,
@@ -916,6 +952,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     setCurrentUser(null);
     setGoogleAuthError(null);
+    setIsChangePasswordModalOpen(false);
     try {
       signOutSupabaseBrowser().catch(() => {});
       localStorage.removeItem('ekklesphere_user');
@@ -926,6 +963,50 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     setViewModeState('app');
     showToast('Signed out of Ekklesphere');
+  };
+
+  const changePassword = async (
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword?: string
+  ): Promise<AuthActionResult> => {
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+          ...(confirmPassword !== undefined ? { confirmPassword } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const errorMsg = data?.message || 'Could not update password.';
+        showToast(errorMsg);
+        return {
+          ok: false,
+          error: errorMsg,
+          code: data?.code || 'PASSWORD_CHANGE_FAILED',
+        };
+      }
+
+      setCurrentUser((prev) => {
+        if (!prev) return prev;
+        const updated: AuthUser = { ...prev, mustChangePassword: false };
+        try {
+          localStorage.setItem('ekklesphere_user', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      setIsChangePasswordModalOpen(false);
+      showToast('Password updated! Your personal password is now active.');
+      return { ok: true };
+    } catch {
+      const msg = 'Unable to reach server to change password.';
+      showToast(msg);
+      return { ok: false, error: msg, code: 'NETWORK_ERROR' };
+    }
   };
 
   const switchUserRole = (role: UserRole) => {
@@ -1006,12 +1087,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
 
       const authUser = buildAuthUserFromServer(
-        data.user,
+        {
+          ...data.user,
+          mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
+        },
         data.token,
         data.organization?.name
       );
       login(authUser);
-      showToast(`Welcome back, ${authUser.name}`);
+      if (authUser.mustChangePassword) {
+        setIsChangePasswordModalOpen(true);
+        showToast(`Welcome, ${authUser.name}! Please set your personal password.`);
+      } else {
+        showToast(`Welcome back, ${authUser.name}`);
+      }
       return { ok: true };
     } catch {
       const msg = 'Authentication service unreachable. Please check your connection.';
@@ -1275,6 +1364,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 role: data.user.role,
                 organizationId: data.organizationId || data.user.organization_id,
                 isCreator: data.isCreator,
+                mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
               },
               storedToken
             );
@@ -1749,6 +1839,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>
   ): Promise<Person> => {
     let savedPerson: Person | null = null;
+    let serverValidationError: Error | null = null;
     try {
       const res = await fetch('/api/members', {
         method: 'POST',
@@ -1756,14 +1847,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         body: JSON.stringify(memberData),
       });
 
+      const body = await res.json().catch(() => null);
       if (res.ok) {
-        const body = await res.json().catch(() => null);
         if (body && typeof body === 'object' && 'id' in body) {
           savedPerson = normalizePersonRecord(body);
         }
+      } else if (res.status === 401 || res.status === 403 || res.status === 400) {
+        serverValidationError = new Error(body?.message || 'Could not register member.');
       }
     } catch {
       // offline or serverless fallback
+    }
+
+    if (serverValidationError) {
+      throw serverValidationError;
     }
 
     if (!savedPerson || !savedPerson.id) {
@@ -1778,13 +1875,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } as Person;
     }
 
+    const onboardingCredentials = savedPerson.onboardingCredentials;
+    const personForStorage: Person = { ...savedPerson };
+    delete personForStorage.onboardingCredentials;
+
     // Direct write to Firestore as cloud backup
     try {
-      setDoc(doc(db, 'members', savedPerson.id), savedPerson, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'members', personForStorage.id), personForStorage, { merge: true }).catch(() => {});
     } catch {}
 
     setMembers((prev) => {
-      const updated = [savedPerson!, ...prev.filter((m) => m.id !== savedPerson!.id)];
+      const updated = [personForStorage, ...prev.filter((m) => m.id !== personForStorage.id)];
       try {
         localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
       } catch {}
@@ -1798,47 +1899,184 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Member registered',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `${savedPerson!.firstName} ${savedPerson!.lastName} saved to database (${savedPerson!.groupName})`,
+        details: onboardingCredentials?.provisioned
+          ? `${personForStorage.firstName} ${personForStorage.lastName} saved with Member Portal credentials (${onboardingCredentials.identifiers.join(', ')})`
+          : `${personForStorage.firstName} ${personForStorage.lastName} saved to database (${personForStorage.groupName})`,
       },
       ...prev,
     ]);
 
-    showToast(`Member ${savedPerson.firstName} ${savedPerson.lastName} saved to database!`);
+    if (onboardingCredentials?.provisioned && onboardingCredentials.temporaryPassword) {
+      showToast(
+        `${personForStorage.firstName} ${personForStorage.lastName} saved! Member login assigned (temp password: ${onboardingCredentials.temporaryPassword}).`
+      );
+    } else {
+      showToast(`Member ${personForStorage.firstName} ${personForStorage.lastName} saved to database!`);
+    }
     return savedPerson;
   };
 
-  const batchImportMembers = async (newMembers: Person[]): Promise<Person[]> => {
-    if (!newMembers || newMembers.length === 0) return [];
+  const validateMemberImportRemote = async (
+    candidateMembers: Record<string, unknown>[],
+    duplicateMode: ImportDuplicateMode = 'skip'
+  ) => {
+    const existingIndex = members.map((m) => ({
+      id: m.id,
+      memberId: m.memberId,
+      phoneE164: m.phoneE164,
+      email: m.email,
+    }));
 
-    let updatedRoster: Person[] = [];
-    try {
-      const res = await fetch('/api/members/import', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ members: newMembers }),
-      });
+    const hasToken = Boolean(
+      currentUser?.token ||
+        (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null)
+    );
 
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (Array.isArray(data?.members)) {
-          updatedRoster = data.members;
+    if (hasToken) {
+      try {
+        const res = await fetch('/api/members/import/validate', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ members: candidateMembers, duplicateMode }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.summary && Array.isArray(data?.rows)) {
+            return {
+              summary: data.summary as MemberImportValidationSummary,
+              rows: data.rows as ValidatedImportRow[],
+              license: data.license,
+              source: 'server' as const,
+            };
+          }
         }
+      } catch {
+        // Fall through to client-side validation when network is unavailable
       }
-    } catch {
-      // offline or serverless fallback
     }
 
-    if (updatedRoster.length === 0) {
-      // Merge locally and sync each to Firestore
-      const existingIds = new Set(members.map((m) => m.id));
-      const freshMembers = newMembers.filter((m) => !existingIds.has(m.id));
-      updatedRoster = [...freshMembers, ...members];
+    const localResult = validateMemberImportBatch(
+      candidateMembers,
+      existingIndex,
+      duplicateMode
+    );
+    return {
+      ...localResult,
+      source: 'local' as const,
+    };
+  };
 
-      freshMembers.forEach((m) => {
-        try {
-          setDoc(doc(db, 'members', m.id), m, { merge: true }).catch(() => {});
-        } catch {}
-      });
+  const batchImportMembers = async (
+    newMembers: Person[],
+    options?: { duplicateMode?: ImportDuplicateMode }
+  ): Promise<Person[]> => {
+    if (!newMembers || newMembers.length === 0) return [];
+    const duplicateMode: ImportDuplicateMode = options?.duplicateMode || 'skip';
+
+    let updatedRoster: Person[] = [];
+    let importedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    let credentialsProvisionedCount = 0;
+    let temporaryPassword: string | undefined;
+
+    const hasToken = Boolean(
+      currentUser?.token ||
+        (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null)
+    );
+
+    if (hasToken) {
+      let res: Response | null = null;
+      try {
+        res = await fetch('/api/members/import', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ members: newMembers, duplicateMode }),
+        });
+      } catch {
+        res = null;
+      }
+
+      if (res) {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const errMessage =
+            data?.message || `Import failed with server status ${res.status}.`;
+          showToast(errMessage);
+          const err: any = new Error(errMessage);
+          err.code = data?.code || data?.error;
+          err.details = data?.details;
+          err.status = res.status;
+          throw err;
+        }
+        if (Array.isArray(data?.members)) {
+          updatedRoster = data.members;
+          importedCount = Number(data.importedCount ?? 0);
+          updatedCount = Number(data.updatedCount ?? 0);
+          skippedCount = Number(data.skippedCount ?? 0);
+          credentialsProvisionedCount = Number(data.credentialsProvisionedCount ?? 0);
+          temporaryPassword =
+            typeof data.temporaryPassword === 'string' ? data.temporaryPassword : undefined;
+        }
+      }
+    }
+
+    if (updatedRoster.length === 0 && !hasToken) {
+      const existingIndex = members.map((m) => ({
+        id: m.id,
+        memberId: m.memberId,
+        phoneE164: m.phoneE164,
+        email: m.email,
+      }));
+      const localValidated = validateMemberImportBatch(
+        newMembers as unknown as Record<string, unknown>[],
+        existingIndex,
+        duplicateMode
+      );
+
+      if (
+        localValidated.summary.newInserts === 0 &&
+        localValidated.summary.updates === 0 &&
+        localValidated.summary.invalid > 0
+      ) {
+        const firstErr =
+          localValidated.rows.find((r) => !r.isValid)?.errors[0] ||
+          'All rows failed validation.';
+        showToast(firstErr);
+        throw new Error(firstErr);
+      }
+
+      const nextMembers = [...members];
+      for (const row of localValidated.rows) {
+        if (row.action === 'insert') {
+          const created = normalizePersonRecord({
+            ...row.data,
+            id: (row.data.id as string) || `m-import-${Date.now()}-${row.rowIndex}`,
+          });
+          nextMembers.unshift(created);
+          importedCount += 1;
+          try {
+            setDoc(doc(db, 'members', created.id), created, { merge: true }).catch(() => {});
+          } catch {}
+        } else if (row.action === 'update' && row.matchedMemberId) {
+          const idx = nextMembers.findIndex((m) => m.id === row.matchedMemberId);
+          if (idx >= 0) {
+            const merged = normalizePersonRecord({
+              ...nextMembers[idx],
+              ...row.data,
+              id: nextMembers[idx].id,
+            });
+            nextMembers[idx] = merged;
+            updatedCount += 1;
+            try {
+              setDoc(doc(db, 'members', merged.id), merged, { merge: true }).catch(() => {});
+            } catch {}
+          }
+        } else if (row.action === 'skip') {
+          skippedCount += 1;
+        }
+      }
+      updatedRoster = nextMembers;
     }
 
     const normalizedRoster = updatedRoster.map((item) => normalizePersonRecord(item));
@@ -1847,6 +2085,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       localStorage.setItem('ekklesphere_members', JSON.stringify(normalizedRoster));
     } catch {}
 
+    const summaryParts: string[] = [];
+    if (importedCount > 0) summaryParts.push(`${importedCount} added`);
+    if (updatedCount > 0) summaryParts.push(`${updatedCount} updated`);
+    if (skippedCount > 0) summaryParts.push(`${skippedCount} skipped`);
+    const summaryLabel =
+      summaryParts.length > 0 ? summaryParts.join(', ') : `${newMembers.length} processed`;
+    const credsSuffix =
+      credentialsProvisionedCount > 0
+        ? ` (${credentialsProvisionedCount} member login${credentialsProvisionedCount === 1 ? '' : 's'} assigned${temporaryPassword ? ` · temp password: ${temporaryPassword}` : ''})`
+        : '';
+
     setAuditLogs((prev) => [
       {
         id: `log-${Date.now()}`,
@@ -1854,13 +2103,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         action: 'Batch Member Import',
         entityType: 'Person',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Imported ${newMembers.length} members into congregation directory.`,
+        details: `Batch import (${duplicateMode} duplicates): ${summaryLabel}${credsSuffix}.`,
       },
       ...prev,
     ]);
 
-    showToast(`Successfully imported ${newMembers.length} members to database!`);
-    return updatedRoster;
+    showToast(`Import complete: ${summaryLabel}${credsSuffix}.`);
+    return normalizedRoster;
   };
 
   const updateMember = async (memberId: string, updates: Partial<Person>): Promise<Person> => {
@@ -2962,6 +3211,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         registerMember,
         registerOrganisation,
         logout,
+        changePassword,
         switchUserRole,
         pushPermissionStatus,
         isPushSubscribed,
@@ -2987,6 +3237,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setIsHelpModalOpen,
         isSettingsModalOpen,
         setIsSettingsModalOpen,
+        isChangePasswordModalOpen,
+        setIsChangePasswordModalOpen,
         theme,
         setTheme,
         toggleTheme,
@@ -3001,6 +3253,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         refreshMembers,
         addVisitor,
         addMember,
+        validateMemberImportRemote,
         batchImportMembers,
         updateMember,
         deleteMember,

@@ -10,9 +10,17 @@ import { AppHeader } from './components/navigation/AppHeader';
 import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
 import { ChurchHomePage } from './components/home/ChurchHomePage';
 import { CreatorsPanel } from './components/creator/CreatorsPanel';
+import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
+import { KeyRound } from 'lucide-react';
 
 const EkklesphereMain: React.FC = () => {
-  const { currentUser, toastMessage, viewMode } = useEkklesphere();
+  const {
+    currentUser,
+    toastMessage,
+    viewMode,
+    isChangePasswordModalOpen,
+    setIsChangePasswordModalOpen,
+  } = useEkklesphere();
 
   // If Creator Console view is active - only verified creator login can access
   if (viewMode === 'creator') {
@@ -37,6 +45,7 @@ const EkklesphereMain: React.FC = () => {
 
     return (
       <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F8F9FD] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
+        {currentUser && <ChangePasswordModal />}
         <CreatorsPanel />
         {toastMessage && (
           <div
@@ -80,8 +89,30 @@ const EkklesphereMain: React.FC = () => {
       {/* Global System Settings Modal across all portals */}
       {currentUser && <SystemSettingsModal />}
 
+      {/* Password Update Modal */}
+      {currentUser && <ChangePasswordModal />}
+
       {/* Top Application Portal Header */}
       {currentUser && <AppHeader />}
+
+      {/* Reminder banner when signed in with temporary onboarding password */}
+      {currentUser?.mustChangePassword && !isChangePasswordModalOpen && (
+        <div className="w-full bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/60 px-4 py-2.5">
+          <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
+            <span>
+              You are signed in with your temporary onboarding password. Set a personal password to protect your account.
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsChangePasswordModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#6D5CF2] hover:bg-[#5b4be0] text-white font-bold transition-colors cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Set Personal Password</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Role-governed portal rendering */}
       {!currentUser ? (
