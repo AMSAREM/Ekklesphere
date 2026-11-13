@@ -61,12 +61,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const {
     currentUser,
     systemSettings,
+    systemSettingsStorageBackend,
+    isSyncingSystemSettings,
     updateSystemSettings,
     resetSystemSettings,
+    sendTestSmsGateway,
     setChurchPremiseLocation,
     clearChurchPremiseLocation,
     showToast,
     auditLogs,
+    refreshAuditLogs,
     churchGroups,
     addChurchGroup,
     updateChurchGroup,
@@ -188,6 +192,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState<string | null>(null);
   const [sharedMapLink, setSharedMapLink] = useState('');
   const [isResolvingMapLink, setIsResolvingMapLink] = useState(false);
+  const [isTestingSms, setIsTestingSms] = useState(false);
 
   React.useEffect(() => {
     if (!hasChanges) {
@@ -195,15 +200,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       setLatInput(systemSettings.campusLatitude != null ? String(systemSettings.campusLatitude) : '');
       setLngInput(systemSettings.campusLongitude != null ? String(systemSettings.campusLongitude) : '');
     }
-  }, [
-    systemSettings.campusLatitude,
-    systemSettings.campusLongitude,
-    systemSettings.campusName,
-    systemSettings.churchName,
-    systemSettings.innerGeofenceMeters,
-    systemSettings.outerGeofenceMeters,
-    hasChanges,
-  ]);
+  }, [systemSettings, hasChanges]);
 
   // Groups Management Local States
   const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | 'ministry' | 'fellowship' | 'cell_group'>('all');
@@ -359,11 +356,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       });
     }
 
-    updateSystemSettings(updatedPayload);
-    setFormData(updatedPayload);
-    setHasChanges(false);
-    setGpsCaptureError(null);
-    setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    const ok = await updateSystemSettings(updatedPayload);
+    if (ok) {
+      setFormData(updatedPayload);
+      setHasChanges(false);
+      setGpsCaptureError(null);
+      setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    }
   };
 
   const handleCaptureCurrentPremiseGps = () => {
@@ -463,9 +462,15 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     setIsResolvingMapLink(true);
     setGpsCaptureError(null);
     try {
+      const token =
+        currentUser?.token ||
+        (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
       const res = await fetch('/api/campus-premise/resolve-link', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ input: sharedMapLink.trim() }),
       });
       const data = await res.json();
@@ -526,13 +531,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     }));
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (!confirmReset) {
       setConfirmReset(true);
       setTimeout(() => setConfirmReset(false), 4000);
       return;
     }
-    resetSystemSettings();
+    await resetSystemSettings();
     setConfirmReset(false);
     setLatInput('');
     setLngInput('');
@@ -697,8 +702,17 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     );
   };
 
-  const handleTestSms = () => {
-    showToast(`Test SMS dispatched via ${formData.smsGatewayProvider} using Sender ID: "${formData.smsSenderId}"`);
+  const handleTestSms = async () => {
+    if (!isSettingsAdmin && currentUser?.role !== 'pastor') {
+      showToast('Only church admins or pastors can dispatch SMS gateway tests.');
+      return;
+    }
+    setIsTestingSms(true);
+    try {
+      await sendTestSmsGateway(formData.smsGatewayProvider, formData.smsSenderId);
+    } finally {
+      setIsTestingSms(false);
+    }
   };
 
   const handleExportAudit = () => {
@@ -756,15 +770,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           </button>
           <button
             type="button"
+            disabled={isSyncingSystemSettings}
             onClick={() => handleSave()}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-60 ${
               hasChanges
                 ? 'bg-[#6D5CF2] hover:bg-[#5b4be0] text-white scale-102'
                 : 'bg-[#6D5CF2]/90 hover:bg-[#6D5CF2] text-white'
             }`}
           >
             <Save className="w-3.5 h-3.5" />
-            <span>Save Settings</span>
+            <span>{isSyncingSystemSettings ? 'Saving...' : 'Save Settings'}</span>
           </button>
           {onClose && (
             <button
@@ -1822,17 +1837,27 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   System Audit Trail & Compliance Export
                 </div>
                 <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                  {auditLogs.length} verified security audit logs stored for {formData.campusName || systemSettings.campusName}.
+                  {auditLogs.length} verified security audit logs stored in Supabase for {formData.campusName || systemSettings.campusName || 'this organisation'}.
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleExportAudit}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>Export Audit JSON</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => refreshAuditLogs()}
+                  className="px-3 py-2 rounded-xl text-xs font-bold bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] hover:bg-slate-200 dark:hover:bg-white/10 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Refresh Logs</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportAudit}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Export Audit JSON</span>
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1880,10 +1905,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   />
                   <button
                     type="button"
+                    disabled={isTestingSms}
                     onClick={handleTestSms}
-                    className="px-3 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all cursor-pointer whitespace-nowrap"
+                    className="px-3 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all cursor-pointer whitespace-nowrap disabled:opacity-60"
                   >
-                    Send Test
+                    {isTestingSms ? 'Testing...' : 'Send Test'}
                   </button>
                 </div>
                 <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
@@ -1904,7 +1930,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       Paystack & MTN MoMo Webhook
                     </div>
                     <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
-                      Settlement currency: GHS (Live)
+                      Settlement currency: {formData.currency || 'GHS (Ghana Cedi)'}
                     </div>
                   </div>
                 </div>
@@ -1920,15 +1946,17 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   </div>
                   <div>
                     <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      Cloud Firestore Synchronization
+                      Supabase Postgres Synchronization
                     </div>
                     <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
-                      Real-time offline caching active
+                      {systemSettingsStorageBackend === 'supabase'
+                        ? 'Multi-tenant Postgres RLS active'
+                        : 'Sandbox in-memory persistence active'}
                     </div>
                   </div>
                 </div>
                 <span className="text-[10px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] bg-[#6D5CF2]/10 px-2 py-0.5 rounded-full">
-                  Connected
+                  {systemSettingsStorageBackend === 'supabase' ? 'Connected' : 'Sandbox'}
                 </span>
               </div>
             </div>
@@ -2013,10 +2041,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                disabled={isSyncingSystemSettings}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-60"
               >
                 <Save className="w-3.5 h-3.5" />
-                <span>Save System Settings</span>
+                <span>{isSyncingSystemSettings ? 'Saving...' : 'Save System Settings'}</span>
               </button>
             </div>
           </div>

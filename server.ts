@@ -1060,6 +1060,439 @@ app.delete(
 );
 
 // =========================================================================
+// SYSTEM SETTINGS, AUDIT LOGS, GATEWAYS & CHURCH GROUPS (ORG SCOPED SUPABASE)
+// =========================================================================
+
+const SystemSettingsPatchSchema = z.object({
+  churchName: z.string().trim().max(300).optional(),
+  campusName: z.string().trim().max(300).optional(),
+  campusAddress: z.string().trim().max(500).optional(),
+  campusLatitude: z.number().min(-90).max(90).nullable().optional(),
+  campusLongitude: z.number().min(-180).max(180).nullable().optional(),
+  campusLocationAccuracyM: z.number().min(0).nullable().optional(),
+  campusLocationUpdatedAt: z.string().max(100).nullable().optional(),
+  seniorPastor: z.string().trim().max(200).optional(),
+  contactEmail: z.string().trim().max(200).optional(),
+  contactPhone: z.string().trim().max(64).optional(),
+  timezone: z.string().trim().max(120).optional(),
+  currency: z.string().trim().max(80).optional(),
+  outerGeofenceMeters: z.number().min(25).max(10000).optional(),
+  innerGeofenceMeters: z.number().min(10).max(5000).optional(),
+  dwellTimeMinutes: z.number().min(1).max(120).optional(),
+  serviceWindowBeforeMinutes: z.number().min(0).max(240).optional(),
+  serviceWindowAfterMinutes: z.number().min(0).max(240).optional(),
+  bleBeaconRssiThreshold: z.number().min(-100).max(-20).optional(),
+  driveByProtection: z.boolean().optional(),
+  absenteeThresholdServices: z.number().min(1).max(12).optional(),
+  firstTimerFollowupHours: z.number().min(1).max(336).optional(),
+  autoAssignCellLeaders: z.boolean().optional(),
+  requireExplicitConsent: z.boolean().optional(),
+  auditLogRetentionDays: z.number().min(7).max(3650).optional(),
+  smsGatewayProvider: z.string().trim().min(1).max(120).optional(),
+  smsSenderId: z.string().trim().min(1).max(11).optional(),
+  enablePushNotifications: z.boolean().optional(),
+});
+
+const TestSmsGatewaySchema = z.object({
+  provider: z.string().trim().min(1, 'SMS gateway provider is required.').max(120),
+  senderId: z
+    .string()
+    .trim()
+    .min(1, 'SMS Sender ID is required.')
+    .max(11, 'SMS Sender ID must be 11 characters or fewer.'),
+});
+
+const ChurchGroupCreateSchema = z.object({
+  name: z.string().trim().min(1, 'Group name is required.').max(160),
+  category: z.enum(['ministry', 'fellowship', 'cell_group']),
+  leaderName: z.string().trim().min(1, 'Primary leader name is required.').max(160),
+  leaderPhone: z.string().trim().max(64).optional(),
+  leaderEmail: z.string().trim().max(160).optional(),
+  assistantLeader: z.string().trim().max(160).optional(),
+  meetingDay: z.string().trim().max(100).optional(),
+  meetingTime: z.string().trim().max(100).optional(),
+  meetingLocation: z.string().trim().max(240).optional(),
+  targetDemographic: z.string().trim().max(160).optional(),
+  description: z.string().trim().max(1000).optional().default(''),
+  active: z.boolean().optional().default(true),
+});
+
+const ChurchGroupUpdateSchema = ChurchGroupCreateSchema.partial();
+
+app.get(
+  '/api/system-settings',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const result = await platformStore.getSystemSettings(req.organizationId!);
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'system_settings_fetch_failed',
+        message: err?.message || 'Failed to load organisation system settings.',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/system-settings',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = SystemSettingsPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid system settings payload.',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    try {
+      const result = await platformStore.saveSystemSettings(req.organizationId!, parsed.data, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      if (err?.code === 'SITE_LIMIT_REACHED') {
+        return res.status(403).json({
+          error: 'license_limit_exceeded',
+          code: 'SITE_LIMIT_REACHED',
+          message: err.message,
+        });
+      }
+      return res.status(500).json({
+        error: 'system_settings_save_failed',
+        message: err?.message || 'Failed to save organisation system settings.',
+      });
+    }
+  }
+);
+
+app.patch(
+  '/api/system-settings',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = SystemSettingsPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid system settings payload.',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    try {
+      const result = await platformStore.saveSystemSettings(req.organizationId!, parsed.data, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      if (err?.code === 'SITE_LIMIT_REACHED') {
+        return res.status(403).json({
+          error: 'license_limit_exceeded',
+          code: 'SITE_LIMIT_REACHED',
+          message: err.message,
+        });
+      }
+      return res.status(500).json({
+        error: 'system_settings_save_failed',
+        message: err?.message || 'Failed to save organisation system settings.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/system-settings/reset',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const result = await platformStore.resetSystemSettings(req.organizationId!, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'system_settings_reset_failed',
+        message: err?.message || 'Failed to reset organisation system settings.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/system-settings/test-sms',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = TestSmsGatewaySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid SMS gateway provider and Sender ID are required.',
+      });
+    }
+
+    const senderId = parsed.data.senderId.toUpperCase();
+    const dispatchedAt = new Date().toISOString();
+
+    await platformStore.appendAuditLog({
+      organizationId: req.organizationId!,
+      actorId: req.user?.id || null,
+      actorEmail: req.user?.email || 'admin@ekklesphere.church',
+      actorRole: req.user?.role || 'admin',
+      action: 'sms.test_dispatched',
+      targetType: 'sms_gateway',
+      targetId: req.organizationId!,
+      metadata: {
+        provider: parsed.data.provider,
+        senderId,
+        dispatchedAt,
+      },
+      ipAddress: getClientIpKey(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      provider: parsed.data.provider,
+      senderId,
+      dispatchedAt,
+      message: `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).`,
+    });
+  }
+);
+
+app.get(
+  '/api/system-settings/audit-logs',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const rows = await platformStore.listAuditLogs({
+        organizationId: req.organizationId!,
+        limit: 150,
+      });
+
+      const auditLogs = rows.map((row) => ({
+        id: row.id,
+        actor: row.actorEmail,
+        actorRole: row.actorRole,
+        action: row.action,
+        entityType: row.targetType,
+        targetId: row.targetId,
+        timestamp: row.createdAt,
+        details:
+          row.reason ||
+          (row.metadata && Object.keys(row.metadata).length > 0
+            ? JSON.stringify(row.metadata)
+            : `${row.action} (${row.targetType})`),
+        metadata: row.metadata || {},
+      }));
+
+      return res.status(200).json({
+        success: true,
+        auditLogs,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'audit_logs_fetch_failed',
+        message: err?.message || 'Failed to load audit logs.',
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/church-groups',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const groups = await platformStore.listChurchGroups(req.organizationId!);
+      return res.status(200).json({
+        success: true,
+        groups,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'church_groups_fetch_failed',
+        message: err?.message || 'Failed to load church groups.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/church-groups',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = ChurchGroupCreateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid group fields are required.',
+      });
+    }
+
+    try {
+      const group = await platformStore.createChurchGroup(req.organizationId!, parsed.data, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(201).json({
+        success: true,
+        group,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'church_group_create_failed',
+        message: err?.message || 'Failed to create church group.',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/church-groups/:id',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = ChurchGroupUpdateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid group update fields are required.',
+      });
+    }
+
+    try {
+      const group = await platformStore.updateChurchGroup(
+        req.organizationId!,
+        req.params.id,
+        parsed.data,
+        {
+          id: req.user?.id,
+          email: req.user?.email,
+          role: req.user?.role,
+          name: req.user?.name,
+          ipAddress: getClientIpKey(req),
+        }
+      );
+      return res.status(200).json({
+        success: true,
+        group,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 500;
+      return res.status(status).json({
+        error: status === 404 ? 'not_found' : 'church_group_update_failed',
+        message: err?.message || 'Failed to update church group.',
+      });
+    }
+  }
+);
+
+app.patch(
+  '/api/church-groups/:id',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = ChurchGroupUpdateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid group update fields are required.',
+      });
+    }
+
+    try {
+      const group = await platformStore.updateChurchGroup(
+        req.organizationId!,
+        req.params.id,
+        parsed.data,
+        {
+          id: req.user?.id,
+          email: req.user?.email,
+          role: req.user?.role,
+          name: req.user?.name,
+          ipAddress: getClientIpKey(req),
+        }
+      );
+      return res.status(200).json({
+        success: true,
+        group,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 500;
+      return res.status(status).json({
+        error: status === 404 ? 'not_found' : 'church_group_update_failed',
+        message: err?.message || 'Failed to update church group.',
+      });
+    }
+  }
+);
+
+app.delete(
+  '/api/church-groups/:id',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      await platformStore.deleteChurchGroup(req.organizationId!, req.params.id, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(200).json({
+        success: true,
+      });
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 500;
+      return res.status(status).json({
+        error: status === 404 ? 'not_found' : 'church_group_delete_failed',
+        message: err?.message || 'Failed to delete church group.',
+      });
+    }
+  }
+);
+
+
+// =========================================================================
 // GOOGLE MAPS & WHATSAPP LOCATION LINK RESOLVER FOR CHURCH PREMISES
 // =========================================================================
 

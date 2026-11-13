@@ -18,6 +18,8 @@ import {
 } from '../../lib/auth.ts';
 import type {
   BillingCycle,
+  ChurchGroup,
+  ChurchGroupCategory,
   ConsoleAlert,
   ConsoleAlertType,
   ConsoleAuditLogRecord,
@@ -38,6 +40,7 @@ import type {
   PlatformFeatureFlag,
   SupportGrantSession,
   SystemLicense,
+  SystemSettings,
   TenantChurch,
   TenantFeatures,
   TenantStatus,
@@ -225,6 +228,36 @@ export const DEFAULT_LANDING_CMS: LandingPageConfig = {
   },
 };
 
+export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
+  churchName: '',
+  campusName: '',
+  campusAddress: '',
+  campusLatitude: null,
+  campusLongitude: null,
+  campusLocationAccuracyM: null,
+  campusLocationUpdatedAt: null,
+  seniorPastor: '',
+  contactEmail: '',
+  contactPhone: '',
+  timezone: 'Africa/Accra (GMT)',
+  currency: 'GHS (Ghana Cedi)',
+  outerGeofenceMeters: 300,
+  innerGeofenceMeters: 100,
+  dwellTimeMinutes: 5,
+  serviceWindowBeforeMinutes: 45,
+  serviceWindowAfterMinutes: 30,
+  bleBeaconRssiThreshold: -70,
+  driveByProtection: true,
+  absenteeThresholdServices: 2,
+  firstTimerFollowupHours: 24,
+  autoAssignCellLeaders: true,
+  requireExplicitConsent: true,
+  auditLogRetentionDays: 90,
+  smsGatewayProvider: 'Hubtel Ghana',
+  smsSenderId: 'EKKLESPHERE',
+  enablePushNotifications: true,
+};
+
 const DEFAULT_PLANS: Record<LicenseTier, ConsolePlan> = {
   grace_starter: {
     id: 'grace_starter',
@@ -347,6 +380,8 @@ class PlatformStore {
   // Org-scoped operational collections
   private sitesByOrg = new Map<string, RegisteredSiteRecord[]>();
   private premiseByOrg = new Map<string, PremiseSettingsRecord>();
+  private systemSettingsByOrg = new Map<string, SystemSettings>();
+  private churchGroupsByOrg = new Map<string, ChurchGroup[]>();
   private checkinsByOrg = new Map<string, LiveCheckinItem[]>();
   private rawEventsByOrg = new Map<string, StoredGeofenceEvent[]>();
   private membersByOrg = new Map<string, Record<string, any>[]>();
@@ -392,6 +427,8 @@ class PlatformStore {
     this.supportGrants.clear();
     this.sitesByOrg.clear();
     this.premiseByOrg.clear();
+    this.systemSettingsByOrg.clear();
+    this.churchGroupsByOrg.clear();
     this.checkinsByOrg.clear();
     this.rawEventsByOrg.clear();
     this.membersByOrg.clear();
@@ -956,7 +993,12 @@ class PlatformStore {
         password_updated_at: record.passwordUpdatedAt ?? null,
       });
 
-      if (error && /column .* does not exist/i.test(error.message || '')) {
+      if (
+        error &&
+        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+          error.message || ''
+        )
+      ) {
         const retry = await this.supabase.from('account_credentials').upsert(baseRow);
         error = retry.error;
       }
@@ -1246,7 +1288,12 @@ class PlatformStore {
         })
         .eq('id', cred.id);
 
-      if (error && /column .* does not exist/i.test(error.message || '')) {
+      if (
+        error &&
+        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+          error.message || ''
+        )
+      ) {
         const retry = await this.supabase
           .from('account_credentials')
           .update(baseUpdate)
@@ -2508,13 +2555,34 @@ class PlatformStore {
         updated_at: nowIso,
       });
 
+      const { data: orgRow } = await this.supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      const mergedSettingsJson = {
+        ...(orgRow?.settings && typeof orgRow.settings === 'object' ? orgRow.settings : {}),
+        campus_name: params.campusName,
+        campus_address: params.campusAddress,
+        campus_location_accuracy_m: params.accuracyM,
+        campus_location_updated_at: nowIso,
+        inner_geofence_m: site.radius_m,
+        outer_geofence_m: site.outer_radius_m,
+        dwell_time_min: site.dwell_min,
+      };
+
       await this.supabase
         .from('organizations')
         .update({
+          ...(params.churchName && params.churchName !== 'Ekklesphere Sanctuary'
+            ? { name: params.churchName }
+            : {}),
           premise_address: params.campusAddress,
           inner_geofence_m: site.radius_m,
           outer_geofence_m: site.outer_radius_m,
           dwell_time_min: site.dwell_min,
+          settings: mergedSettingsJson,
           updated_at: nowIso,
         })
         .eq('id', orgId);
@@ -2542,8 +2610,26 @@ class PlatformStore {
     };
     this.premiseByOrg.set(orgId, premiseSettings);
 
+    const existingMemSettings = this.systemSettingsByOrg.get(orgId) || { ...DEFAULT_ORG_SYSTEM_SETTINGS };
+    this.systemSettingsByOrg.set(orgId, {
+      ...existingMemSettings,
+      churchName: params.churchName || existingMemSettings.churchName,
+      campusName: params.campusName,
+      campusAddress: params.campusAddress,
+      campusLatitude: params.lat,
+      campusLongitude: params.lng,
+      campusLocationAccuracyM: params.accuracyM,
+      campusLocationUpdatedAt: nowIso,
+      innerGeofenceMeters: site.radius_m,
+      outerGeofenceMeters: site.outer_radius_m,
+      dwellTimeMinutes: site.dwell_min,
+    });
+
     const org = this.orgs.get(orgId);
     if (org) {
+      if (params.churchName && params.churchName !== 'Ekklesphere Sanctuary') {
+        org.name = params.churchName;
+      }
       org.geofenceConfigured = true;
       org.geofenceRadiusMeters = site.outer_radius_m;
       org.sitesCount = updatedSites.filter((s) => s.active).length;
@@ -2554,8 +2640,25 @@ class PlatformStore {
 
   public async clearPremiseSettings(organizationId: string): Promise<PremiseSettingsRecord | null> {
     const orgId = organizationId.toLowerCase();
+    const nowIso = new Date().toISOString();
     if (this.supabase) {
-      await this.supabase.from('sites').update({ active: false }).eq('organization_id', orgId);
+      await this.supabase.from('sites').update({ active: false, updated_at: nowIso }).eq('organization_id', orgId);
+      const { data: orgRow } = await this.supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', orgId)
+        .maybeSingle();
+      if (orgRow) {
+        const nextJson = {
+          ...(orgRow.settings && typeof orgRow.settings === 'object' ? orgRow.settings : {}),
+          campus_location_accuracy_m: null,
+          campus_location_updated_at: null,
+        };
+        await this.supabase
+          .from('organizations')
+          .update({ settings: nextJson, updated_at: nowIso })
+          .eq('id', orgId);
+      }
     }
     this.sitesByOrg.set(orgId, []);
     const existing = this.premiseByOrg.get(orgId);
@@ -2564,12 +2667,785 @@ class PlatformStore {
       : null;
     if (cleared) this.premiseByOrg.set(orgId, cleared);
 
+    const existingMemSettings = this.systemSettingsByOrg.get(orgId);
+    if (existingMemSettings) {
+      this.systemSettingsByOrg.set(orgId, {
+        ...existingMemSettings,
+        campusLatitude: null,
+        campusLongitude: null,
+        campusLocationAccuracyM: null,
+        campusLocationUpdatedAt: null,
+      });
+    }
+
     const org = this.orgs.get(orgId);
     if (org) {
       org.geofenceConfigured = false;
       org.sitesCount = 0;
     }
     return cleared;
+  }
+
+  public async getSystemSettings(organizationId: string): Promise<{
+    settings: SystemSettings;
+    configured: boolean;
+    site: RegisteredSiteRecord | null;
+    storageBackend: 'supabase' | 'sandbox_ephemeral';
+  }> {
+    const orgId = organizationId.toLowerCase();
+    const sites = await this.getSitesForOrg(orgId);
+    const activeSite = sites.find((s) => s.active) || sites[0] || null;
+
+    if (this.supabase) {
+      const { data: orgRow } = await this.supabase
+        .from('organizations')
+        .select('*')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      if (orgRow) {
+        const raw =
+          orgRow.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, any>)
+            : {};
+
+        const settings: SystemSettings = {
+          churchName: String(orgRow.name ?? raw.church_name ?? ''),
+          campusName: String(activeSite?.name ?? raw.campus_name ?? orgRow.name ?? ''),
+          campusAddress: String(activeSite?.address ?? orgRow.premise_address ?? raw.campus_address ?? ''),
+          campusLatitude: activeSite ? activeSite.lat : null,
+          campusLongitude: activeSite ? activeSite.lng : null,
+          campusLocationAccuracyM:
+            typeof raw.campus_location_accuracy_m === 'number' ? raw.campus_location_accuracy_m : null,
+          campusLocationUpdatedAt:
+            activeSite?.updated_at || (typeof raw.campus_location_updated_at === 'string' ? raw.campus_location_updated_at : null),
+          seniorPastor: String(orgRow.senior_pastor ?? raw.senior_pastor ?? ''),
+          contactEmail: String(orgRow.contact_email ?? orgRow.email ?? raw.contact_email ?? ''),
+          contactPhone: String(orgRow.contact_phone ?? orgRow.phone ?? raw.contact_phone ?? ''),
+          timezone: String(orgRow.timezone ?? raw.timezone ?? DEFAULT_ORG_SYSTEM_SETTINGS.timezone),
+          currency: String(raw.currency ?? DEFAULT_ORG_SYSTEM_SETTINGS.currency),
+          outerGeofenceMeters: Number(
+            activeSite?.outer_radius_m ?? orgRow.outer_geofence_m ?? raw.outer_geofence_m ?? DEFAULT_ORG_SYSTEM_SETTINGS.outerGeofenceMeters
+          ),
+          innerGeofenceMeters: Number(
+            activeSite?.radius_m ?? orgRow.inner_geofence_m ?? raw.inner_geofence_m ?? DEFAULT_ORG_SYSTEM_SETTINGS.innerGeofenceMeters
+          ),
+          dwellTimeMinutes: Number(
+            activeSite?.dwell_min ?? orgRow.dwell_time_min ?? raw.dwell_time_min ?? DEFAULT_ORG_SYSTEM_SETTINGS.dwellTimeMinutes
+          ),
+          serviceWindowBeforeMinutes: Number(
+            raw.service_window_before_minutes ?? DEFAULT_ORG_SYSTEM_SETTINGS.serviceWindowBeforeMinutes
+          ),
+          serviceWindowAfterMinutes: Number(
+            raw.service_window_after_minutes ?? DEFAULT_ORG_SYSTEM_SETTINGS.serviceWindowAfterMinutes
+          ),
+          bleBeaconRssiThreshold: Number(
+            raw.ble_beacon_rssi_threshold ?? DEFAULT_ORG_SYSTEM_SETTINGS.bleBeaconRssiThreshold
+          ),
+          driveByProtection:
+            typeof raw.drive_by_protection === 'boolean'
+              ? raw.drive_by_protection
+              : DEFAULT_ORG_SYSTEM_SETTINGS.driveByProtection,
+          absenteeThresholdServices: Number(
+            raw.absentee_threshold_services ?? DEFAULT_ORG_SYSTEM_SETTINGS.absenteeThresholdServices
+          ),
+          firstTimerFollowupHours: Number(
+            raw.first_timer_followup_hours ?? DEFAULT_ORG_SYSTEM_SETTINGS.firstTimerFollowupHours
+          ),
+          autoAssignCellLeaders:
+            typeof raw.auto_assign_cell_leaders === 'boolean'
+              ? raw.auto_assign_cell_leaders
+              : DEFAULT_ORG_SYSTEM_SETTINGS.autoAssignCellLeaders,
+          requireExplicitConsent:
+            typeof raw.require_explicit_consent === 'boolean'
+              ? raw.require_explicit_consent
+              : DEFAULT_ORG_SYSTEM_SETTINGS.requireExplicitConsent,
+          auditLogRetentionDays: Number(
+            raw.audit_log_retention_days ?? DEFAULT_ORG_SYSTEM_SETTINGS.auditLogRetentionDays
+          ),
+          smsGatewayProvider: String(
+            raw.sms_gateway_provider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
+          ),
+          smsSenderId: String(raw.sms_sender_id ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsSenderId),
+          enablePushNotifications:
+            typeof raw.enable_push_notifications === 'boolean'
+              ? raw.enable_push_notifications
+              : typeof orgRow.push_configured === 'boolean'
+              ? orgRow.push_configured
+              : DEFAULT_ORG_SYSTEM_SETTINGS.enablePushNotifications,
+        };
+
+        return {
+          settings,
+          configured: Boolean(activeSite && Number.isFinite(activeSite.lat) && Number.isFinite(activeSite.lng)),
+          site: activeSite,
+          storageBackend: this.storageBackend,
+        };
+      }
+    }
+
+    const org = this.orgs.get(orgId);
+    const memPremise = this.premiseByOrg.get(orgId);
+    const memSettings = this.systemSettingsByOrg.get(orgId);
+    const settings: SystemSettings = {
+      ...DEFAULT_ORG_SYSTEM_SETTINGS,
+      ...(org
+        ? {
+            churchName: org.name,
+            campusName: org.city ? `${org.city} Main Campus` : org.name,
+            seniorPastor: org.seniorPastor || '',
+            contactEmail: org.contactEmail || '',
+            contactPhone: org.contactPhone || '',
+            outerGeofenceMeters: org.geofenceRadiusMeters || DEFAULT_ORG_SYSTEM_SETTINGS.outerGeofenceMeters,
+          }
+        : {}),
+      ...(memPremise
+        ? {
+            churchName: memPremise.churchName || org?.name || '',
+            campusName: memPremise.campusName || '',
+            campusAddress: memPremise.campusAddress || '',
+            campusLatitude: memPremise.lat,
+            campusLongitude: memPremise.lng,
+            campusLocationAccuracyM: memPremise.accuracyM,
+            campusLocationUpdatedAt: memPremise.updatedAt,
+            innerGeofenceMeters: memPremise.innerGeofenceMeters,
+            outerGeofenceMeters: memPremise.outerGeofenceMeters,
+            dwellTimeMinutes: memPremise.dwellTimeMinutes,
+          }
+        : {}),
+      ...(memSettings || {}),
+    };
+
+    if (activeSite && Number.isFinite(activeSite.lat) && Number.isFinite(activeSite.lng)) {
+      settings.campusLatitude = activeSite.lat;
+      settings.campusLongitude = activeSite.lng;
+      settings.campusName = activeSite.name || settings.campusName;
+      settings.campusAddress = activeSite.address ?? settings.campusAddress;
+      settings.innerGeofenceMeters = activeSite.radius_m || settings.innerGeofenceMeters;
+      settings.outerGeofenceMeters = activeSite.outer_radius_m || settings.outerGeofenceMeters;
+      settings.dwellTimeMinutes = activeSite.dwell_min || settings.dwellTimeMinutes;
+      settings.campusLocationUpdatedAt = activeSite.updated_at || settings.campusLocationUpdatedAt;
+    }
+
+    return {
+      settings,
+      configured: Boolean(
+        typeof settings.campusLatitude === 'number' &&
+          typeof settings.campusLongitude === 'number' &&
+          Number.isFinite(settings.campusLatitude) &&
+          Number.isFinite(settings.campusLongitude)
+      ),
+      site: activeSite,
+      storageBackend: this.storageBackend,
+    };
+  }
+
+  public async saveSystemSettings(
+    organizationId: string,
+    patch: Partial<SystemSettings>,
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<{
+    settings: SystemSettings;
+    configured: boolean;
+    site: RegisteredSiteRecord | null;
+    storageBackend: 'supabase' | 'sandbox_ephemeral';
+  }> {
+    const orgId = organizationId.toLowerCase();
+    const currentRes = await this.getSystemSettings(orgId);
+    const current = currentRes.settings;
+
+    const innerGeofenceMeters = Math.max(
+      10,
+      Math.min(5000, Math.round(Number(patch.innerGeofenceMeters ?? current.innerGeofenceMeters) || 100))
+    );
+    const outerGeofenceMeters = Math.max(
+      innerGeofenceMeters,
+      Math.min(10000, Math.round(Number(patch.outerGeofenceMeters ?? current.outerGeofenceMeters) || 300))
+    );
+    const dwellTimeMinutes = Math.max(
+      1,
+      Math.min(120, Math.round(Number(patch.dwellTimeMinutes ?? current.dwellTimeMinutes) || 5))
+    );
+    const serviceWindowBeforeMinutes = Math.max(
+      15,
+      Math.min(90, Math.round(Number(patch.serviceWindowBeforeMinutes ?? current.serviceWindowBeforeMinutes) || 45))
+    );
+    const serviceWindowAfterMinutes = Math.max(
+      15,
+      Math.min(60, Math.round(Number(patch.serviceWindowAfterMinutes ?? current.serviceWindowAfterMinutes) || 30))
+    );
+    const bleBeaconRssiThreshold = Math.max(
+      -95,
+      Math.min(-40, Math.round(Number(patch.bleBeaconRssiThreshold ?? current.bleBeaconRssiThreshold) || -70))
+    );
+    const absenteeThresholdServices = Math.max(
+      1,
+      Math.min(10, Math.round(Number(patch.absenteeThresholdServices ?? current.absenteeThresholdServices) || 2))
+    );
+    const firstTimerFollowupHours = Math.max(
+      1,
+      Math.min(168, Math.round(Number(patch.firstTimerFollowupHours ?? current.firstTimerFollowupHours) || 24))
+    );
+    const auditLogRetentionDays = Math.max(
+      7,
+      Math.min(3650, Math.round(Number(patch.auditLogRetentionDays ?? current.auditLogRetentionDays) || 90))
+    );
+    const smsSenderId = String(patch.smsSenderId ?? current.smsSenderId ?? 'EKKLESPHERE')
+      .trim()
+      .toUpperCase()
+      .slice(0, 11);
+
+    const merged: SystemSettings = {
+      ...current,
+      ...patch,
+      churchName: String(patch.churchName ?? current.churchName ?? '').trim(),
+      campusName: String(patch.campusName ?? current.campusName ?? '').trim(),
+      campusAddress: String(patch.campusAddress ?? current.campusAddress ?? '').trim(),
+      seniorPastor: String(patch.seniorPastor ?? current.seniorPastor ?? '').trim(),
+      contactEmail: String(patch.contactEmail ?? current.contactEmail ?? '').trim(),
+      contactPhone: String(patch.contactPhone ?? current.contactPhone ?? '').trim(),
+      timezone: String(patch.timezone ?? current.timezone ?? DEFAULT_ORG_SYSTEM_SETTINGS.timezone).trim(),
+      currency: String(patch.currency ?? current.currency ?? DEFAULT_ORG_SYSTEM_SETTINGS.currency).trim(),
+      innerGeofenceMeters,
+      outerGeofenceMeters,
+      dwellTimeMinutes,
+      serviceWindowBeforeMinutes,
+      serviceWindowAfterMinutes,
+      bleBeaconRssiThreshold,
+      absenteeThresholdServices,
+      firstTimerFollowupHours,
+      auditLogRetentionDays,
+      smsGatewayProvider: String(
+        patch.smsGatewayProvider ?? current.smsGatewayProvider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
+      ).trim(),
+      smsSenderId,
+      driveByProtection: Boolean(patch.driveByProtection ?? current.driveByProtection),
+      autoAssignCellLeaders: Boolean(patch.autoAssignCellLeaders ?? current.autoAssignCellLeaders),
+      requireExplicitConsent: Boolean(patch.requireExplicitConsent ?? current.requireExplicitConsent),
+      enablePushNotifications: Boolean(patch.enablePushNotifications ?? current.enablePushNotifications),
+    };
+
+    const hasExplicitCoords =
+      typeof merged.campusLatitude === 'number' &&
+      typeof merged.campusLongitude === 'number' &&
+      Number.isFinite(merged.campusLatitude) &&
+      Number.isFinite(merged.campusLongitude);
+
+    if (hasExplicitCoords) {
+      await this.savePremiseSettings(orgId, {
+        siteId: currentRes.site?.id,
+        churchName: merged.churchName || 'Ekklesphere Sanctuary',
+        campusName: merged.campusName || 'Main Campus',
+        campusAddress: merged.campusAddress,
+        lat: merged.campusLatitude!,
+        lng: merged.campusLongitude!,
+        accuracyM: merged.campusLocationAccuracyM ?? null,
+        innerGeofenceMeters: merged.innerGeofenceMeters,
+        outerGeofenceMeters: merged.outerGeofenceMeters,
+        dwellTimeMinutes: merged.dwellTimeMinutes,
+        updatedBy: actor?.name || actor?.email || 'Administrator',
+      });
+    } else if (patch.campusLatitude === null && patch.campusLongitude === null) {
+      await this.clearPremiseSettings(orgId);
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (this.supabase) {
+      const { data: existingOrg } = await this.supabase
+        .from('organizations')
+        .select('name, settings')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      const existingJson =
+        existingOrg?.settings && typeof existingOrg.settings === 'object'
+          ? (existingOrg.settings as Record<string, unknown>)
+          : {};
+
+      const nextSettingsJson: Record<string, unknown> = {
+        ...existingJson,
+        church_name: merged.churchName || existingOrg?.name || '',
+        campus_name: merged.campusName,
+        campus_address: merged.campusAddress,
+        campus_location_accuracy_m: merged.campusLocationAccuracyM ?? null,
+        campus_location_updated_at: merged.campusLocationUpdatedAt ?? null,
+        senior_pastor: merged.seniorPastor,
+        contact_email: merged.contactEmail,
+        contact_phone: merged.contactPhone,
+        timezone: merged.timezone,
+        currency: merged.currency,
+        inner_geofence_m: merged.innerGeofenceMeters,
+        outer_geofence_m: merged.outerGeofenceMeters,
+        dwell_time_min: merged.dwellTimeMinutes,
+        service_window_before_minutes: merged.serviceWindowBeforeMinutes,
+        service_window_after_minutes: merged.serviceWindowAfterMinutes,
+        ble_beacon_rssi_threshold: merged.bleBeaconRssiThreshold,
+        drive_by_protection: merged.driveByProtection,
+        absentee_threshold_services: merged.absenteeThresholdServices,
+        first_timer_followup_hours: merged.firstTimerFollowupHours,
+        auto_assign_cell_leaders: merged.autoAssignCellLeaders,
+        require_explicit_consent: merged.requireExplicitConsent,
+        audit_log_retention_days: merged.auditLogRetentionDays,
+        sms_gateway_provider: merged.smsGatewayProvider,
+        sms_sender_id: merged.smsSenderId,
+        sms_configured: Boolean(merged.smsGatewayProvider && merged.smsSenderId),
+        enable_push_notifications: merged.enablePushNotifications,
+        push_configured: merged.enablePushNotifications,
+      };
+
+      const orgUpdate: Record<string, unknown> = {
+        ...(merged.churchName ? { name: merged.churchName } : {}),
+        senior_pastor: merged.seniorPastor || null,
+        contact_email: merged.contactEmail || null,
+        email: merged.contactEmail || null,
+        contact_phone: merged.contactPhone || null,
+        phone: merged.contactPhone || null,
+        timezone: merged.timezone,
+        premise_address: merged.campusAddress || null,
+        inner_geofence_m: merged.innerGeofenceMeters,
+        outer_geofence_m: merged.outerGeofenceMeters,
+        dwell_time_min: merged.dwellTimeMinutes,
+        sms_configured: Boolean(merged.smsGatewayProvider && merged.smsSenderId),
+        push_configured: merged.enablePushNotifications,
+        settings: nextSettingsJson,
+        updated_at: nowIso,
+      };
+
+      let { error } = await this.supabase.from('organizations').update(orgUpdate).eq('id', orgId);
+
+      for (let attempt = 0; attempt < 4 && error; attempt++) {
+        const msg = error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(orgUpdate, colMatch[1])) {
+          delete orgUpdate[colMatch[1]];
+          const retry = await this.supabase.from('organizations').update(orgUpdate).eq('id', orgId);
+          error = retry.error;
+          continue;
+        }
+        break;
+      }
+
+      if (error) {
+        throw new Error(`Failed to save system settings in Supabase: ${error.message}`);
+      }
+    }
+
+    this.systemSettingsByOrg.set(orgId, merged);
+
+    const existingPremise = this.premiseByOrg.get(orgId);
+    if (existingPremise) {
+      this.premiseByOrg.set(orgId, {
+        ...existingPremise,
+        churchName: merged.churchName || existingPremise.churchName,
+        campusName: merged.campusName || existingPremise.campusName,
+        campusAddress: merged.campusAddress,
+        innerGeofenceMeters: merged.innerGeofenceMeters,
+        outerGeofenceMeters: merged.outerGeofenceMeters,
+        dwellTimeMinutes: merged.dwellTimeMinutes,
+        updatedAt: nowIso,
+      });
+    }
+
+    const memOrg = this.orgs.get(orgId);
+    if (memOrg) {
+      if (merged.churchName) memOrg.name = merged.churchName;
+      memOrg.seniorPastor = merged.seniorPastor;
+      memOrg.contactEmail = merged.contactEmail;
+      memOrg.contactPhone = merged.contactPhone;
+      memOrg.geofenceRadiusMeters = merged.outerGeofenceMeters;
+      memOrg.smsConfigured = Boolean(merged.smsGatewayProvider && merged.smsSenderId);
+      memOrg.pushConfigured = merged.enablePushNotifications;
+    }
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'system_settings.updated',
+      targetType: 'organization_settings',
+      targetId: orgId,
+      metadata: {
+        campusName: merged.campusName,
+        innerGeofenceMeters: merged.innerGeofenceMeters,
+        outerGeofenceMeters: merged.outerGeofenceMeters,
+        dwellTimeMinutes: merged.dwellTimeMinutes,
+        smsGatewayProvider: merged.smsGatewayProvider,
+        requireExplicitConsent: merged.requireExplicitConsent,
+        auditLogRetentionDays: merged.auditLogRetentionDays,
+      },
+      ipAddress: actor?.ipAddress || null,
+    });
+
+    return this.getSystemSettings(orgId);
+  }
+
+  public async resetSystemSettings(
+    organizationId: string,
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<{
+    settings: SystemSettings;
+    configured: boolean;
+    site: RegisteredSiteRecord | null;
+    storageBackend: 'supabase' | 'sandbox_ephemeral';
+  }> {
+    const orgId = organizationId.toLowerCase();
+    await this.clearPremiseSettings(orgId);
+
+    const org = await this.getOrganisationById(orgId);
+    const resetValues: SystemSettings = {
+      ...DEFAULT_ORG_SYSTEM_SETTINGS,
+      churchName: org?.name || '',
+    };
+
+    if (this.supabase) {
+      const nowIso = new Date().toISOString();
+      const { data: existingOrg } = await this.supabase
+        .from('organizations')
+        .select('name, settings')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      const existingJson =
+        existingOrg?.settings && typeof existingOrg.settings === 'object'
+          ? (existingOrg.settings as Record<string, unknown>)
+          : {};
+
+      const resetSettingsJson: Record<string, unknown> = {
+        ...existingJson,
+        campus_name: '',
+        campus_address: '',
+        campus_location_accuracy_m: null,
+        campus_location_updated_at: null,
+        senior_pastor: '',
+        contact_email: '',
+        contact_phone: '',
+        timezone: DEFAULT_ORG_SYSTEM_SETTINGS.timezone,
+        currency: DEFAULT_ORG_SYSTEM_SETTINGS.currency,
+        inner_geofence_m: DEFAULT_ORG_SYSTEM_SETTINGS.innerGeofenceMeters,
+        outer_geofence_m: DEFAULT_ORG_SYSTEM_SETTINGS.outerGeofenceMeters,
+        dwell_time_min: DEFAULT_ORG_SYSTEM_SETTINGS.dwellTimeMinutes,
+        service_window_before_minutes: DEFAULT_ORG_SYSTEM_SETTINGS.serviceWindowBeforeMinutes,
+        service_window_after_minutes: DEFAULT_ORG_SYSTEM_SETTINGS.serviceWindowAfterMinutes,
+        ble_beacon_rssi_threshold: DEFAULT_ORG_SYSTEM_SETTINGS.bleBeaconRssiThreshold,
+        drive_by_protection: DEFAULT_ORG_SYSTEM_SETTINGS.driveByProtection,
+        absentee_threshold_services: DEFAULT_ORG_SYSTEM_SETTINGS.absenteeThresholdServices,
+        first_timer_followup_hours: DEFAULT_ORG_SYSTEM_SETTINGS.firstTimerFollowupHours,
+        auto_assign_cell_leaders: DEFAULT_ORG_SYSTEM_SETTINGS.autoAssignCellLeaders,
+        require_explicit_consent: DEFAULT_ORG_SYSTEM_SETTINGS.requireExplicitConsent,
+        audit_log_retention_days: DEFAULT_ORG_SYSTEM_SETTINGS.auditLogRetentionDays,
+        sms_gateway_provider: DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider,
+        sms_sender_id: DEFAULT_ORG_SYSTEM_SETTINGS.smsSenderId,
+        enable_push_notifications: DEFAULT_ORG_SYSTEM_SETTINGS.enablePushNotifications,
+      };
+
+      const orgResetPatch: Record<string, unknown> = {
+        senior_pastor: null,
+        contact_email: null,
+        contact_phone: null,
+        timezone: DEFAULT_ORG_SYSTEM_SETTINGS.timezone,
+        premise_address: null,
+        inner_geofence_m: DEFAULT_ORG_SYSTEM_SETTINGS.innerGeofenceMeters,
+        outer_geofence_m: DEFAULT_ORG_SYSTEM_SETTINGS.outerGeofenceMeters,
+        dwell_time_min: DEFAULT_ORG_SYSTEM_SETTINGS.dwellTimeMinutes,
+        sms_configured: true,
+        push_configured: true,
+        settings: resetSettingsJson,
+        updated_at: nowIso,
+      };
+
+      let { error } = await this.supabase.from('organizations').update(orgResetPatch).eq('id', orgId);
+      for (let attempt = 0; attempt < 3 && error; attempt++) {
+        const msg = error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(orgResetPatch, colMatch[1])) {
+          delete orgResetPatch[colMatch[1]];
+          const retry = await this.supabase.from('organizations').update(orgResetPatch).eq('id', orgId);
+          error = retry.error;
+          continue;
+        }
+        break;
+      }
+    }
+
+    this.systemSettingsByOrg.set(orgId, resetValues);
+    this.premiseByOrg.delete(orgId);
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'system_settings.reset',
+      targetType: 'organization_settings',
+      targetId: orgId,
+      metadata: {
+        resetAt: new Date().toISOString(),
+      },
+      ipAddress: actor?.ipAddress || null,
+    });
+
+    return this.getSystemSettings(orgId);
+  }
+
+  private mapSupabaseChurchGroupRow(row: Record<string, any>): ChurchGroup {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      category: (row.category || 'cell_group') as ChurchGroupCategory,
+      leaderName: String(row.leader_name || ''),
+      leaderPhone: row.leader_phone || undefined,
+      leaderEmail: row.leader_email || undefined,
+      assistantLeader: row.assistant_leader || undefined,
+      meetingDay: row.meeting_day || undefined,
+      meetingTime: row.meeting_time || undefined,
+      meetingLocation: row.meeting_location || undefined,
+      targetDemographic: row.target_demographic || undefined,
+      description: String(row.description || ''),
+      active: Boolean(row.active ?? true),
+      createdAt: String(row.created_at || new Date().toISOString()).slice(0, 10),
+      updatedAt: row.updated_at ? String(row.updated_at).slice(0, 10) : undefined,
+    };
+  }
+
+  public async listChurchGroups(organizationId: string): Promise<ChurchGroup[]> {
+    const orgId = organizationId.toLowerCase();
+    if (this.supabase) {
+      const { data, error } = await this.supabase
+        .from('church_groups')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false });
+
+      if (!error && Array.isArray(data)) {
+        return data.map((row) => this.mapSupabaseChurchGroupRow(row));
+      }
+      if (error && !/does not exist|schema cache|42P01/i.test(error.message || '')) {
+        throw new Error(`Failed to fetch church groups: ${error.message}`);
+      }
+    }
+
+    return [...(this.churchGroupsByOrg.get(orgId) || [])];
+  }
+
+  public async createChurchGroup(
+    organizationId: string,
+    payload: Omit<ChurchGroup, 'id' | 'createdAt' | 'updatedAt'>,
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<ChurchGroup> {
+    const orgId = organizationId.toLowerCase();
+    const nowIso = new Date().toISOString();
+    let created: ChurchGroup | null = null;
+
+    if (this.supabase) {
+      const { data, error } = await this.supabase
+        .from('church_groups')
+        .insert({
+          organization_id: orgId,
+          name: payload.name.trim(),
+          category: payload.category,
+          leader_name: payload.leaderName.trim(),
+          leader_phone: payload.leaderPhone?.trim() || null,
+          leader_email: payload.leaderEmail?.trim() || null,
+          assistant_leader: payload.assistantLeader?.trim() || null,
+          meeting_day: payload.meetingDay?.trim() || null,
+          meeting_time: payload.meetingTime?.trim() || null,
+          meeting_location: payload.meetingLocation?.trim() || null,
+          target_demographic: payload.targetDemographic?.trim() || null,
+          description: (payload.description || '').trim(),
+          active: payload.active ?? true,
+        })
+        .select('*')
+        .single();
+
+      if (!error && data) {
+        created = this.mapSupabaseChurchGroupRow(data);
+      } else if (error && !/does not exist|schema cache|42P01/i.test(error.message || '')) {
+        throw new Error(`Failed to create church group in Supabase: ${error.message}`);
+      }
+    }
+
+    if (!created) {
+      created = {
+        id: randomUUID(),
+        name: payload.name.trim(),
+        category: payload.category,
+        leaderName: payload.leaderName.trim(),
+        leaderPhone: payload.leaderPhone?.trim() || undefined,
+        leaderEmail: payload.leaderEmail?.trim() || undefined,
+        assistantLeader: payload.assistantLeader?.trim() || undefined,
+        meetingDay: payload.meetingDay?.trim() || undefined,
+        meetingTime: payload.meetingTime?.trim() || undefined,
+        meetingLocation: payload.meetingLocation?.trim() || undefined,
+        targetDemographic: payload.targetDemographic?.trim() || undefined,
+        description: (payload.description || '').trim(),
+        active: payload.active ?? true,
+        createdAt: nowIso.slice(0, 10),
+        updatedAt: nowIso.slice(0, 10),
+      };
+      const list = this.churchGroupsByOrg.get(orgId) || [];
+      list.unshift(created);
+      this.churchGroupsByOrg.set(orgId, list);
+    }
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'church_group.created',
+      targetType: 'church_group',
+      targetId: created.id,
+      metadata: {
+        name: created.name,
+        category: created.category,
+        leaderName: created.leaderName,
+      },
+      ipAddress: actor?.ipAddress || null,
+    });
+
+    return created;
+  }
+
+  public async updateChurchGroup(
+    organizationId: string,
+    groupId: string,
+    updates: Partial<ChurchGroup>,
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<ChurchGroup> {
+    const orgId = organizationId.toLowerCase();
+    const nowIso = new Date().toISOString();
+    let updated: ChurchGroup | null = null;
+
+    if (this.supabase && UUID_REGEX.test(groupId)) {
+      const dbPatch: Record<string, unknown> = { updated_at: nowIso };
+      if (updates.name !== undefined) dbPatch.name = updates.name.trim();
+      if (updates.category !== undefined) dbPatch.category = updates.category;
+      if (updates.leaderName !== undefined) dbPatch.leader_name = updates.leaderName.trim();
+      if (updates.leaderPhone !== undefined) dbPatch.leader_phone = updates.leaderPhone?.trim() || null;
+      if (updates.leaderEmail !== undefined) dbPatch.leader_email = updates.leaderEmail?.trim() || null;
+      if (updates.assistantLeader !== undefined) dbPatch.assistant_leader = updates.assistantLeader?.trim() || null;
+      if (updates.meetingDay !== undefined) dbPatch.meeting_day = updates.meetingDay?.trim() || null;
+      if (updates.meetingTime !== undefined) dbPatch.meeting_time = updates.meetingTime?.trim() || null;
+      if (updates.meetingLocation !== undefined) dbPatch.meeting_location = updates.meetingLocation?.trim() || null;
+      if (updates.targetDemographic !== undefined) dbPatch.target_demographic = updates.targetDemographic?.trim() || null;
+      if (updates.description !== undefined) dbPatch.description = updates.description.trim();
+      if (updates.active !== undefined) dbPatch.active = Boolean(updates.active);
+
+      const { data, error } = await this.supabase
+        .from('church_groups')
+        .update(dbPatch)
+        .eq('organization_id', orgId)
+        .eq('id', groupId)
+        .select('*')
+        .maybeSingle();
+
+      if (!error && data) {
+        updated = this.mapSupabaseChurchGroupRow(data);
+      } else if (!error && !data) {
+        const notFound: any = new Error('Church group not found.');
+        notFound.status = 404;
+        throw notFound;
+      } else if (error && !/does not exist|schema cache|42P01/i.test(error.message || '')) {
+        throw new Error(`Failed to update church group in Supabase: ${error.message}`);
+      }
+    }
+
+    if (!updated) {
+      const list = this.churchGroupsByOrg.get(orgId) || [];
+      const idx = list.findIndex((g) => g.id === groupId);
+      if (idx < 0) {
+        const notFound: any = new Error('Church group not found.');
+        notFound.status = 404;
+        throw notFound;
+      }
+      updated = {
+        ...list[idx],
+        ...updates,
+        id: list[idx].id,
+        updatedAt: nowIso.slice(0, 10),
+      };
+      list[idx] = updated;
+      this.churchGroupsByOrg.set(orgId, list);
+    }
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'church_group.updated',
+      targetType: 'church_group',
+      targetId: updated.id,
+      metadata: {
+        name: updated.name,
+        category: updated.category,
+        active: updated.active,
+      },
+      ipAddress: actor?.ipAddress || null,
+    });
+
+    return updated;
+  }
+
+  public async deleteChurchGroup(
+    organizationId: string,
+    groupId: string,
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<void> {
+    const orgId = organizationId.toLowerCase();
+    let deletedName = groupId;
+
+    if (this.supabase && UUID_REGEX.test(groupId)) {
+      const { data, error } = await this.supabase
+        .from('church_groups')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('id', groupId)
+        .select('id, name')
+        .maybeSingle();
+
+      if (!error && !data) {
+        const notFound: any = new Error('Church group not found.');
+        notFound.status = 404;
+        throw notFound;
+      }
+      if (!error && data) {
+        deletedName = String(data.name || groupId);
+      } else if (error && !/does not exist|schema cache|42P01/i.test(error.message || '')) {
+        throw new Error(`Failed to delete church group in Supabase: ${error.message}`);
+      }
+    } else {
+      const list = this.churchGroupsByOrg.get(orgId) || [];
+      const target = list.find((g) => g.id === groupId);
+      if (!target) {
+        const notFound: any = new Error('Church group not found.');
+        notFound.status = 404;
+        throw notFound;
+      }
+      deletedName = target.name;
+      this.churchGroupsByOrg.set(
+        orgId,
+        list.filter((g) => g.id !== groupId)
+      );
+    }
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'church_group.deleted',
+      targetType: 'church_group',
+      targetId: groupId,
+      metadata: { name: deletedName },
+      ipAddress: actor?.ipAddress || null,
+    });
   }
 
   public async getSitesForOrg(organizationId: string): Promise<RegisteredSiteRecord[]> {
@@ -3103,7 +3979,12 @@ class PlatformStore {
         .single();
 
       // Fall back to base columns + custom_attributes JSONB if optional extended columns are absent
-      if (error && /column .* does not exist/i.test(error.message || '')) {
+      if (
+        error &&
+        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+          error.message || ''
+        )
+      ) {
         const retry = await this.supabase
           .from('members')
           .insert(baseInsert)

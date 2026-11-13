@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
   isSupabaseBrowserConfigured,
@@ -219,10 +219,14 @@ interface EkklesphereContextType {
   deleteMember: (memberId: string) => Promise<void>;
   updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => void;
 
-  // System Settings & Live Church Premise Location
+  // System Settings & Live Church Premise Location (Supabase Postgres RLS)
   systemSettings: SystemSettings;
-  updateSystemSettings: (newSettings: Partial<SystemSettings>) => void;
-  resetSystemSettings: () => void;
+  systemSettingsStorageBackend: 'supabase' | 'sandbox_ephemeral';
+  isSyncingSystemSettings: boolean;
+  refreshSystemSettings: () => Promise<void>;
+  updateSystemSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
+  resetSystemSettings: () => Promise<boolean>;
+  sendTestSmsGateway: (provider: string, senderId: string) => Promise<{ success: boolean; message: string }>;
   setChurchPremiseLocation: (params: {
     lat: number;
     lng: number;
@@ -237,8 +241,9 @@ interface EkklesphereContextType {
   clearChurchPremiseLocation: () => Promise<void>;
   refreshLivePremise: () => Promise<void>;
 
-  // Ministries, Fellowships & Cell Groups Management
+  // Ministries, Fellowships & Cell Groups Management (Supabase Postgres RLS)
   churchGroups: ChurchGroup[];
+  refreshChurchGroups: () => Promise<void>;
   addChurchGroup: (group: Omit<ChurchGroup, 'id' | 'createdAt'>) => ChurchGroup;
   updateChurchGroup: (id: string, updates: Partial<ChurchGroup>) => void;
   deleteChurchGroup: (id: string) => void;
@@ -305,6 +310,7 @@ interface EkklesphereContextType {
 
   // Audit Logs & Toasts
   auditLogs: AuditLogItem[];
+  refreshAuditLogs: () => Promise<void>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
 
@@ -953,11 +959,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setCurrentUser(null);
     setGoogleAuthError(null);
     setIsChangePasswordModalOpen(false);
+    setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+    setChurchGroups([]);
+    setAuditLogs([]);
+    setPushSubscribersCount(0);
     try {
       signOutSupabaseBrowser().catch(() => {});
       localStorage.removeItem('ekklesphere_user');
       localStorage.removeItem('ekklesphere_token');
       localStorage.removeItem('ekklesphere_view_mode');
+      localStorage.removeItem('ekklesphere_system_settings');
+      localStorage.removeItem('ekklesphere_church_groups');
     } catch {
       // ignore
     }
@@ -1310,6 +1322,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } catch {}
     return [];
   });
+  const [systemSettingsStorageBackend, setSystemSettingsStorageBackend] = useState<'supabase' | 'sandbox_ephemeral'>('supabase');
+  const [isSyncingSystemSettings, setIsSyncingSystemSettings] = useState(false);
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_system_settings');
@@ -1466,15 +1480,26 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   );
   const [pushSubscribersCount, setPushSubscribersCount] = useState<number>(0);
 
-  // Initialize Service Worker & load push subscribers on mount
+  // Initialize Service Worker & load push subscribers when authenticated as staff
   useEffect(() => {
     if (pushNotificationService.isSupported()) {
       pushNotificationService.registerServiceWorker().catch(() => {});
       setPushPermissionStatus(pushNotificationService.getPermissionStatus());
     }
 
-    // Refresh push subscribers count from server
-    fetch('/api/notifications/subscriptions')
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    const role = currentUser?.verifiedRole || currentUser?.role;
+    const canViewSubscribers =
+      role === 'admin' || role === 'pastor' || role === 'super_admin' || role === 'creator';
+    if (!token || !canViewSubscribers) {
+      return;
+    }
+
+    fetch('/api/notifications/subscriptions', {
+      headers: getAuthHeaders(),
+    })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && typeof data.subscribersCount === 'number') {
@@ -1482,7 +1507,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
       })
       .catch(() => {});
-  }, []);
+  }, [currentUser?.id, currentUser?.organization_id, currentUser?.role, currentUser?.token]);
 
   const requestPushPermission = async (): Promise<boolean> => {
     if (!pushNotificationService.isSupported()) {
@@ -1527,12 +1552,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       data: { url: '/', type: 'arrival_checkin' },
     });
 
-    // Also trigger server dispatch for logging
-    fetch('/api/notifications/test-push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ personName: memberName }),
-    }).catch(() => {});
+    // Also trigger server dispatch for authenticated tenant logging
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (token) {
+      fetch('/api/notifications/test-push', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ personName: memberName }),
+      }).catch(() => {});
+    }
 
     if (ok) {
       showToast('Test push notification displayed on your device!');
@@ -2195,9 +2225,102 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   let serverPremiseUnavailableErrors = 0;
   let premisePollTicks = 0;
 
+  const refreshSystemSettings = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
+    setIsSyncingSystemSettings(true);
+    try {
+      const res = await fetch('/api/system-settings', {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.storageBackend) {
+        setSystemSettingsStorageBackend(data.storageBackend);
+      }
+      if (data?.settings) {
+        const merged: SystemSettings = {
+          ...DEFAULT_SYSTEM_SETTINGS,
+          ...data.settings,
+        };
+        setSystemSettings(merged);
+        try {
+          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(merged));
+        } catch {}
+      }
+    } catch {
+      // ignore transient network errors
+    } finally {
+      setIsSyncingSystemSettings(false);
+    }
+  };
+
+  const refreshChurchGroups = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
+    try {
+      const res = await fetch('/api/church-groups', {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.groups)) {
+        setChurchGroups(data.groups);
+        try {
+          localStorage.setItem('ekklesphere_church_groups', JSON.stringify(data.groups));
+        } catch {}
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
+  const refreshAuditLogs = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    const role = currentUser?.verifiedRole || currentUser?.role;
+    const isStaff =
+      role === 'admin' || role === 'pastor' || role === 'super_admin' || role === 'creator';
+    if (!token || !isStaff) return;
+
+    try {
+      const res = await fetch('/api/system-settings/audit-logs', {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.auditLogs)) {
+        const mapped: AuditLogItem[] = data.auditLogs.map((item: any) => ({
+          id: String(item.id),
+          actor: String(item.actor || 'System'),
+          action: String(item.action || 'audit.event'),
+          entityType: String(item.entityType || 'Organization'),
+          timestamp: String(item.timestamp || new Date().toISOString()),
+          details: String(item.details || ''),
+        }));
+        setAuditLogs(mapped);
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
   const refreshLivePremise = async () => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) {
+      return;
+    }
+
     premisePollTicks++;
-    // If backend endpoint is unavailable (e.g. 404 on static deployment), back off polling to avoid console spam
     if (serverPremiseUnavailableErrors >= 2 && premisePollTicks % 8 !== 0) {
       return;
     }
@@ -2205,7 +2328,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     try {
       let serverData: any = null;
       try {
-        const res = await fetch('/api/campus-premise');
+        const res = await fetch('/api/campus-premise', {
+          headers: getAuthHeaders(),
+        });
         if (res.ok) {
           serverData = await res.json();
           serverPremiseUnavailableErrors = 0;
@@ -2237,89 +2362,21 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           } catch {}
           return next;
         });
-
-        // Also sync to Firestore as backup
-        try {
-          setDoc(doc(db, 'system_settings', 'default'), {
-            lat: ps.lat,
-            lng: ps.lng,
-            accuracyM: ps.accuracyM,
-            churchName: ps.churchName,
-            campusName: ps.campusName,
-            campusAddress: ps.campusAddress,
-            innerGeofenceMeters: ps.innerGeofenceMeters,
-            outerGeofenceMeters: ps.outerGeofenceMeters,
-            dwellTimeMinutes: ps.dwellTimeMinutes,
-            updatedAt: ps.updatedAt || new Date().toISOString(),
-          }, { merge: true }).catch(() => {});
-        } catch {}
-      } else {
-        // If server hasn't configured premise, check Firestore
-        try {
-          const fsSnap = await getDoc(doc(db, 'system_settings', 'default'));
-          if (fsSnap.exists()) {
-            const fsData = fsSnap.data();
-            const latVal = typeof fsData.lat === 'number' ? fsData.lat : typeof fsData.campusLatitude === 'number' ? fsData.campusLatitude : null;
-            const lngVal = typeof fsData.lng === 'number' ? fsData.lng : typeof fsData.campusLongitude === 'number' ? fsData.campusLongitude : null;
-
-            if (latVal !== null && lngVal !== null) {
-              setSystemSettings((prev) => {
-                const next: SystemSettings = {
-                  ...prev,
-                  churchName: fsData.churchName || prev.churchName,
-                  campusName: fsData.campusName || prev.campusName,
-                  campusAddress: fsData.campusAddress ?? prev.campusAddress,
-                  campusLatitude: latVal,
-                  campusLongitude: lngVal,
-                  campusLocationAccuracyM: typeof fsData.accuracyM === 'number' ? fsData.accuracyM : typeof fsData.campusLocationAccuracyM === 'number' ? fsData.campusLocationAccuracyM : null,
-                  campusLocationUpdatedAt: fsData.updatedAt || fsData.campusLocationUpdatedAt || null,
-                  innerGeofenceMeters: fsData.innerGeofenceMeters ?? prev.innerGeofenceMeters,
-                  outerGeofenceMeters: fsData.outerGeofenceMeters ?? prev.outerGeofenceMeters,
-                  dwellTimeMinutes: fsData.dwellTimeMinutes ?? prev.dwellTimeMinutes,
-                };
-                try {
-                  localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-
-              // Push restored premise back to server to keep it active
-              fetch('/api/campus-premise', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({
-                  lat: latVal,
-                  lng: lngVal,
-                  accuracyM: fsData.accuracyM ?? fsData.campusLocationAccuracyM,
-                  churchName: fsData.churchName,
-                  campusName: fsData.campusName,
-                  campusAddress: fsData.campusAddress,
-                  innerGeofenceMeters: fsData.innerGeofenceMeters,
-                  outerGeofenceMeters: fsData.outerGeofenceMeters,
-                  dwellTimeMinutes: fsData.dwellTimeMinutes,
-                  updatedBy: 'System (Firestore Restore)',
-                }),
-              }).catch(() => {});
-            }
-          } else if (serverData?.configured === false) {
-            setSystemSettings((prev) => {
-              if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
-              const next = {
-                ...prev,
-                campusLatitude: null,
-                campusLongitude: null,
-                campusLocationAccuracyM: null,
-                campusLocationUpdatedAt: null,
-              };
-              try {
-                localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
-              } catch {}
-              return next;
-            });
-          }
-        } catch {
-          // ignore Firestore read error if offline
-        }
+      } else if (serverData?.configured === false) {
+        setSystemSettings((prev) => {
+          if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
+          const next = {
+            ...prev,
+            campusLatitude: null,
+            campusLongitude: null,
+            campusLocationAccuracyM: null,
+            campusLocationUpdatedAt: null,
+          };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
       }
 
       if (serverData && Array.isArray(serverData.liveCheckins)) {
@@ -2558,12 +2615,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   useEffect(() => {
+    refreshSystemSettings();
+    refreshChurchGroups();
+    refreshAuditLogs();
     refreshLivePremise();
     refreshMembers();
     refreshServices();
     const interval = setInterval(refreshLivePremise, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUser?.id, currentUser?.organization_id, currentUser?.token]);
 
   const setChurchPremiseLocation = async (params: {
     lat: number;
@@ -2617,41 +2677,22 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updatedBy: currentUser?.name || 'Administrator',
       };
 
-      // 1. Dual-persist to Firestore immediately as cloud primary/backup
-      try {
-        await setDoc(doc(db, 'system_settings', 'default'), {
-          ...payload,
-          campusLatitude: parsedLat,
-          campusLongitude: parsedLng,
-          campusLocationAccuracyM: accuracyM,
-          campusLocationUpdatedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }, { merge: true });
-      } catch (fsErr) {
-        console.warn('Firestore direct write for premise settings (non-blocking):', fsErr);
-      }
-
-      // 2. Persist to API server
-      let serverSaved = false;
+      // Persist campus premise location directly to Supabase-backed API server
       let ps: any = null;
-      try {
-        const res = await fetch('/api/campus-premise', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
+      const res = await fetch('/api/campus-premise', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          ps = data.premiseSettings;
-          serverSaved = true;
-        } else {
-          const errorJson = await res.json().catch(() => ({}));
-          console.warn('Server GPS premise response not ok, but Firestore saved:', res.status, errorJson);
-        }
-      } catch (srvErr) {
-        console.warn('Server GPS premise network error, relying on Firestore persistence:', srvErr);
+      if (!res.ok) {
+        const errorJson = await res.json().catch(() => ({}));
+        showToast(errorJson?.message || 'Could not save church premise location.');
+        return false;
       }
+
+      const data = await res.json();
+      ps = data.premiseSettings;
 
       setSystemSettings((prev) => {
         const updated: SystemSettings = {
@@ -2673,17 +2714,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return updated;
       });
 
-      setAuditLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          actor: currentUser?.name || 'Administrator',
-          action: 'Church Premise GPS Set',
-          entityType: 'CampusGeofence',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          details: `Pinned ${payload.campusName} at (${parsedLat.toFixed(6)}, ${parsedLng.toFixed(6)}) · Radius ${payload.innerGeofenceMeters}m (Server & Cloud Saved)`,
-        },
-        ...prev,
-      ]);
+      refreshAuditLogs().catch(() => {});
 
       showToast(
         `Church premise pinned at (${parsedLat.toFixed(5)}, ${parsedLng.toFixed(5)}) · ${payload.innerGeofenceMeters}m radius`
@@ -2698,10 +2729,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const clearChurchPremiseLocation = async (): Promise<void> => {
     try {
-      fetch('/api/campus-premise', { method: 'DELETE' }).catch(() => {});
-      try {
-        await deleteDoc(doc(db, 'system_settings', 'default'));
-      } catch {}
+      const res = await fetch('/api/campus-premise', {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData?.message || 'Could not clear church premise location.');
+        return;
+      }
 
       setSystemSettings((prev) => {
         const updated: SystemSettings = {
@@ -2716,116 +2752,172 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } catch {}
         return updated;
       });
-      setAuditLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          actor: currentUser?.name || 'Administrator',
-          action: 'Church Premise GPS Cleared',
-          entityType: 'CampusGeofence',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          details: 'Cleared configured church premise coordinates',
-        },
-        ...prev,
-      ]);
+      refreshAuditLogs().catch(() => {});
       showToast('Church premise GPS location cleared');
     } catch (err) {
       console.error('Error clearing church premise location:', err);
     }
   };
 
-  const updateSystemSettings = (newSettings: Partial<SystemSettings>) => {
-    setSystemSettings((prev) => {
-      const updated = { ...prev, ...newSettings };
-      try {
-        localStorage.setItem('ekklesphere_system_settings', JSON.stringify(updated));
-      } catch {}
-      if (updated.campusLatitude != null && updated.campusLongitude != null) {
-        // Dual-persist to server and Firestore
-        fetch('/api/campus-premise', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lat: updated.campusLatitude,
-            lng: updated.campusLongitude,
-            accuracyM: updated.campusLocationAccuracyM ?? null,
-            churchName: updated.churchName,
-            campusName: updated.campusName,
-            campusAddress: updated.campusAddress,
-            innerGeofenceMeters: updated.innerGeofenceMeters,
-            outerGeofenceMeters: updated.outerGeofenceMeters,
-            dwellTimeMinutes: updated.dwellTimeMinutes,
-            updatedBy: currentUser?.name || 'Administrator',
-          }),
-        }).catch((err) => console.warn('Could not sync updated premise settings to server:', err));
+  const updateSystemSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
+    const optimisticNext: SystemSettings = {
+      ...systemSettings,
+      ...newSettings,
+    };
+    setSystemSettings(optimisticNext);
+    try {
+      localStorage.setItem('ekklesphere_system_settings', JSON.stringify(optimisticNext));
+    } catch {}
 
-        setDoc(doc(db, 'system_settings', 'default'), {
-          lat: updated.campusLatitude,
-          lng: updated.campusLongitude,
-          accuracyM: updated.campusLocationAccuracyM ?? null,
-          churchName: updated.churchName,
-          campusName: updated.campusName,
-          campusAddress: updated.campusAddress,
-          innerGeofenceMeters: updated.innerGeofenceMeters,
-          outerGeofenceMeters: updated.outerGeofenceMeters,
-          dwellTimeMinutes: updated.dwellTimeMinutes,
-          updatedAt: new Date().toISOString(),
-        }, { merge: true }).catch(() => {});
+    setIsSyncingSystemSettings(true);
+    try {
+      const res = await fetch('/api/system-settings', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(newSettings),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Could not save system settings to database.');
+        refreshSystemSettings().catch(() => {});
+        return false;
       }
-      return updated;
-    });
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        actor: currentUser?.name || 'Administrator',
-        action: 'System Settings Updated',
-        entityType: 'SystemSettings',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: 'Campus proximity parameters and automated thresholds saved',
-      },
-      ...prev,
-    ]);
-    showToast('System & Campus settings saved successfully');
+
+      if (data?.storageBackend) {
+        setSystemSettingsStorageBackend(data.storageBackend);
+      }
+      if (data?.settings) {
+        const synced: SystemSettings = {
+          ...DEFAULT_SYSTEM_SETTINGS,
+          ...data.settings,
+        };
+        setSystemSettings(synced);
+        try {
+          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(synced));
+        } catch {}
+      }
+
+      refreshAuditLogs().catch(() => {});
+      showToast('System & Campus settings saved to Supabase database');
+      return true;
+    } catch (err) {
+      console.warn('Could not persist system settings:', err);
+      showToast('Network error saving system settings.');
+      return false;
+    } finally {
+      setIsSyncingSystemSettings(false);
+    }
   };
 
-  const resetSystemSettings = () => {
-    setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
-    fetch('/api/campus-premise', { method: 'DELETE' }).catch(() => {});
+  const resetSystemSettings = async (): Promise<boolean> => {
+    setIsSyncingSystemSettings(true);
     try {
-      localStorage.removeItem('ekklesphere_system_settings');
+      const res = await fetch('/api/system-settings/reset', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Could not reset system settings.');
+        return false;
+      }
+
+      const next: SystemSettings = {
+        ...DEFAULT_SYSTEM_SETTINGS,
+        ...(data?.settings || {}),
+      };
+      setSystemSettings(next);
+      if (data?.storageBackend) {
+        setSystemSettingsStorageBackend(data.storageBackend);
+      }
+      try {
+        localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
+      } catch {}
+      refreshAuditLogs().catch(() => {});
+      showToast('System settings reset to defaults. Please set your Church Premise GPS location.');
+      return true;
     } catch {
-      // ignore
+      showToast('Network error resetting system settings.');
+      return false;
+    } finally {
+      setIsSyncingSystemSettings(false);
     }
-    showToast('System settings reset. Please set your Church Premise GPS location.');
+  };
+
+  const sendTestSmsGateway = async (
+    provider: string,
+    senderId: string
+  ): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/system-settings/test-sms', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ provider, senderId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not dispatch test SMS.';
+        showToast(msg);
+        return { success: false, message: msg };
+      }
+      const msg =
+        data.message ||
+        `Test SMS dispatched via ${provider} using Sender ID: "${senderId.toUpperCase()}"`;
+      showToast(msg);
+      refreshAuditLogs().catch(() => {});
+      return { success: true, message: msg };
+    } catch {
+      const msg = 'Network error dispatching test SMS.';
+      showToast(msg);
+      return { success: false, message: msg };
+    }
   };
 
   const addChurchGroup = (groupData: Omit<ChurchGroup, 'id' | 'createdAt'>): ChurchGroup => {
-    const newGroup: ChurchGroup = {
+    const tempId = `temp-grp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const optimisticGroup: ChurchGroup = {
       ...groupData,
-      id: `grp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: tempId,
       createdAt: new Date().toISOString().split('T')[0],
     };
+
     setChurchGroups((prev) => {
-      const updated = [newGroup, ...prev];
+      const updated = [optimisticGroup, ...prev];
       try {
         localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
+      } catch {}
       return updated;
     });
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        actor: currentUser?.name || 'Administrator',
-        action: 'Church Group Created',
-        entityType: 'ChurchGroup',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Created ${newGroup.category.replace('_', ' ')}: "${newGroup.name}" led by ${newGroup.leaderName}`,
-      },
-      ...prev,
-    ]);
-    showToast(`${newGroup.name} created successfully`);
-    return newGroup;
+
+    fetch('/api/church-groups', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(groupData),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.group) {
+          showToast(data?.message || 'Could not save church group to database.');
+          refreshChurchGroups().catch(() => {});
+          return;
+        }
+        setChurchGroups((prev) => {
+          const replaced = prev.map((g) => (g.id === tempId ? data.group : g));
+          try {
+            localStorage.setItem('ekklesphere_church_groups', JSON.stringify(replaced));
+          } catch {}
+          return replaced;
+        });
+        refreshAuditLogs().catch(() => {});
+        showToast(`${data.group.name} saved to Supabase`);
+      })
+      .catch(() => {
+        showToast('Network error saving church group.');
+        refreshChurchGroups().catch(() => {});
+      });
+
+    return optimisticGroup;
   };
 
   const updateChurchGroup = (id: string, updates: Partial<ChurchGroup>) => {
@@ -2840,23 +2932,36 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
       try {
         localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
+      } catch {}
       return updated;
     });
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        actor: currentUser?.name || 'Administrator',
-        action: 'Church Group Updated',
-        entityType: 'ChurchGroup',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Updated parameters for group "${groupName}"`,
-      },
-      ...prev,
-    ]);
-    showToast(`${groupName || 'Group'} updated successfully`);
+
+    fetch(`/api/church-groups/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(updates),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.group) {
+          showToast(data?.message || 'Could not update church group.');
+          refreshChurchGroups().catch(() => {});
+          return;
+        }
+        setChurchGroups((prev) => {
+          const synced = prev.map((g) => (g.id === id ? data.group : g));
+          try {
+            localStorage.setItem('ekklesphere_church_groups', JSON.stringify(synced));
+          } catch {}
+          return synced;
+        });
+        refreshAuditLogs().catch(() => {});
+        showToast(`${data.group.name || groupName || 'Group'} updated`);
+      })
+      .catch(() => {
+        showToast('Network error updating church group.');
+        refreshChurchGroups().catch(() => {});
+      });
   };
 
   const deleteChurchGroup = (id: string) => {
@@ -2865,23 +2970,28 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const updated = prev.filter((g) => g.id !== id);
       try {
         localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
+      } catch {}
       return updated;
     });
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        actor: currentUser?.name || 'Administrator',
-        action: 'Church Group Deleted',
-        entityType: 'ChurchGroup',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: `Deleted group "${groupToDelete?.name}"`,
-      },
-      ...prev,
-    ]);
-    showToast(`Removed "${groupToDelete?.name || 'Group'}"`);
+
+    fetch(`/api/church-groups/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          showToast(data?.message || 'Could not delete church group.');
+          refreshChurchGroups().catch(() => {});
+          return;
+        }
+        refreshAuditLogs().catch(() => {});
+        showToast(`Removed "${groupToDelete?.name || 'Group'}"`);
+      })
+      .catch(() => {
+        showToast('Network error removing church group.');
+        refreshChurchGroups().catch(() => {});
+      });
   };
 
   const toggleChurchGroupStatus = (id: string) => {
@@ -3259,12 +3369,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         deleteMember,
         updateMemberConsent,
         systemSettings,
+        systemSettingsStorageBackend,
+        isSyncingSystemSettings,
+        refreshSystemSettings,
         updateSystemSettings,
         resetSystemSettings,
+        sendTestSmsGateway,
         setChurchPremiseLocation,
         clearChurchPremiseLocation,
         refreshLivePremise,
         churchGroups,
+        refreshChurchGroups,
         addChurchGroup,
         updateChurchGroup,
         deleteChurchGroup,
@@ -3305,6 +3420,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         addChurchWallPost,
         toggleChurchWallAmen,
         auditLogs,
+        refreshAuditLogs,
         toastMessage,
         showToast,
         viewMode,

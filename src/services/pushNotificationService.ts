@@ -34,6 +34,20 @@ class PushNotificationService {
   private swRegistration: ServiceWorkerRegistration | null = null;
   private isRegistering: boolean = false;
 
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    try {
+      const token =
+        typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return headers;
+  }
+
   public isSupported(): boolean {
     return (
       typeof window !== 'undefined' &&
@@ -145,7 +159,7 @@ class PushNotificationService {
       // Inform Express backend
       await fetch('/api/notifications/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify(payload),
       }).catch((err) => console.warn('[PushService] Server subscription sync warning:', err));
 
@@ -266,7 +280,7 @@ class PushNotificationService {
     try {
       const res = await fetch('/api/notifications/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify({ title, body, personId, topic }),
       });
       return await res.json();

@@ -322,4 +322,91 @@ describe('Automatic Member Onboarding Credentials & Password Change Flow', () =>
       }
     }
   });
+
+  it('falls back cleanly when Supabase PostgREST reports must_change_password missing from schema cache', async () => {
+    const storeAny = platformStore as any;
+    const prevSupabase = storeAny.supabase;
+    const calls: Array<{ table: string; op: string; payload: any }> = [];
+
+    storeAny.supabase = {
+      from: (table: string) => {
+        if (table === 'auth_audit_events' || table === 'auth_rate_limits') {
+          return {
+            insert: async () => ({ error: null }),
+            delete: () => ({ eq: async () => ({ error: null }) }),
+          };
+        }
+        expect(table).toBe('account_credentials');
+        return {
+          upsert: async (payload: any) => {
+            calls.push({ table, op: 'upsert', payload });
+            if ('must_change_password' in payload) {
+              return {
+                error: {
+                  message:
+                    "Could not find the 'must_change_password' column of 'account_credentials' in the schema cache",
+                },
+              };
+            }
+            return { error: null };
+          },
+          update: (payload: any) => ({
+            eq: async () => {
+              calls.push({ table, op: 'update', payload });
+              if ('must_change_password' in payload) {
+                return {
+                  error: {
+                    message:
+                      "Could not find the 'must_change_password' column of 'account_credentials' in the schema cache",
+                  },
+                };
+              }
+              return { error: null };
+            },
+          }),
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: null }),
+            }),
+            or: () => ({
+              limit: () => ({
+                maybeSingle: async () => ({ data: null }),
+              }),
+            }),
+          }),
+        };
+      },
+    };
+
+    try {
+      const saved = await platformStore.provisionCredentialRecord({
+        id: '11111111-1111-4111-8111-111111111119',
+        organizationId: '00000000-0000-0000-0000-000000000001',
+        email: 'cache-fallback@example.org',
+        name: 'Schema Fallback User',
+        role: 'member',
+        password: DEFAULT_MEMBER_ONBOARDING_PASSWORD,
+        mustChangePassword: true,
+      });
+
+      expect(saved.email).toBe('cache-fallback@example.org');
+      expect(saved.mustChangePassword).toBe(true);
+      expect(calls.filter((c) => c.op === 'upsert')).toHaveLength(2);
+      expect('must_change_password' in calls[0].payload).toBe(true);
+      expect('must_change_password' in calls[1].payload).toBe(false);
+
+      const pwdRes = await platformStore.changePasswordForUser({
+        userId: saved.id,
+        currentPassword: DEFAULT_MEMBER_ONBOARDING_PASSWORD,
+        newPassword: 'UpdatedPassword!2026',
+      });
+      expect(pwdRes.success).toBe(true);
+      expect(calls.filter((c) => c.op === 'update')).toHaveLength(2);
+      expect('must_change_password' in calls[2].payload).toBe(true);
+      expect('must_change_password' in calls[3].payload).toBe(false);
+    } finally {
+      storeAny.supabase = prevSupabase;
+    }
+  });
 });
+
