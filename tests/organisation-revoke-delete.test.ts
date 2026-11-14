@@ -46,6 +46,24 @@ describe('Organisation Revoke, Permanent Deletion & Migration SQL Safety', () =>
     expect(sql).toContain('drop constraint if exists');
   });
 
+  it('ensures no SchoolSphere migrations or unsupported psql backslash directives exist in supabase/migrations', () => {
+    const migrationsDir = path.resolve(process.cwd(), 'supabase/migrations');
+    const files = fs.readdirSync(migrationsDir);
+
+    expect(files).not.toContain('20261030000004_schoolsphere_master_rls.sql');
+    expect(files).toContain('20261030000004_ekklesphere_master_rls.sql');
+
+    for (const file of files) {
+      expect(file.toLowerCase()).not.toContain('schoolsphere');
+      expect(file.toLowerCase()).not.toContain('school_id');
+
+      if (!file.endsWith('.sql')) continue;
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      expect(sql).not.toMatch(/schoolsphere|school_id/i);
+      expect(sql).not.toMatch(/^\s*\\(?:ir|i|include|set|echo|connect|c)\b/im);
+    }
+  });
+
   it('rejects unauthenticated and non-creator calls to revoke and delete endpoints', async () => {
     const unauthRevoke = await request(app)
       .post(`/api/console/organisations/${TEST_ANCHOR_ORGANIZATION_ID}/revoke`)
