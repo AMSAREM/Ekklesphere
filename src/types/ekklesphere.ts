@@ -206,6 +206,7 @@ export interface ServiceInstance {
   endTimeIso?: string;
   dwellMinutes?: number;
   status: 'scheduled' | 'open' | 'closed' | 'cancelled';
+  manualClosed?: boolean;
   expectedAttendance: number;
 }
 

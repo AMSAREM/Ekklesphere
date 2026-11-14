@@ -101,6 +101,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     activeServiceId,
     setActiveServiceId,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     members,
     attendanceRecords,
     telemetrySummary,
@@ -139,10 +141,11 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
   // Scoped attendance records: match active service or include legacy records if only one service exists
   const scopedRecords = useMemo(() => {
     if (scopeMode === 'all') return attendanceRecords;
+    if (!currentService.id) return [];
     return attendanceRecords.filter(
       (r) =>
         r.serviceInstanceId === currentService.id ||
-        (!r.serviceInstanceId && services.length <= 1)
+        (!r.serviceInstanceId && services.length === 1)
     );
   }, [attendanceRecords, scopeMode, currentService.id, services.length]);
 
@@ -420,6 +423,10 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
   };
 
   const handleQuickRecordCheckin = () => {
+    if (!hasScheduledService) {
+      showToast(checkInEligibility.message);
+      return;
+    }
     const targetId = quickMemberId || unarrivedMembers[0]?.id;
     if (!targetId) {
       showToast('All registered members are already checked in');
@@ -523,13 +530,17 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             <span>{systemSettings.campusName || 'Main Campus'}</span>
             <span aria-hidden="true">·</span>
             <span>
-              {scopeMode === 'all'
+              {services.length === 0
+                ? 'No Service Scheduled'
+                : scopeMode === 'all'
                 ? `All Sessions (${services.length})`
                 : `${currentService.name}${currentService.date ? ` (${formatServiceDate(currentService.date)})` : ''}`}
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              {currentService.startsAt}–{currentService.endsAt} (15m punctuality grace)
+              {services.length === 0
+                ? 'Schedule a service to begin recording arrivals'
+                : `${currentService.startsAt}–${currentService.endsAt} (15m punctuality grace)`}
             </span>
           </div>
         </div>
@@ -600,7 +611,9 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             Record Live Arrival
           </p>
           <p className="text-[#666A86] dark:text-[#A9ACC8]">
-            {members.length === 0
+            {!hasScheduledService
+              ? checkInEligibility.message
+              : members.length === 0
               ? 'Add or import your congregation roster to start tracking live session arrivals.'
               : unarrivedMembers.length === 0
               ? 'Every member in your directory is checked in for this session.'
@@ -608,7 +621,18 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
           </p>
         </div>
 
-        {members.length === 0 ? (
+        {!hasScheduledService ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAddServiceOpen(true)}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <CalendarIcon className="w-3.5 h-3.5" />
+              <span>Schedule Service</span>
+            </button>
+          </div>
+        ) : members.length === 0 ? (
           <div className="flex flex-wrap items-center gap-2">
             {onOpenAddMember && (
               <button
@@ -675,8 +699,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             <button
               type="button"
               onClick={handleQuickRecordCheckin}
-              disabled={unarrivedMembers.length === 0}
-              className="min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-50 text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              disabled={unarrivedMembers.length === 0 || !hasScheduledService}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               <Check className="w-3.5 h-3.5" />
               <span>Check In Member</span>
@@ -1388,10 +1412,12 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <button
                             type="button"
+                            disabled={!hasScheduledService}
+                            title={hasScheduledService ? `Check in ${m.firstName}` : checkInEligibility.message}
                             onClick={() =>
                               checkInPerson(m.id, 'usher', 95, 'Checked in from Attendance Insights')
                             }
-                            className="px-2.5 py-1.5 min-h-[34px] rounded-lg text-xs font-semibold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                            className="px-2.5 py-1.5 min-h-[34px] rounded-lg text-xs font-semibold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white disabled:opacity-45 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                           >
                             Check In
                           </button>

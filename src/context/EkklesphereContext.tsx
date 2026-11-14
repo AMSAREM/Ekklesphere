@@ -38,7 +38,19 @@ import {
   type MemberImportValidationSummary,
   type ValidatedImportRow,
 } from '../shared/memberImportValidation';
-import { computeServiceBinaryStatus } from '../utils/serviceStatus';
+import {
+  computeServiceBinaryStatus,
+  evaluateServiceCheckInEligibility,
+  isPlaceholderServiceId,
+  type ServiceCheckInEligibility,
+} from '../utils/serviceStatus';
+import {
+  formatFollowupDueDateLabel,
+  getCurrencyDisplay,
+  memberMatchesChurchGroup,
+  resolveFollowupAssignee,
+  type SettingsTabId,
+} from '../utils/settingsConnections';
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -171,6 +183,8 @@ interface EkklesphereContextType {
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
   adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings';
   setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
+  requestedSettingsTab: { tab: SettingsTabId; nonce: number } | null;
+  requestOpenSettings: (tab: SettingsTabId) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isAddServiceOpen: boolean;
@@ -192,6 +206,8 @@ interface EkklesphereContextType {
   setActiveServiceId: (id: string) => void;
   services: ServiceInstance[];
   currentService: ServiceInstance;
+  hasScheduledService: boolean;
+  checkInEligibility: ServiceCheckInEligibility;
   refreshServices: () => Promise<void>;
   addService: (params: {
     name: string;
@@ -219,7 +235,7 @@ interface EkklesphereContextType {
   members: Person[];
   visitorsCount: number;
   refreshMembers: () => Promise<void>;
-  addVisitor: (name: string, phone: string, howHeard: string) => Promise<void>;
+  addVisitor: (name: string, phone: string, howHeard: string, preferredGroupName?: string) => Promise<void>;
   addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Promise<Person>;
   validateMemberImportRemote: (
     candidateMembers: Record<string, unknown>[],
@@ -410,15 +426,15 @@ const formatDisplayDateLabel = (isoDate?: string): string => {
   return dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 };
 
-const LIVE_DEFAULT_SERVICE: ServiceInstance = {
-  id: 'svc-live-main',
-  serviceId: 'svc-live-main',
+const UNSCHEDULED_SERVICE_PLACEHOLDER: ServiceInstance = {
+  id: '',
+  serviceId: '',
   campusId: '00000000-0000-0000-0000-000000000001',
-  name: 'Main Worship Service',
-  date: formatLocalDateIso(),
-  startsAt: '08:00',
-  endsAt: '10:30',
-  status: 'open',
+  name: 'No Service Scheduled',
+  date: '',
+  startsAt: '--:--',
+  endsAt: '--:--',
+  status: 'closed',
   expectedAttendance: 0,
 };
 
@@ -520,6 +536,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
   const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [requestedSettingsTab, setRequestedSettingsTab] = useState<{ tab: SettingsTabId; nonce: number } | null>(null);
+  const requestOpenSettings = (tab: SettingsTabId) => {
+    setActivePortal('admin');
+    setAdminSubTab('settings');
+    setRequestedSettingsTab({ tab, nonce: Date.now() });
+  };
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAddServiceOpen, setIsAddServiceOpen] = useState<boolean>(false);
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
@@ -1005,7 +1027,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
     setChurchGroups([]);
     setMembers([]);
-    setServices([]);
+    setRawServices([]);
     setAttendanceRecords([]);
     setAuditLogs([]);
     setDonations([]);
@@ -1350,17 +1372,25 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [activeServiceId, setActiveServiceId] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_active_service_id');
-      if (saved) return saved;
+      if (saved && !isPlaceholderServiceId(saved)) return saved;
     } catch {}
-    return LIVE_DEFAULT_SERVICE.id;
+    return '';
   });
-  const [services, setServices] = useState<ServiceInstance[]>(() => {
+  const [serviceClockMs, setServiceClockMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setServiceClockMs(Date.now());
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const [rawServices, setRawServices] = useState<ServiceInstance[]>(() => {
     try {
       const saved = localStorage.getItem('ekklesphere_services');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.filter((s: ServiceInstance) => s && !isPlaceholderServiceId(s.id));
         }
       }
     } catch {}
@@ -1480,7 +1510,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } catch {}
       setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
       setMembers([]);
-      setServices([]);
+      setRawServices([]);
       setChurchGroups([]);
       setAttendanceRecords([]);
       setDonations([]);
@@ -1715,21 +1745,57 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
+  const services = React.useMemo<ServiceInstance[]>(() => {
+    return rawServices.map((svc) => {
+      if (svc.status === 'cancelled' || svc.status === 'closed') {
+        return {
+          ...svc,
+          manualClosed: svc.manualClosed ?? svc.status === 'closed',
+        };
+      }
+      const allowance = svc.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5;
+      const binary = computeServiceBinaryStatus({
+        date: svc.date,
+        startsAt: svc.startsAt,
+        endsAt: svc.endsAt,
+        startTimeIso: svc.startTimeIso,
+        endTimeIso: svc.endTimeIso,
+        allowanceMinutes: allowance,
+        rawStatus: 'active',
+        nowMs: serviceClockMs,
+      });
+      return {
+        ...svc,
+        status: binary === 'live' ? 'open' : 'closed',
+        manualClosed: false,
+      };
+    });
+  }, [rawServices, serviceClockMs, systemSettings.dwellTimeMinutes]);
+
   const currentService = React.useMemo(
-    () => services.find((s) => s.id === activeServiceId) || services[0] || LIVE_DEFAULT_SERVICE,
+    () => services.find((s) => s.id === activeServiceId) || services[0] || UNSCHEDULED_SERVICE_PLACEHOLDER,
     [services, activeServiceId]
   );
 
-  // Real-time attendance metrics scoped to the active service (zero synthetic baseline)
-  const activeServiceAttendanceRecords = React.useMemo(
+  const checkInEligibility = React.useMemo(
     () =>
-      attendanceRecords.filter(
-        (r) =>
-          r.serviceInstanceId === currentService.id ||
-          (!r.serviceInstanceId && services.length <= 1)
-      ),
-    [attendanceRecords, currentService.id, services.length]
+      evaluateServiceCheckInEligibility(services, activeServiceId, currentService, {
+        nowMs: serviceClockMs,
+        defaultAllowanceMinutes: systemSettings.dwellTimeMinutes,
+      }),
+    [services, activeServiceId, currentService, serviceClockMs, systemSettings.dwellTimeMinutes]
   );
+  const hasScheduledService = checkInEligibility.eligible;
+
+  // Real-time attendance metrics scoped to the active service (zero synthetic baseline)
+  const activeServiceAttendanceRecords = React.useMemo(() => {
+    if (!currentService.id) return [];
+    return attendanceRecords.filter(
+      (r) =>
+        r.serviceInstanceId === currentService.id ||
+        (!r.serviceInstanceId && services.length === 1)
+    );
+  }, [attendanceRecords, currentService.id, services.length]);
   const totalCheckedInCount = activeServiceAttendanceRecords.length;
   const expectedAttendance =
     currentService.expectedAttendance > 0 ? currentService.expectedAttendance : members.length;
@@ -1754,8 +1820,22 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     note?: string,
     serviceIdOverride?: string
   ): { started: boolean; promise: Promise<boolean> } => {
-    const targetServiceId = serviceIdOverride || activeServiceId;
-    const targetService = services.find((s) => s.id === targetServiceId) || currentService;
+    const eligibility = evaluateServiceCheckInEligibility(
+      services,
+      serviceIdOverride || activeServiceId,
+      currentService,
+      {
+        nowMs: Date.now(),
+        defaultAllowanceMinutes: systemSettings.dwellTimeMinutes,
+      }
+    );
+    if (!eligibility.eligible || !eligibility.service) {
+      showToast(eligibility.message);
+      return { started: false, promise: Promise.resolve(false) };
+    }
+
+    const targetService = eligibility.service;
+    const targetServiceId = targetService.id;
     const existing = attendanceRecords.find(
       (r) => r.personId === personId && r.serviceInstanceId === targetServiceId
     );
@@ -1846,9 +1926,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 : r
             )
           );
-          if (targetServiceId === LIVE_DEFAULT_SERVICE.id && resolvedServiceId !== LIVE_DEFAULT_SERVICE.id) {
-            void refreshServices();
-          }
         }
 
         setAuditLogs((prev) => [auditEntry, ...prev]);
@@ -1898,6 +1975,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const removeCheckIn = async (personId: string, serviceIdOverride?: string): Promise<void> => {
     const targetServiceId = serviceIdOverride || activeServiceId;
+    if (!targetServiceId || isPlaceholderServiceId(targetServiceId)) {
+      return;
+    }
     const person = members.find((m) => m.id === personId);
     try {
       const res = await fetch(
@@ -1964,7 +2044,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } catch {}
   };
 
-  const addVisitor = async (name: string, phone: string, howHeard: string): Promise<void> => {
+  const addVisitor = async (
+    name: string,
+    phone: string,
+    howHeard: string,
+    preferredGroupName?: string
+  ): Promise<void> => {
     const parts = name.trim().split(' ');
     const firstName = parts[0] || 'Visitor';
     const lastName = parts.slice(1).join(' ') || 'Guest';
@@ -1977,6 +2062,19 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         : `+233${cleanDigits}`
       : undefined;
 
+    const cleanPreferred = preferredGroupName?.trim();
+    const matchedPreferredGroup = cleanPreferred
+      ? churchGroups.find((g) => g.name.trim().toLowerCase() === cleanPreferred.toLowerCase())
+      : undefined;
+    const assignedCellGroup =
+      matchedPreferredGroup && matchedPreferredGroup.category !== 'ministry'
+        ? matchedPreferredGroup.name
+        : 'First-time Visitor';
+    const assignedDepartment =
+      matchedPreferredGroup && matchedPreferredGroup.category === 'ministry'
+        ? matchedPreferredGroup.name
+        : undefined;
+
     let savedPerson: Person | null = null;
     try {
       const res = await fetch('/api/members', {
@@ -1988,8 +2086,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           phoneE164: formattedPhone,
           status: 'visitor',
           officerName: 'Guest',
-          homeCellGroup: 'First-time Visitor',
-          groupName: 'First-time Visitor',
+          homeCellGroup: assignedCellGroup,
+          groupName: matchedPreferredGroup ? matchedPreferredGroup.name : 'First-time Visitor',
+          ...(assignedDepartment ? { department: assignedDepartment } : {}),
           autoCheckinOptedIn: false,
           consecutiveAbsences: 0,
           remarks: `Heard via: ${howHeard}`,
@@ -2014,8 +2113,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         phoneE164: formattedPhone || '+233200000000',
         status: 'visitor',
         officerName: 'Guest',
-        homeCellGroup: 'First-time Visitor',
-        groupName: 'First-time Visitor',
+        homeCellGroup: assignedCellGroup,
+        groupName: matchedPreferredGroup ? matchedPreferredGroup.name : 'First-time Visitor',
+        department: assignedDepartment,
         autoCheckinOptedIn: false,
         consecutiveAbsences: 0,
         remarks: `Heard via: ${howHeard}`,
@@ -2039,8 +2139,36 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return updated;
     });
 
-    // Check them in immediately
-    checkInPerson(savedPerson.id, 'usher', 95, `Visitor registration. Heard via ${howHeard}`);
+    // Check them in only if a scheduled service is live within its active window
+    const visitorEligibility = evaluateServiceCheckInEligibility(
+      services,
+      activeServiceId,
+      currentService,
+      {
+        nowMs: Date.now(),
+        defaultAllowanceMinutes: systemSettings.dwellTimeMinutes,
+      }
+    );
+    if (visitorEligibility.eligible) {
+      checkInPerson(savedPerson.id, 'usher', 95, `Visitor registration. Heard via ${howHeard}`);
+    } else {
+      showToast(`Visitor registered. Check-in skipped: ${visitorEligibility.message}`);
+    }
+
+    const visitorAssignee = matchedPreferredGroup?.leaderName?.trim()
+      ? matchedPreferredGroup.leaderName.trim()
+      : resolveFollowupAssignee(
+          savedPerson,
+          churchGroups,
+          systemSettings,
+          'first_timer',
+          'Welcome & Pastoral Care Team'
+        ).assignedToName;
+    const visitorDueOn = formatFollowupDueDateLabel(
+      'first_timer',
+      systemSettings.firstTimerFollowupHours,
+      systemSettings.absenteeThresholdServices
+    );
 
     // Create visitor follow-up task in Supabase
     try {
@@ -2050,11 +2178,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         body: JSON.stringify({
           personId: savedPerson!.id,
           personName: name,
-          groupName: 'Visitors Welcome Team',
+          groupName: matchedPreferredGroup?.name || 'Visitors Welcome Team',
           reason: 'first_timer',
-          assignedToName: systemSettings.seniorPastor || 'Welcome & Pastoral Care Team',
-          dueOn: 'Tomorrow 10:00 AM',
-          notes: `First-time visitor check-in (${howHeard})`,
+          assignedToName: visitorAssignee,
+          dueOn: visitorDueOn,
+          notes: `First-time visitor check-in (${howHeard})${
+            matchedPreferredGroup ? ` · Interest: ${matchedPreferredGroup.name}` : ''
+          }`,
         }),
       });
       if (taskRes.ok) {
@@ -2067,7 +2197,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // transient network failure ignored
     }
 
-    showToast(`${name} saved to directory! Welcome follow-up task created.`);
+    showToast(
+      `${name} saved to directory! Follow-up assigned to ${visitorAssignee} (${visitorDueOn}).`
+    );
   };
 
   const addMember = async (
@@ -2385,6 +2517,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
             imageUrl: updates.imageUrl,
             dateOfBirth: updates.dateOfBirth,
             preferredName: updates.preferredName,
+            groupName: updates.groupName,
+            homeCellGroup: updates.homeCellGroup,
+            department: updates.department,
           }),
         });
         if (selfRes.ok) {
@@ -2764,17 +2899,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const startTimeIso = typeof rawStart === 'string' && rawStart.includes('T') ? rawStart : undefined;
     const endTimeIso = typeof rawEnd === 'string' && rawEnd.includes('T') ? rawEnd : undefined;
 
-    const binaryStatus = computeServiceBinaryStatus({
-      date: dateStr,
-      startsAt: startStr,
-      endsAt: endStr,
-      startTimeIso,
-      endTimeIso,
-      allowanceMinutes,
-      rawStatus: ev.status,
-    });
-    const mappedStatus: ServiceInstance['status'] =
-      binaryStatus === 'live' ? 'open' : 'closed';
+    const rawDbStatus = String(ev.status || '').trim().toLowerCase();
+    const isManualClosed = rawDbStatus === 'closed' || rawDbStatus === 'completed';
+    let mappedStatus: ServiceInstance['status'];
+    if (rawDbStatus === 'cancelled') {
+      mappedStatus = 'cancelled';
+    } else if (isManualClosed) {
+      mappedStatus = 'closed';
+    } else {
+      mappedStatus = 'scheduled';
+    }
 
     return {
       id: ev.id,
@@ -2788,6 +2922,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       endTimeIso,
       dwellMinutes: allowanceMinutes,
       status: mappedStatus,
+      manualClosed: isManualClosed,
       expectedAttendance: expectedCount,
     };
   };
@@ -2798,6 +2933,27 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
     if (!token) return;
 
+    const pickDefaultServiceId = (list: ServiceInstance[], prev: string): string => {
+      if (list.length === 0) return '';
+      if (list.some((s) => s.id === prev)) return prev;
+      const nowMs = Date.now();
+      const firstLive = list.find(
+        (s) =>
+          computeServiceBinaryStatus({
+            date: s.date,
+            startsAt: s.startsAt,
+            endsAt: s.endsAt,
+            startTimeIso: s.startTimeIso,
+            endTimeIso: s.endTimeIso,
+            allowanceMinutes: s.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5,
+            rawStatus:
+              s.status === 'closed' || s.status === 'cancelled' ? s.status : 'active',
+            nowMs,
+          }) === 'live'
+      );
+      return firstLive?.id || list[0].id;
+    };
+
     try {
       const res = await fetch('/api/events', { headers: getAuthHeaders() });
       if (handleUnauthorizedSession(res.status)) return;
@@ -2805,17 +2961,19 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const data = await res.json();
         if (Array.isArray(data)) {
           const mapped = data.map(mapDbEventToService);
-          setServices(mapped);
+          setRawServices(mapped);
+          setServiceClockMs(Date.now());
           try {
             localStorage.setItem('ekklesphere_services', JSON.stringify(mapped));
           } catch {}
-          setActiveServiceId((prev) =>
-            mapped.length === 0
-              ? LIVE_DEFAULT_SERVICE.id
-              : mapped.some((s) => s.id === prev)
-              ? prev
-              : mapped[0].id
-          );
+          setActiveServiceId((prev) => {
+            const nextId = pickDefaultServiceId(mapped, prev);
+            try {
+              if (nextId) localStorage.setItem('ekklesphere_active_service_id', nextId);
+              else localStorage.removeItem('ekklesphere_active_service_id');
+            } catch {}
+            return nextId;
+          });
           return;
         }
       }
@@ -2829,11 +2987,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          setServices(parsed);
-          if (parsed.length > 0) {
-            setActiveServiceId((prev) =>
-              parsed.some((s: ServiceInstance) => s.id === prev) ? prev : parsed[0].id
-            );
+          const clean = parsed.filter((s: ServiceInstance) => s && !isPlaceholderServiceId(s.id));
+          setRawServices(clean);
+          setServiceClockMs(Date.now());
+          if (clean.length > 0) {
+            setActiveServiceId((prev) => pickDefaultServiceId(clean, prev));
+          } else {
+            setActiveServiceId('');
           }
         }
       }
@@ -2910,14 +3070,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     if (!created) {
       const newId = `svc-${Date.now()}`;
-      const fallbackBinary = computeServiceBinaryStatus({
-        date: serviceDate,
-        startsAt: startClock,
-        endsAt: endClock,
-        startTimeIso: localStart.toISOString(),
-        endTimeIso: localEnd.toISOString(),
-        allowanceMinutes,
-      });
       created = {
         id: newId,
         serviceId: newId,
@@ -2929,7 +3081,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         startTimeIso: localStart.toISOString(),
         endTimeIso: localEnd.toISOString(),
         dwellMinutes: allowanceMinutes,
-        status: fallbackBinary === 'live' ? 'open' : 'closed',
+        status: 'scheduled',
+        manualClosed: false,
         expectedAttendance: params.expectedAttendance ?? 0,
       };
     }
@@ -2953,8 +3106,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }, { merge: true }).catch(() => {});
     } catch {}
 
-    setServices((prev) => {
-      const withoutPlaceholder = prev.filter((s) => s.id !== LIVE_DEFAULT_SERVICE.id);
+    setServiceClockMs(Date.now());
+    setRawServices((prev) => {
+      const withoutPlaceholder = prev.filter((s) => !isPlaceholderServiceId(s.id));
       const updated = [...withoutPlaceholder, created!];
       try {
         localStorage.setItem('ekklesphere_services', JSON.stringify(updated));
@@ -2984,7 +3138,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       status?: 'live' | 'closed';
     }
   ): Promise<void> => {
-    const existing = services.find((s) => s.id === serviceId);
+    const existing = rawServices.find((s) => s.id === serviceId);
     const serviceDate =
       updates.date && /^\d{4}-\d{2}-\d{2}$/.test(updates.date.trim())
         ? updates.date.trim()
@@ -3024,7 +3178,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     const isPlaceholderId =
-      serviceId === LIVE_DEFAULT_SERVICE.id ||
+      isPlaceholderServiceId(serviceId) ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId);
 
     let mappedUpdated: ServiceInstance | null = null;
@@ -3065,15 +3219,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     if (!mappedUpdated) {
-      const binaryStatus = computeServiceBinaryStatus({
-        date: serviceDate,
-        startsAt: startClock,
-        endsAt: endClock,
-        startTimeIso: localStart.toISOString(),
-        endTimeIso: localEnd.toISOString(),
-        allowanceMinutes,
-        rawStatus: updates.status === 'closed' ? 'closed' : 'active',
-      });
       mappedUpdated = {
         ...(existing || {
           id: serviceId,
@@ -3087,10 +3232,25 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         startTimeIso: localStart.toISOString(),
         endTimeIso: localEnd.toISOString(),
         dwellMinutes: allowanceMinutes,
-        status: binaryStatus === 'live' ? 'open' : 'closed',
+        status: updates.status === 'closed' ? 'closed' : 'scheduled',
+        manualClosed: updates.status === 'closed',
         expectedAttendance: Number(payload.expectedAttendance) || 0,
       };
     }
+
+    const updatedBinaryStatus = computeServiceBinaryStatus({
+      date: mappedUpdated.date,
+      startsAt: mappedUpdated.startsAt,
+      endsAt: mappedUpdated.endsAt,
+      startTimeIso: mappedUpdated.startTimeIso,
+      endTimeIso: mappedUpdated.endTimeIso,
+      allowanceMinutes: mappedUpdated.dwellMinutes ?? allowanceMinutes,
+      rawStatus:
+        mappedUpdated.status === 'closed' || mappedUpdated.status === 'cancelled'
+          ? mappedUpdated.status
+          : 'active',
+      nowMs: Date.now(),
+    });
 
     try {
       setDoc(
@@ -3104,7 +3264,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           startTimeIso: mappedUpdated.startTimeIso,
           endTimeIso: mappedUpdated.endTimeIso,
           dwellMinutes: allowanceMinutes,
-          status: mappedUpdated.status,
+          status: updatedBinaryStatus === 'live' ? 'open' : 'closed',
           expectedAttendance: mappedUpdated.expectedAttendance,
           updatedAt: new Date().toISOString(),
         },
@@ -3112,11 +3272,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ).catch(() => {});
     } catch {}
 
-    setServices((prev) => {
+    setServiceClockMs(Date.now());
+    setRawServices((prev) => {
       const hasOriginal = prev.some((s) => s.id === serviceId);
       const updated = hasOriginal
         ? prev.map((s) => (s.id === serviceId ? mappedUpdated! : s))
-        : [...prev.filter((s) => s.id !== LIVE_DEFAULT_SERVICE.id), mappedUpdated!];
+        : [...prev.filter((s) => !isPlaceholderServiceId(s.id)), mappedUpdated!];
       try {
         localStorage.setItem('ekklesphere_services', JSON.stringify(updated));
       } catch {}
@@ -3139,14 +3300,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     showToast(
-      `Updated "${mappedUpdated.name}" (${mappedUpdated.status === 'open' ? 'Live' : 'Closed'})`
+      `Updated "${mappedUpdated.name}" (${updatedBinaryStatus === 'live' ? 'Live' : 'Closed'})`
     );
   };
 
   const deleteService = async (serviceId: string): Promise<void> => {
-    const svcToDelete = services.find((s) => s.id === serviceId);
+    const svcToDelete = rawServices.find((s) => s.id === serviceId);
     const isPlaceholderId =
-      serviceId === LIVE_DEFAULT_SERVICE.id ||
+      isPlaceholderServiceId(serviceId) ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId);
 
     if (!isPlaceholderId) {
@@ -3172,14 +3333,19 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deleteDoc(doc(db, 'events', serviceId)).catch(() => {});
     } catch {}
 
-    setServices((prev) => {
+    setRawServices((prev) => {
       const updated = prev.filter((s) => s.id !== serviceId);
       try {
         localStorage.setItem('ekklesphere_services', JSON.stringify(updated));
       } catch {}
-      setActiveServiceId((curr) =>
-        curr === serviceId ? updated[0]?.id || LIVE_DEFAULT_SERVICE.id : curr
-      );
+      setActiveServiceId((curr) => {
+        const nextId = curr === serviceId ? updated[0]?.id || '' : curr;
+        try {
+          if (nextId) localStorage.setItem('ekklesphere_active_service_id', nextId);
+          else localStorage.removeItem('ekklesphere_active_service_id');
+        } catch {}
+        return nextId;
+      });
       return updated;
     });
     setAttendanceRecords((prev) => prev.filter((r) => r.serviceInstanceId !== serviceId));
@@ -3575,7 +3741,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const updateChurchGroup = (id: string, updates: Partial<ChurchGroup>) => {
-    let groupName = '';
+    const existingGroup = churchGroups.find((g) => g.id === id);
+    const oldName = existingGroup?.name?.trim() || '';
+    const nextName = updates.name?.trim() || '';
+    let groupName = nextName || oldName;
+
     setChurchGroups((prev) => {
       const updated = prev.map((g) => {
         if (g.id === id) {
@@ -3589,6 +3759,28 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } catch {}
       return updated;
     });
+
+    if (oldName && nextName && oldName.toLowerCase() !== nextName.toLowerCase()) {
+      const oldLower = oldName.toLowerCase();
+      setMembers((prev) => {
+        const syncedMembers = prev.map((m) => {
+          const matchesGroup = (m.groupName || '').trim().toLowerCase() === oldLower;
+          const matchesCell = (m.homeCellGroup || '').trim().toLowerCase() === oldLower;
+          const matchesDept = (m.department || '').trim().toLowerCase() === oldLower;
+          if (!matchesGroup && !matchesCell && !matchesDept) return m;
+          return {
+            ...m,
+            ...(matchesGroup ? { groupName: nextName } : {}),
+            ...(matchesCell ? { homeCellGroup: nextName } : {}),
+            ...(matchesDept ? { department: nextName } : {}),
+          };
+        });
+        try {
+          localStorage.setItem('ekklesphere_members', JSON.stringify(syncedMembers));
+        } catch {}
+        return syncedMembers;
+      });
+    }
 
     fetch(`/api/church-groups/${encodeURIComponent(id)}`, {
       method: 'PUT',
@@ -3656,12 +3848,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const getGroupMembers = (groupName: string): Person[] => {
-    if (!groupName) return [];
-    const q = groupName.trim().toLowerCase();
-    return members.filter((m) => {
-      const mg = (m.groupName || '').trim().toLowerCase();
-      return mg === q || mg.includes(q) || q.includes(mg);
-    });
+    return members.filter((m) => memberMatchesChurchGroup(m, groupName));
   };
 
 
@@ -3671,25 +3858,71 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       showToast('Cannot sync while offline. Reconnect first.');
       return 0;
     }
-    const count = pendingSyncCount;
     const queued = attendanceRecords.filter((r) => r.waitingToSync);
-    queued.forEach((rec) => {
-      const person = members.find((m) => m.id === rec.personId);
-      fetch('/api/live-checkins', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          ...rec,
-          waitingToSync: false,
-          personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
-          recordedBy: currentUser?.name,
-        }),
-      }).catch(() => {});
-    });
-    setAttendanceRecords((prev) => prev.map((r) => ({ ...r, waitingToSync: false })));
-    setPendingSyncCount(0);
-    showToast(`Synced ${count} check-in${count === 1 ? '' : 's'} to server.`);
-    return count;
+    if (queued.length === 0) {
+      setPendingSyncCount(0);
+      showToast('No pending offline check-ins to sync.');
+      return 0;
+    }
+
+    void (async () => {
+      let syncedCount = 0;
+      let rejectedCount = 0;
+      let lastRejectMsg = '';
+      const rejectedIds = new Set<string>();
+      const syncedIds = new Set<string>();
+
+      for (const rec of queued) {
+        const person = members.find((m) => m.id === rec.personId);
+        try {
+          const res = await fetch('/api/live-checkins', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              ...rec,
+              waitingToSync: false,
+              personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
+              recordedBy: currentUser?.name,
+            }),
+          });
+          if (res.ok) {
+            syncedIds.add(rec.id);
+            syncedCount += 1;
+          } else {
+            const errBody = await res.json().catch(() => ({}));
+            rejectedIds.add(rec.id);
+            rejectedCount += 1;
+            if (errBody?.message) lastRejectMsg = errBody.message;
+          }
+        } catch {
+          // Leave in pending queue if network failed again
+        }
+      }
+
+      setAttendanceRecords((prev) =>
+        prev
+          .filter((r) => !rejectedIds.has(r.id))
+          .map((r) => (syncedIds.has(r.id) ? { ...r, waitingToSync: false } : r))
+      );
+      setPendingSyncCount((prev) => Math.max(0, prev - syncedCount - rejectedCount));
+
+      if (rejectedCount > 0 && syncedCount > 0) {
+        showToast(
+          `Synced ${syncedCount} check-in${syncedCount === 1 ? '' : 's'}; ${rejectedCount} blocked (${lastRejectMsg || 'service closed'}).`
+        );
+      } else if (rejectedCount > 0) {
+        showToast(
+          lastRejectMsg ||
+            `Could not sync ${rejectedCount} check-in${rejectedCount === 1 ? '' : 's'}: service is closed or unscheduled.`
+        );
+      } else if (syncedCount > 0) {
+        showToast(`Synced ${syncedCount} check-in${syncedCount === 1 ? '' : 's'} to server.`);
+      } else {
+        showToast('Network error syncing offline check-ins. Please try again.');
+      }
+    })();
+
+    return queued.length;
   };
 
   const updateMemberConsent = async (
@@ -3787,7 +4020,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return false;
       }
       setDonations((prev) => [data.donation, ...prev.filter((d) => d.id !== data.donation.id)]);
-      showToast(`Thank you! GHS ${amountGhs} given to ${fund} via ${method}.`);
+      const activeCurrency = getCurrencyDisplay(systemSettings.currency).code;
+      showToast(`Thank you! ${activeCurrency} ${amountGhs} given to ${fund} via ${method}.`);
       return true;
     } catch {
       showToast('Network error submitting donation.');
@@ -3967,6 +4201,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     notes: string
   ): Promise<void> => {
     const person = members.find((m) => m.id === personId);
+    const { assignedToName, groupName } = resolveFollowupAssignee(
+      person,
+      churchGroups,
+      systemSettings,
+      reason,
+      currentUser?.name
+    );
+    const dueOn = formatFollowupDueDateLabel(
+      reason,
+      systemSettings.firstTimerFollowupHours,
+      systemSettings.absenteeThresholdServices
+    );
     try {
       const res = await fetch('/api/followup-tasks', {
         method: 'POST',
@@ -3974,10 +4220,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         body: JSON.stringify({
           personId,
           personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
-          groupName: person?.groupName || 'General',
+          groupName,
           reason,
-          assignedToName: systemSettings.seniorPastor || currentUser?.name || 'Pastoral Care Team',
-          dueOn: 'In 3 days',
+          assignedToName,
+          dueOn,
           notes,
         }),
       });
@@ -3987,7 +4233,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return;
       }
       setFollowupTasks((prev) => [data.task, ...prev.filter((t) => t.id !== data.task.id)]);
-      showToast(`Follow-up assignment created for ${data.task.personName}`);
+      showToast(`Follow-up assigned to ${assignedToName} (${dueOn}) for ${data.task.personName}`);
     } catch {
       showToast('Network error creating follow-up task.');
     }
@@ -4009,22 +4255,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const triggerBeaconScan = () => {
     const targetId = currentUser?.memberId || currentUser?.id || 'live-device';
+    const ok = checkInPerson(targetId, 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
+    if (!ok) return;
     setIsBeaconDetected(true);
     setProximityStage(3);
-    checkInPerson(targetId, 'beacon', 95, 'BLE Entrance Beacon sighted inside service window');
     showToast('Entrance BLE beacon detected! Immediate check-in confirmed.');
   };
 
   const triggerDwellComplete = () => {
     const targetId = currentUser?.memberId || currentUser?.id || 'live-device';
-    setProximityStage(3);
-    setDwellTimerSeconds(0);
-    checkInPerson(
+    const ok = checkInPerson(
       targetId,
       'geofence',
       85,
       `${systemSettings.dwellTimeMinutes}-minute dwell verified at ${systemSettings.campusName}`
     );
+    if (!ok) return;
+    setProximityStage(3);
+    setDwellTimerSeconds(0);
     showToast(`Dwell verified (${systemSettings.dwellTimeMinutes} mins). Auto check-in completed.`);
   };
 
@@ -4069,6 +4317,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setIsMobileNavOpen,
       adminSubTab,
       setAdminSubTab,
+      requestedSettingsTab,
+      requestOpenSettings,
       searchQuery,
       setSearchQuery,
       isAddServiceOpen,
@@ -4088,6 +4338,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setActiveServiceId,
       services,
       currentService,
+      hasScheduledService,
+      checkInEligibility,
       refreshServices,
       addService,
       updateService,
@@ -4188,6 +4440,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isSidebarCollapsed,
       isMobileNavOpen,
       adminSubTab,
+      requestedSettingsTab,
       searchQuery,
       isAddServiceOpen,
       isFollowupModalOpen,
@@ -4198,6 +4451,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       activeServiceId,
       services,
       currentService,
+      hasScheduledService,
+      checkInEligibility,
       members,
       visitorsCount,
       systemSettings,

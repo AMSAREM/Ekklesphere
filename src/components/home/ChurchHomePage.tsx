@@ -31,6 +31,8 @@ export const ChurchHomePage: React.FC = () => {
     currentUser,
     systemSettings,
     checkInPerson,
+    hasScheduledService,
+    checkInEligibility,
     setViewMode,
     showToast,
   } = useEkklesphere();
@@ -138,12 +140,29 @@ export const ChurchHomePage: React.FC = () => {
 
   const handleCheckIn = () => {
     if (currentUser) {
-      checkInPerson(
+      if (!hasScheduledService) {
+        setCheckInNotice({
+          title: 'Check-in unavailable',
+          message: checkInEligibility.message,
+          canSignIn: false,
+        });
+        showToast(checkInEligibility.message);
+        return;
+      }
+      const started = checkInPerson(
         currentUser.id,
         'geofence',
         0.96,
         `Public Home check-in (${church.shortName || church.name})`
       );
+      if (!started) {
+        setCheckInNotice({
+          title: 'Check-in unavailable',
+          message: checkInEligibility.message,
+          canSignIn: false,
+        });
+        return;
+      }
       setCheckInNotice({
         title: 'Attendance recorded',
         message: `Thank you, ${currentUser.name}. Your check-in has been submitted to ${

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, PhoneCall, Check, Download } from 'lucide-react';
+import { X, Send, PhoneCall, Check, Download, Settings } from 'lucide-react';
 import {
   ChurchGroup,
   FollowupTask,
@@ -8,6 +8,12 @@ import {
   SystemSettings,
 } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import {
+  formatFollowupDueDateLabel,
+  memberMatchesChurchGroup,
+  resolveFollowupAssignee,
+} from '../../utils/settingsConnections';
+import { computeServiceBinaryStatus } from '../../utils/serviceStatus';
 
 export interface AddServiceModalProps {
   isOpen: boolean;
@@ -243,6 +249,9 @@ export interface EditableServiceTarget {
   endsAt: string;
   expectedAttendance: number;
   dwellMinutes?: number;
+  startTimeIso?: string;
+  endTimeIso?: string;
+  manualClosed?: boolean;
   status: 'live' | 'closed';
 }
 
@@ -296,7 +305,21 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
           service.expectedAttendance > 0 ? String(service.expectedAttendance) : ''
         );
         setDwellMinutes(String(service.dwellMinutes ?? defaultAllowanceMinutes ?? 5));
-        setStatusMode(service.status === 'closed' ? 'closed' : 'auto');
+        const isInWindowIfActive =
+          computeServiceBinaryStatus({
+            date: service.date,
+            startsAt: service.startsAt,
+            endsAt: service.endsAt,
+            startTimeIso: service.startTimeIso,
+            endTimeIso: service.endTimeIso,
+            allowanceMinutes: service.dwellMinutes ?? defaultAllowanceMinutes ?? 5,
+            rawStatus: 'active',
+          }) === 'live';
+        const isForceClosed =
+          typeof service.manualClosed === 'boolean'
+            ? service.manualClosed
+            : service.status === 'closed' && isInWindowIfActive;
+        setStatusMode(isForceClosed ? 'closed' : 'auto');
       }
     }, [isOpen, service, defaultAllowanceMinutes]);
 
@@ -523,11 +546,29 @@ export interface BroadcastModalProps {
   churchGroups: ChurchGroup[];
   churchName?: string;
   serviceStartsAt: string;
+  absenteeThresholdServices?: number;
+  smsGatewayProvider?: string;
+  smsSenderId?: string;
+  enablePushNotifications?: boolean;
+  onOpenGatewaySettings?: () => void;
   onNotify: (msg: string) => void;
 }
 
 export const BroadcastModal = React.memo<BroadcastModalProps>(
-  ({ isOpen, onClose, members, churchGroups, churchName, serviceStartsAt, onNotify }) => {
+  ({
+    isOpen,
+    onClose,
+    members,
+    churchGroups,
+    churchName,
+    serviceStartsAt,
+    absenteeThresholdServices = 2,
+    smsGatewayProvider,
+    smsSenderId,
+    enablePushNotifications = true,
+    onOpenGatewaySettings,
+    onNotify,
+  }) => {
     const [channel, setChannel] = useState<'push' | 'sms' | 'email'>('push');
     const [audience, setAudience] = useState('all');
     const [subject, setSubject] = useState('Service Reminder');
@@ -543,9 +584,33 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
 
     if (!isOpen) return null;
 
+    const safeThreshold = Math.max(1, absenteeThresholdServices || 2);
+    const activeGroups = churchGroups.filter((g) => g.active !== false);
+    const absentMembersCount = members.filter((m) => (m.consecutiveAbsences || 0) >= safeThreshold).length;
+    const visitorsCount = members.filter((m) => m.status === 'visitor').length;
+
+    const getRecipientCount = (): number => {
+      if (audience === 'all') return members.length;
+      if (audience === 'absent') return absentMembersCount;
+      if (audience === 'visitors') return visitorsCount;
+      return members.filter((m) => memberMatchesChurchGroup(m, audience)).length;
+    };
+
+    const recipientCount = getRecipientCount();
+
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
-      onNotify(`Broadcast queued via ${channel.toUpperCase()} to ${audience}.`);
+      if (channel === 'push' && !enablePushNotifications) {
+        onNotify('Push broadcasts are paused in System Settings → Gateways. Switch to SMS/Email or re-enable Push.');
+        return;
+      }
+      const routeHint =
+        channel === 'sms' && smsGatewayProvider
+          ? ` via ${smsGatewayProvider}${smsSenderId ? ` (${smsSenderId})` : ''}`
+          : '';
+      onNotify(
+        `Broadcast queued via ${channel.toUpperCase()}${routeHint} to ${recipientCount} recipient${recipientCount === 1 ? '' : 's'} (${audience}).`
+      );
       onClose();
     };
 
@@ -590,11 +655,35 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
                   </button>
                 ))}
               </div>
+              <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                <span>
+                  {channel === 'sms'
+                    ? `Gateway: ${smsGatewayProvider || 'Default SMS'} · Sender ID: ${smsSenderId || 'CHURCH'}`
+                    : channel === 'push'
+                    ? enablePushNotifications
+                      ? 'Web & Mobile Push Engine Active'
+                      : 'Push Notifications paused in Settings'
+                    : 'SMTP Church Digest Dispatch'}
+                </span>
+                {onOpenGatewaySettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenGatewaySettings();
+                    }}
+                    className="text-[#6D5CF2] dark:text-[#8C7DFF] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Settings className="w-3 h-3" />
+                    <span>Gateways</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div>
               <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
-                Audience
+                Audience ({recipientCount} matched)
               </label>
               <select
                 value={audience}
@@ -603,16 +692,25 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
               >
                 <option value="all">All registered members ({members.length})</option>
                 <option value="absent">
-                  Absent members ({members.filter((m) => m.consecutiveAbsences >= 2).length})
+                  Absent {safeThreshold}+ services ({absentMembersCount})
                 </option>
                 <option value="visitors">
-                  Registered visitors ({members.filter((m) => m.status === 'visitor').length})
+                  Registered visitors ({visitorsCount})
                 </option>
-                {churchGroups.map((g) => (
-                  <option key={g.id} value={g.name}>
-                    {g.name}
-                  </option>
-                ))}
+                {activeGroups.map((g) => {
+                  const cnt = members.filter((m) => memberMatchesChurchGroup(m, g.name)).length;
+                  const catLabel =
+                    g.category === 'ministry'
+                      ? 'Ministry'
+                      : g.category === 'fellowship'
+                      ? 'Fellowship'
+                      : 'Cell';
+                  return (
+                    <option key={g.id} value={g.name}>
+                      [{catLabel}] {g.name} ({cnt})
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -668,36 +766,70 @@ export interface FollowupQueueModalProps {
   onClose: () => void;
   followupTasks: FollowupTask[];
   members: Person[];
+  absenteeThresholdServices?: number;
+  firstTimerFollowupHours?: number;
+  autoAssignCellLeaders?: boolean;
+  onOpenPastoralSettings?: () => void;
   onResolveTask: (id: string, outcome: string) => void;
   onNotify: (msg: string) => void;
 }
 
 export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
-  ({ isOpen, onClose, followupTasks, members, onResolveTask, onNotify }) => {
+  ({
+    isOpen,
+    onClose,
+    followupTasks,
+    members,
+    absenteeThresholdServices = 2,
+    firstTimerFollowupHours = 24,
+    autoAssignCellLeaders = true,
+    onOpenPastoralSettings,
+    onResolveTask,
+    onNotify,
+  }) => {
     if (!isOpen) return null;
 
     const memberById = new Map(members.map((m) => [m.id, m]));
+    const threshold = Math.max(1, absenteeThresholdServices || 2);
 
     return (
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-2xl w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[85vh] flex flex-col">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                 Pastoral Care Follow-up Queue
               </h3>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Automated absence triggers: 2 weeks = Cell leader, 3 weeks = Pastoral team.
+                Active Rules: {threshold}+ absences alert · Visitors within {firstTimerFollowupHours}h ·{' '}
+                {autoAssignCellLeaders
+                  ? 'Auto-routing to Group/Cell Leaders enabled'
+                  : 'Assigned directly to Senior Pastor'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close pastoral follow-up queue"
-              className="text-slate-400 hover:text-slate-600 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {onOpenPastoralSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenPastoralSettings();
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Settings className="w-3 h-3" />
+                  <span>Pastoral Rules</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close pastoral follow-up queue"
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
@@ -802,6 +934,8 @@ export interface NewAssignmentModalProps {
   isOpen: boolean;
   onClose: () => void;
   members: Person[];
+  churchGroups?: ChurchGroup[];
+  systemSettings?: SystemSettings;
   onCreateTask: (
     personId: string,
     reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual',
@@ -811,7 +945,7 @@ export interface NewAssignmentModalProps {
 }
 
 export const NewAssignmentModal = React.memo<NewAssignmentModalProps>(
-  ({ isOpen, onClose, members, onCreateTask, onNotify }) => {
+  ({ isOpen, onClose, members, churchGroups = [], systemSettings, onCreateTask, onNotify }) => {
     const [memberId, setMemberId] = useState('');
     const [reason, setReason] = useState<'absent_2' | 'absent_3' | 'first_timer' | 'manual'>(
       'absent_3'
@@ -819,6 +953,16 @@ export const NewAssignmentModal = React.memo<NewAssignmentModalProps>(
     const [notes, setNotes] = useState('');
 
     if (!isOpen) return null;
+
+    const selectedPerson = members.find((m) => m.id === memberId);
+    const threshold = Math.max(1, systemSettings?.absenteeThresholdServices || 2);
+    const previewAssignee =
+      selectedPerson && systemSettings
+        ? resolveFollowupAssignee(selectedPerson, churchGroups, systemSettings, reason)
+        : null;
+    const previewDueOn = systemSettings
+      ? formatFollowupDueDateLabel(reason, systemSettings.firstTimerFollowupHours, threshold)
+      : 'In 3 days';
 
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
@@ -865,7 +1009,7 @@ export const NewAssignmentModal = React.memo<NewAssignmentModalProps>(
                 <option value="">Select member...</option>
                 {members.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.firstName} {m.lastName} ({m.groupName})
+                    {m.firstName} {m.lastName} ({m.homeCellGroup || m.groupName})
                   </option>
                 ))}
               </select>
@@ -880,12 +1024,22 @@ export const NewAssignmentModal = React.memo<NewAssignmentModalProps>(
                 onChange={(e) => setReason(e.target.value as any)}
                 className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
               >
-                <option value="absent_3">Absent 3 consecutive weeks (Pastoral Care)</option>
-                <option value="absent_2">Absent 2 consecutive weeks (Cell Leader)</option>
-                <option value="first_timer">First-time visitor welcome</option>
+                <option value="absent_3">Absent {threshold + 1}+ consecutive services (Pastoral Escalation)</option>
+                <option value="absent_2">Absent {threshold} consecutive services (Group / Cell Leader)</option>
+                <option value="first_timer">
+                  First-time visitor welcome (Due within {systemSettings?.firstTimerFollowupHours || 24}h)
+                </option>
                 <option value="manual">Manual care inquiry</option>
               </select>
             </div>
+
+            {previewAssignee && (
+              <div className="p-2.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                Auto-routed via Settings to{' '}
+                <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{previewAssignee.assignedToName}</strong>{' '}
+                ({previewAssignee.groupName}) · Due: <strong>{previewDueOn}</strong>
+              </div>
+            )}
 
             <div>
               <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">

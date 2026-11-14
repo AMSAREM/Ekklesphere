@@ -1,4 +1,117 @@
+import type { ServiceInstance } from '../types/ekklesphere';
+
 export type BinaryServiceStatus = 'live' | 'closed';
+
+export type CheckInEligibilityReason =
+  | 'ELIGIBLE'
+  | 'NO_SERVICE_SCHEDULED'
+  | 'SERVICE_CLOSED'
+  | 'SERVICE_CANCELLED';
+
+export interface ServiceCheckInEligibility {
+  eligible: boolean;
+  reasonCode: CheckInEligibilityReason;
+  service: ServiceInstance | null;
+  message: string;
+}
+
+export function isPlaceholderServiceId(serviceId?: string | null): boolean {
+  const clean = String(serviceId || '').trim().toLowerCase();
+  return !clean || clean === 'svc-live-main' || clean === 'svc-sun-1';
+}
+
+export function evaluateServiceCheckInEligibility(
+  services: ServiceInstance[],
+  targetServiceId?: string | null,
+  fallbackService?: ServiceInstance | null,
+  options?: { nowMs?: number; defaultAllowanceMinutes?: number }
+): ServiceCheckInEligibility {
+  if (!Array.isArray(services) || services.length === 0) {
+    return {
+      eligible: false,
+      reasonCode: 'NO_SERVICE_SCHEDULED',
+      service: null,
+      message:
+        'No service is scheduled. Please schedule a service before checking in members.',
+    };
+  }
+
+  let matched: ServiceInstance | null = null;
+  if (typeof targetServiceId === 'string' && targetServiceId.trim()) {
+    const cleanId = targetServiceId.trim();
+    if (isPlaceholderServiceId(cleanId)) {
+      return {
+        eligible: false,
+        reasonCode: 'NO_SERVICE_SCHEDULED',
+        service: null,
+        message:
+          'No service is scheduled. Please schedule a service before checking in members.',
+      };
+    }
+    matched = services.find((s) => s.id === cleanId) || null;
+  } else if (fallbackService && !isPlaceholderServiceId(fallbackService.id)) {
+    matched = services.find((s) => s.id === fallbackService.id) || null;
+  } else {
+    matched = services[0] || null;
+  }
+
+  if (!matched) {
+    return {
+      eligible: false,
+      reasonCode: 'NO_SERVICE_SCHEDULED',
+      service: null,
+      message:
+        'Selected service is not scheduled. Please schedule or select an active service first.',
+    };
+  }
+
+  if (matched.status === 'cancelled') {
+    return {
+      eligible: false,
+      reasonCode: 'SERVICE_CANCELLED',
+      service: matched,
+      message: `"${matched.name}" has been cancelled and cannot accept check-ins.`,
+    };
+  }
+
+  if (matched.status === 'closed') {
+    return {
+      eligible: false,
+      reasonCode: 'SERVICE_CLOSED',
+      service: matched,
+      message: `Check-in is closed for "${matched.name}". Reopen or schedule a live service within its active window first.`,
+    };
+  }
+
+  const allowanceMinutes =
+    matched.dwellMinutes ?? options?.defaultAllowanceMinutes ?? 0;
+  const binaryStatus = computeServiceBinaryStatus({
+    date: matched.date,
+    startsAt: matched.startsAt,
+    endsAt: matched.endsAt,
+    startTimeIso: matched.startTimeIso,
+    endTimeIso: matched.endTimeIso,
+    allowanceMinutes,
+    rawStatus: 'active',
+    nowMs: options?.nowMs,
+  });
+
+  if (binaryStatus !== 'live') {
+    return {
+      eligible: false,
+      reasonCode: 'SERVICE_CLOSED',
+      service: matched,
+      message: `Check-in is closed for "${matched.name}". Reopen or schedule a live service within its active window first.`,
+    };
+  }
+
+  return {
+    eligible: true,
+    reasonCode: 'ELIGIBLE',
+    service: matched,
+    message: `Check-in open for "${matched.name}".`,
+  };
+}
 
 export interface ServiceWindowInput {
   date?: string | null;

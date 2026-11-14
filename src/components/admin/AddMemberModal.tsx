@@ -15,10 +15,16 @@ import {
   Camera,
   Upload,
   ExternalLink,
+  Settings,
 } from 'lucide-react';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { getExternalImageOpenUrl, probeImageProxyDiagnostic } from '../../utils/imageUrl';
 import { compressImageFile } from '../../utils/imageCompression';
+import {
+  findMatchingChurchGroup,
+  mergeSelectableCellGroups,
+  mergeSelectableDepartments,
+} from '../../utils/settingsConnections';
 
 interface AddMemberModalProps {
   isOpen: boolean;
@@ -73,25 +79,21 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   onMemberAdded,
   initialData,
 }) => {
-  const { addMember, updateMember, showToast, churchGroups, systemSettings } = useEkklesphere();
+  const { addMember, updateMember, showToast, churchGroups, systemSettings, requestOpenSettings } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'basic' | 'location' | 'church' | 'family' | 'spiritual'>('basic');
 
   const cellGroupOptions = useMemo(() => {
-    const dynamicCells = churchGroups
-      .filter((g) => g.category === 'cell_group' || g.category === 'fellowship')
-      .map((g) => g.name);
-    const set = new Set<string>([...dynamicCells, ...COMMON_CELL_GROUPS]);
+    const merged = mergeSelectableCellGroups(churchGroups, [], COMMON_CELL_GROUPS);
+    const set = new Set<string>(merged);
     if (initialData?.homeCellGroup) set.add(initialData.homeCellGroup);
     if (initialData?.groupName) set.add(initialData.groupName);
     return Array.from(set);
   }, [churchGroups, initialData]);
 
   const departmentOptions = useMemo(() => {
-    const dynamicMinistries = churchGroups
-      .filter((g) => g.category === 'ministry')
-      .map((g) => g.name);
-    const set = new Set<string>(['General Congregation', ...dynamicMinistries, ...COMMON_DEPARTMENTS]);
+    const merged = mergeSelectableDepartments(churchGroups, [], COMMON_DEPARTMENTS);
+    const set = new Set<string>(merged);
     if (initialData?.department) set.add(initialData.department);
     return Array.from(set);
   }, [churchGroups, initialData]);
@@ -138,7 +140,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [remarks, setRemarks] = useState(initialData?.remarks || initialData?.notes || '');
   const [status, setStatus] = useState<MemberStatus>(initialData?.status || 'member');
   const [autoCheckinOptedIn, setAutoCheckinOptedIn] = useState(
-    initialData ? initialData.autoCheckinOptedIn : true
+    initialData ? initialData.autoCheckinOptedIn : !systemSettings.requireExplicitConsent
   );
 
   // 4. Family & Emergency
@@ -232,7 +234,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     setOccupation(source?.occupation || '');
     setRemarks(source?.remarks || source?.notes || '');
     setStatus(source?.status || 'member');
-    setAutoCheckinOptedIn(source ? source.autoCheckinOptedIn : true);
+    setAutoCheckinOptedIn(source ? source.autoCheckinOptedIn : !systemSettings.requireExplicitConsent);
 
     setMaritalStatus(source?.maritalStatus || 'Single');
     setSpouseName(source?.spouseName || '');
@@ -700,41 +702,79 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
           {/* TAB 3: CHURCH & SQUADS */}
           {activeTab === 'church' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                    HOME CELL GROUP
-                  </label>
-                  <select
-                    value={homeCellGroup}
-                    onChange={(e) => setHomeCellGroup(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                  >
-                    {cellGroupOptions.map((g) => (
-                      <option key={g} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {(() => {
+                const { cellOrFellowshipGroup, ministryGroup } = findMatchingChurchGroup(churchGroups, {
+                  homeCellGroup,
+                  groupName: homeCellGroup,
+                  department,
+                });
+                return (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                          HOME CELL GROUP
+                        </label>
+                        <select
+                          value={homeCellGroup}
+                          onChange={(e) => setHomeCellGroup(e.target.value)}
+                          className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                        >
+                          {cellGroupOptions.map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                        </select>
+                        {cellOrFellowshipGroup && (
+                          <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                            Leader: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{cellOrFellowshipGroup.leaderName}</strong>
+                            {cellOrFellowshipGroup.meetingDay ? ` · ${cellOrFellowshipGroup.meetingDay}` : ''}
+                          </p>
+                        )}
+                      </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                    DEPARTMENT / MINISTRY
-                  </label>
-                  <select
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                  >
-                    {departmentOptions.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                      <div>
+                        <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                          DEPARTMENT / MINISTRY
+                        </label>
+                        <select
+                          value={department}
+                          onChange={(e) => setDepartment(e.target.value)}
+                          className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                        >
+                          {departmentOptions.map((d) => (
+                            <option key={d} value={d}>
+                              {d}
+                            </option>
+                          ))}
+                        </select>
+                        {ministryGroup && (
+                          <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                            Ministry Head: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{ministryGroup.leaderName}</strong>
+                            {ministryGroup.meetingDay ? ` · ${ministryGroup.meetingDay}` : ''}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                      <span>Lists stay synchronized with active groups in System Settings.</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          requestOpenSettings('groups');
+                        }}
+                        className="inline-flex items-center gap-1 font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+                      >
+                        <Settings className="w-3 h-3" />
+                        <span>Manage Ministries &amp; Cells</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
@@ -1071,7 +1111,9 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     Proximity Auto Check-in Consent (Ghana Act 843)
                   </b>
                   <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                    Member explicitly consents to automated geofence and BLE beacon arrival detection.
+                    {systemSettings.requireExplicitConsent
+                      ? 'Strict Explicit Consent active in Settings: leave unchecked until member taps Agree & Opt In on their pass.'
+                      : 'Member explicitly consents to automated geofence and BLE beacon arrival detection.'}
                   </p>
                 </div>
                 <input

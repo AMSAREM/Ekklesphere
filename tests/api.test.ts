@@ -2,7 +2,8 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
-import { signToken, type ChurchRole } from '../lib/auth';
+import { signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
+import { platformStore } from '../src/server/platformStore';
 import { getCanonicalMemberId, findMemberByScannedId } from '../src/components/member/DigitalMemberCard';
 import type { Person } from '../src/types/ekklesphere';
 
@@ -192,38 +193,143 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.error).toBe('forbidden');
     });
 
-    it('PERMITS member checking in for their own person ID', async () => {
-      const res = await request(app)
-        .post('/api/live-checkins')
-        .set('Authorization', `Bearer ${memberToken}`)
-        .send({
-          personId: 'm-elena',
-          personName: 'Elena Mends',
-          serviceInstanceId: 'svc-sun-1',
-          method: 'geofence',
-          confidence: 95,
-        });
-
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.record.personName).toBe('Elena Mends');
-    });
-
-    it('PERMITS usher checking in any congregation member', async () => {
-      const res = await request(app)
+    it('REJECTS check-in with unscheduled or placeholder serviceInstanceId (NO_SERVICE_SCHEDULED)', async () => {
+      const placeholderRes = await request(app)
         .post('/api/live-checkins')
         .set('Authorization', `Bearer ${usherToken}`)
         .send({
-          personId: 'm-guest-2',
-          personName: 'Kofi Mensah',
+          personId: 'm-guest-unscheduled',
+          personName: 'Unscheduled Guest',
           serviceInstanceId: 'svc-sun-1',
           method: 'usher',
-          confidence: 100,
         });
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.record.personName).toBe('Kofi Mensah');
+      expect(placeholderRes.status).toBe(400);
+      expect(placeholderRes.body.error).toBe('NO_SERVICE_SCHEDULED');
+      expect(placeholderRes.body.code).toBe('NO_SERVICE_SCHEDULED');
+
+      const missingEventRes = await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${usherToken}`)
+        .send({
+          personId: 'm-guest-unscheduled',
+          personName: 'Unscheduled Guest',
+          serviceInstanceId: 'non-existent-service-id',
+          method: 'usher',
+        });
+
+      expect(missingEventRes.status).toBe(400);
+      expect(missingEventRes.body.error).toBe('NO_SERVICE_SCHEDULED');
+    });
+
+    it('PERMITS member and usher check-ins only when a service is scheduled and open, and rejects closed services', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const createEvt = await request(app)
+        .post('/api/events')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Sunday First Service',
+          date: today,
+          startsAt: '00:00',
+          endsAt: '23:59',
+          status: 'active',
+        });
+      expect(createEvt.status).toBe(201);
+      const scheduledEventId = createEvt.body.id;
+
+      try {
+        const selfRes = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${memberToken}`)
+          .send({
+            personId: 'm-elena',
+            personName: 'Elena Mends',
+            serviceInstanceId: scheduledEventId,
+            method: 'geofence',
+            confidence: 95,
+          });
+
+        expect(selfRes.status).toBe(200);
+        expect(selfRes.body.success).toBe(true);
+        expect(selfRes.body.record.personName).toBe('Elena Mends');
+
+        const usherRes = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${usherToken}`)
+          .send({
+            personId: 'm-guest-2',
+            personName: 'Kofi Mensah',
+            serviceInstanceId: scheduledEventId,
+            method: 'usher',
+            confidence: 100,
+          });
+
+        expect(usherRes.status).toBe(200);
+        expect(usherRes.body.success).toBe(true);
+        expect(usherRes.body.record.personName).toBe('Kofi Mensah');
+
+        // Close the service and confirm check-ins are blocked with SERVICE_NOT_OPEN
+        const closeRes = await request(app)
+          .patch(`/api/events/${encodeURIComponent(scheduledEventId)}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ status: 'closed' });
+        expect(closeRes.status).toBe(200);
+
+        const closedCheckinRes = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${usherToken}`)
+          .send({
+            personId: 'm-guest-closed',
+            personName: 'Closed Service Guest',
+            serviceInstanceId: scheduledEventId,
+            method: 'usher',
+          });
+
+        expect(closedCheckinRes.status).toBe(400);
+        expect(closedCheckinRes.body.error).toBe('SERVICE_NOT_OPEN');
+      } finally {
+        await request(app)
+          .delete(`/api/events/${encodeURIComponent(scheduledEventId)}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+      }
+    });
+
+    it('REJECTS check-ins to services whose scheduled time window + allowance has ended even if DB status is active', async () => {
+      const endedStartIso = new Date(Date.now() - 4 * 60 * 60_000).toISOString();
+      const endedEndIso = new Date(Date.now() - 60 * 60_000).toISOString();
+      const endedEvt = await request(app)
+        .post('/api/events')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Earlier Closed Service',
+          date: endedStartIso.slice(0, 10),
+          startTimeIso: endedStartIso,
+          endTimeIso: endedEndIso,
+          dwellMinutes: 15,
+          status: 'active',
+        });
+      expect(endedEvt.status).toBe(201);
+      const endedEventId = endedEvt.body.id;
+
+      try {
+        const res = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${usherToken}`)
+          .send({
+            personId: 'm-expired-window',
+            personName: 'Late Arrival',
+            serviceInstanceId: endedEventId,
+            method: 'usher',
+          });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('SERVICE_NOT_OPEN');
+        expect(res.body.code).toBe('SERVICE_NOT_OPEN');
+      } finally {
+        await request(app)
+          .delete(`/api/events/${encodeURIComponent(endedEventId)}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+      }
     });
 
     it('REJECTS member attempting to delete check-in logs with 403 Forbidden', async () => {
@@ -372,46 +478,68 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       const unauthRes = await request(app).get('/api/attendance/insights');
       expect(unauthRes.status).toBe(401);
 
-      await request(app)
-        .post('/api/live-checkins')
+      const today = new Date().toISOString().slice(0, 10);
+      const createEvt = await request(app)
+        .post('/api/events')
         .set('Authorization', `Bearer ${pastorToken}`)
         .send({
-          personId: 'person-insight-1',
-          personName: 'Kofi Mensah',
-          serviceInstanceId: 'svc-insights-test',
-          method: 'geofence',
-          confidence: 92,
-          late: false,
-          distanceM: 18,
+          name: 'Insights Test Service',
+          date: today,
+          startsAt: '00:00',
+          endsAt: '23:59',
+          status: 'active',
         });
+      expect(createEvt.status).toBe(201);
+      const insightsServiceId = createEvt.body.id;
 
-      await request(app)
-        .post('/api/live-checkins')
-        .set('Authorization', `Bearer ${pastorToken}`)
-        .send({
-          personId: 'person-insight-2',
-          personName: 'Abena Osei',
-          serviceInstanceId: 'svc-insights-test',
-          method: 'usher',
-          confidence: 98,
-          late: true,
-        });
+      try {
+        const c1 = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${pastorToken}`)
+          .send({
+            personId: 'person-insight-1',
+            personName: 'Kofi Mensah',
+            serviceInstanceId: insightsServiceId,
+            method: 'geofence',
+            confidence: 92,
+            late: false,
+            distanceM: 18,
+          });
+        expect(c1.status).toBe(200);
 
-      const res = await request(app)
-        .get('/api/attendance/insights?serviceId=svc-insights-test')
-        .set('Authorization', `Bearer ${pastorToken}`);
+        const c2 = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${pastorToken}`)
+          .send({
+            personId: 'person-insight-2',
+            personName: 'Abena Osei',
+            serviceInstanceId: insightsServiceId,
+            method: 'usher',
+            confidence: 98,
+            late: true,
+          });
+        expect(c2.status).toBe(200);
 
-      expect(res.status).toBe(200);
-      expect(res.body.totalCheckedIn).toBe(2);
-      expect(res.body.onTimeCount).toBe(1);
-      expect(res.body.lateCount).toBe(1);
-      expect(res.body.avgConfidence).toBe(95);
-      expect(res.body.avgDistanceM).toBe(18);
-      expect(res.body.methodBreakdown.geofence).toBe(1);
-      expect(res.body.methodBreakdown.usher).toBe(1);
-      expect(res.body.telemetrySummary).toBeDefined();
-      expect(typeof res.body.telemetrySummary.accepted).toBe('number');
-      expect(typeof res.body.telemetrySummary.mockAttempts).toBe('number');
+        const res = await request(app)
+          .get(`/api/attendance/insights?serviceId=${encodeURIComponent(insightsServiceId)}`)
+          .set('Authorization', `Bearer ${pastorToken}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.totalCheckedIn).toBe(2);
+        expect(res.body.onTimeCount).toBe(1);
+        expect(res.body.lateCount).toBe(1);
+        expect(res.body.avgConfidence).toBe(95);
+        expect(res.body.avgDistanceM).toBe(18);
+        expect(res.body.methodBreakdown.geofence).toBe(1);
+        expect(res.body.methodBreakdown.usher).toBe(1);
+        expect(res.body.telemetrySummary).toBeDefined();
+        expect(typeof res.body.telemetrySummary.accepted).toBe('number');
+        expect(typeof res.body.telemetrySummary.mockAttempts).toBe('number');
+      } finally {
+        await request(app)
+          .delete(`/api/events/${encodeURIComponent(insightsServiceId)}`)
+          .set('Authorization', `Bearer ${pastorToken}`);
+      }
     });
   });
 
@@ -678,46 +806,85 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       const tenDaysAgo = new Date();
       tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
       const tenDaysAgoIso = tenDaysAgo.toISOString();
+      const prevDate = tenDaysAgoIso.slice(0, 10);
+      const currDate = new Date().toISOString().slice(0, 10);
 
-      await request(app)
-        .post('/api/live-checkins')
-        .set('Authorization', `Bearer ${usherToken}`)
+      const prevEvt = await request(app)
+        .post('/api/events')
+        .set('Authorization', `Bearer ${pastorToken}`)
         .send({
-          personId: 'm-trend-1',
-          personName: 'Yaw Boateng',
-          serviceInstanceId: 'svc-prev-week',
-          method: 'geofence',
-          checkedInIso: tenDaysAgoIso,
-          late: false,
+          name: 'Previous Week Service',
+          date: prevDate,
+          startsAt: '08:00',
+          endsAt: '12:00',
+          status: 'active',
         });
+      expect(prevEvt.status).toBe(201);
 
-      await request(app)
-        .post('/api/live-checkins')
-        .set('Authorization', `Bearer ${usherToken}`)
+      const currEvt = await request(app)
+        .post('/api/events')
+        .set('Authorization', `Bearer ${pastorToken}`)
         .send({
-          personId: 'm-trend-1',
-          personName: 'Yaw Boateng',
-          serviceInstanceId: 'svc-curr-week',
-          method: 'usher',
-          checkedInIso: new Date().toISOString(),
-          late: true,
+          name: 'Current Week Service',
+          date: currDate,
+          startsAt: '00:00',
+          endsAt: '23:59',
+          status: 'active',
         });
+      expect(currEvt.status).toBe(201);
 
-      const res = await request(app)
-        .get('/api/attendance/weekly-trend')
-        .set('Authorization', `Bearer ${pastorToken}`);
+      try {
+        await platformStore.recordLiveCheckin(
+          TEST_ANCHOR_ORGANIZATION_ID,
+          {
+            id: 'rec-trend-prev-1',
+            campusId: 'campus-main',
+            personId: 'm-trend-1',
+            personName: 'Yaw Boateng',
+            serviceInstanceId: prevEvt.body.id,
+            method: 'geofence',
+            confidence: 95,
+            checkedInAt: '09:00 AM',
+            checkedInIso: tenDaysAgoIso,
+            late: false,
+          },
+          { bypassWindowCheck: true }
+        );
 
-      expect(res.status).toBe(200);
-      expect(res.body.windowDays).toBe(30);
-      expect(Array.isArray(res.body.weeks)).toBe(true);
-      expect(res.body.weeks.length).toBeGreaterThanOrEqual(4);
-      expect(res.body.totalCheckins30d).toBeGreaterThanOrEqual(2);
-      expect(res.body.weeks[res.body.weeks.length - 1].isCurrentWeek).toBe(true);
+        const cCurr = await request(app)
+          .post('/api/live-checkins')
+          .set('Authorization', `Bearer ${usherToken}`)
+          .send({
+            personId: 'm-trend-1',
+            personName: 'Yaw Boateng',
+            serviceInstanceId: currEvt.body.id,
+            method: 'usher',
+            checkedInIso: new Date().toISOString(),
+            late: true,
+          });
+        expect(cCurr.status).toBe(200);
 
-      // Clean up test check-in entries
-      await request(app)
-        .delete('/api/live-checkins/m-trend-1')
-        .set('Authorization', `Bearer ${adminToken}`);
+        const res = await request(app)
+          .get('/api/attendance/weekly-trend')
+          .set('Authorization', `Bearer ${pastorToken}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.windowDays).toBe(30);
+        expect(Array.isArray(res.body.weeks)).toBe(true);
+        expect(res.body.weeks.length).toBeGreaterThanOrEqual(4);
+        expect(res.body.totalCheckins30d).toBeGreaterThanOrEqual(2);
+        expect(res.body.weeks[res.body.weeks.length - 1].isCurrentWeek).toBe(true);
+      } finally {
+        await request(app)
+          .delete('/api/live-checkins/m-trend-1')
+          .set('Authorization', `Bearer ${adminToken}`);
+        await request(app)
+          .delete(`/api/events/${encodeURIComponent(prevEvt.body.id)}`)
+          .set('Authorization', `Bearer ${pastorToken}`);
+        await request(app)
+          .delete(`/api/events/${encodeURIComponent(currEvt.body.id)}`)
+          .set('Authorization', `Bearer ${pastorToken}`);
+      }
     });
   });
 

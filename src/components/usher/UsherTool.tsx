@@ -22,6 +22,7 @@ import {
 import { getCanonicalMemberId, findMemberByScannedId } from '../member/DigitalMemberCard';
 import { CameraQrScanner } from '../common/CameraQrScanner';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { memberMatchesChurchGroup } from '../../utils/settingsConnections';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -29,6 +30,8 @@ export const UsherTool: React.FC = () => {
     activeServiceId,
     setActiveServiceId,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     members,
     totalCheckedInCount,
     expectedAttendance,
@@ -44,14 +47,17 @@ export const UsherTool: React.FC = () => {
     setIsSettingsModalOpen,
     isSettingsModalOpen,
     systemSettings,
+    churchGroups,
   } = useEkklesphere();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'unchecked' | 'checked'>('all');
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
   const [isVisitorSheetOpen, setIsVisitorSheetOpen] = useState(false);
   const [visitorName, setVisitorName] = useState('');
   const [visitorPhone, setVisitorPhone] = useState('');
   const [visitorHowHeard, setVisitorHowHeard] = useState('Invited by a member');
+  const [visitorPreferredGroup, setVisitorPreferredGroup] = useState('');
 
   // Green full-screen confirmation overlay state
   const [confirmationMember, setConfirmationMember] = useState<{
@@ -66,24 +72,30 @@ export const UsherTool: React.FC = () => {
   const [isCameraActive, setIsCameraActive] = useState(false);
 
   const isMemberCheckedInForService = (personId: string) =>
+    Boolean(currentService.id) &&
     attendanceRecords.some(
       (r) =>
         r.personId === personId &&
-        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+        (r.serviceInstanceId === currentService.id || (!r.serviceInstanceId && services.length === 1))
     );
 
-  // Filter members based on search and status tabs
+  const activeSettingsGroups = churchGroups.filter((g) => g.active !== false);
+
+  // Filter members based on search, group/ministry filter, and status tabs
   const filteredMembers = members.filter((m) => {
     const isChecked = isMemberCheckedInForService(m.id);
 
     if (filterMode === 'unchecked' && isChecked) return false;
     if (filterMode === 'checked' && !isChecked) return false;
+    if (selectedGroupFilter !== 'all' && !memberMatchesChurchGroup(m, selectedGroupFilter)) {
+      return false;
+    }
 
     const q = searchQuery.toLowerCase().replace(/\s/g, '');
     if (!q) return true;
     const nameMatch = `${m.firstName || ''}${m.lastName || ''}`.toLowerCase().includes(q);
     const phoneMatch = (m.phoneE164 || m.phoneNumber || '').replace(/\D/g, '').includes(q);
-    const groupMatch = (m.groupName || m.homeCellGroup || '').toLowerCase().includes(q);
+    const groupMatch = `${m.groupName || ''} ${m.homeCellGroup || ''} ${m.department || ''}`.toLowerCase().includes(q);
     const memberIdMatch = getCanonicalMemberId(m).toLowerCase().replace(/\s/g, '').includes(q);
     return nameMatch || phoneMatch || groupMatch || memberIdMatch;
   });
@@ -91,6 +103,10 @@ export const UsherTool: React.FC = () => {
   const uncheckedMembers = members.filter((m) => !isMemberCheckedInForService(m.id));
 
   const handleScanClick = () => {
+    if (!hasScheduledService) {
+      showToast(checkInEligibility.message);
+      return;
+    }
     if (members.length === 0) {
       showToast('No registered members in the roster yet. Add a member or visitor first.');
       return;
@@ -103,11 +119,16 @@ export const UsherTool: React.FC = () => {
     triggerCheckIn(unchecked.id);
   };
 
-  const triggerCheckIn = (personId: string) => {
+  const triggerCheckIn = (personId: string): boolean => {
+    if (!hasScheduledService) {
+      showToast(checkInEligibility.message);
+      return false;
+    }
     const person = members.find((m) => m.id === personId);
-    if (!person) return;
+    if (!person) return false;
 
-    checkInPerson(personId, 'usher', 98, 'Usher scanner audit');
+    const started = checkInPerson(personId, 'usher', 98, 'Usher scanner audit');
+    if (!started) return false;
 
     setConfirmationMember({
       name: `${person.firstName || ''} ${person.lastName || ''}`.trim() || 'Registered Member',
@@ -120,6 +141,7 @@ export const UsherTool: React.FC = () => {
     setTimeout(() => {
       setConfirmationMember(null);
     }, 1800);
+    return true;
   };
 
   const handleVisitorSubmit = (e: React.FormEvent) => {
@@ -128,11 +150,11 @@ export const UsherTool: React.FC = () => {
       showToast('Please enter visitor name');
       return;
     }
-    addVisitor(visitorName, visitorPhone, visitorHowHeard);
+    addVisitor(visitorName, visitorPhone, visitorHowHeard, visitorPreferredGroup || undefined);
     setIsVisitorSheetOpen(false);
     setVisitorName('');
     setVisitorPhone('');
-    showToast(`Visitor ${visitorName} registered! Welcome packet queued.`);
+    setVisitorPreferredGroup('');
   };
 
   const formatPhone = (phone?: string | null) => {
@@ -180,6 +202,10 @@ export const UsherTool: React.FC = () => {
         <div className="relative group w-full flex justify-center">
           <button
             onClick={() => {
+              if (!hasScheduledService && !isCameraActive) {
+                showToast(checkInEligibility.message);
+                return;
+              }
               setIsCameraActive((prev) => !prev);
               document.getElementById('usher-scanner-card')?.scrollIntoView({ behavior: 'smooth' });
             }}
@@ -296,18 +322,24 @@ export const UsherTool: React.FC = () => {
         {/* Controls: Service Selector & Network Toggle */}
         <div className="flex items-center gap-2.5 self-stretch sm:self-auto">
           {/* Service Selector */}
-          <select
-            id="svc-select"
-            value={activeServiceId}
-            onChange={(e) => setActiveServiceId(e.target.value)}
-            className="flex-1 sm:flex-none bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-2xl px-3.5 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-[#6C5CE7]"
-          >
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}{s.date ? ` (${s.date} · ${s.startsAt})` : ` (${s.startsAt})`}
-              </option>
-            ))}
-          </select>
+          {services.length > 0 ? (
+            <select
+              id="svc-select"
+              value={activeServiceId}
+              onChange={(e) => setActiveServiceId(e.target.value)}
+              className="flex-1 sm:flex-none bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-2xl px-3.5 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-[#6C5CE7]"
+            >
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.date ? ` (${s.date} · ${s.startsAt})` : ` (${s.startsAt})`}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="flex-1 sm:flex-none bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-200 rounded-2xl px-3.5 py-2 text-xs font-bold">
+              No Service Scheduled
+            </div>
+          )}
 
           {/* Network Toggle Button */}
           <button
@@ -429,6 +461,17 @@ export const UsherTool: React.FC = () => {
         </div>
       )}
 
+      {/* Unscheduled / Closed Service Check-in Block Alert */}
+      {!hasScheduledService && (
+        <div
+          role="alert"
+          className="bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/60 text-amber-900 dark:text-amber-200 rounded-2xl p-3.5 mb-5 flex items-center gap-2.5 text-xs font-semibold shadow-sm"
+        >
+          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>{checkInEligibility.message}</span>
+        </div>
+      )}
+
       {/* Main 2-Column Workstation Layout on Desktop/Tablets */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left Column (5 cols on lg): Scanner, Quick Check-in & Visitor Registration */}
@@ -439,19 +482,20 @@ export const UsherTool: React.FC = () => {
             className="bg-white dark:bg-[#151528] text-slate-800 dark:text-white rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-indigo-900/30 shadow-[0_10px_30px_rgba(60,50,140,0.07)] dark:shadow-lg relative overflow-hidden flex flex-col justify-between"
           >
             {/* Viewfinder: Live Camera or Standby Card */}
-            {isCameraActive ? (
+            {isCameraActive && hasScheduledService ? (
               <div className="relative aspect-4/3 w-full rounded-2xl overflow-hidden shadow-inner mb-3">
                 <CameraQrScanner
                   onScan={(code) => {
                     const matched = findMemberByScannedId(members, code);
                     if (matched) {
-                      triggerCheckIn(matched.id);
-                      showToast(`Checked in ${matched.firstName} ${matched.lastName}!`);
+                      if (triggerCheckIn(matched.id)) {
+                        showToast(`Checked in ${matched.firstName} ${matched.lastName}!`);
+                      }
                     } else {
                       showToast(`Scanned Code: "${code}" (No matching member pass found)`);
                     }
                   }}
-                  isActive={isCameraActive}
+                  isActive={isCameraActive && hasScheduledService}
                   className="w-full h-full"
                   reticleSize="sm"
                   instructionsText="Point at member pass"
@@ -470,11 +514,12 @@ export const UsherTool: React.FC = () => {
                 </div>
                 <button
                   type="button"
+                  disabled={!hasScheduledService}
                   onClick={() => setIsCameraActive(true)}
-                  className="mt-1 px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                  className="mt-1 px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
                 >
                   <Camera className="w-4 h-4" />
-                  <span>Activate Camera Scanner</span>
+                  <span>{hasScheduledService ? 'Activate Camera Scanner' : 'Schedule Service to Scan'}</span>
                 </button>
               </div>
             )}
@@ -483,6 +528,10 @@ export const UsherTool: React.FC = () => {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (!hasScheduledService) {
+                  showToast(checkInEligibility.message);
+                  return;
+                }
                 if (!scannedIdInput.trim()) return;
                 const matched = findMemberByScannedId(members, scannedIdInput);
                 if (matched) {
@@ -504,7 +553,9 @@ export const UsherTool: React.FC = () => {
               />
               <button
                 type="submit"
-                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
+                disabled={!hasScheduledService}
+                title={hasScheduledService ? 'Verify and check in member' : checkInEligibility.message}
+                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
               >
                 Verify ID
               </button>
@@ -514,8 +565,9 @@ export const UsherTool: React.FC = () => {
             <div className="pt-3 flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
+                disabled={!hasScheduledService && !isCameraActive}
                 onClick={() => setIsCameraActive((prev) => !prev)}
-                className={`flex-1 min-h-[44px] py-3 px-4 rounded-2xl text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98] whitespace-nowrap cursor-pointer ${
+                className={`flex-1 min-h-[44px] py-3 px-4 rounded-2xl text-white text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98] whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                   isCameraActive
                     ? 'bg-rose-600 hover:bg-rose-500'
                     : 'bg-[#6C5CE7] hover:bg-[#5b4be0]'
@@ -535,9 +587,10 @@ export const UsherTool: React.FC = () => {
               </button>
               <button
                 type="button"
+                disabled={!hasScheduledService}
                 onClick={handleScanClick}
-                className="min-h-[44px] py-3 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-slate-200 dark:border-transparent text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap cursor-pointer"
-                title="Quick check in next member"
+                className="min-h-[44px] py-3 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-slate-200 dark:border-transparent text-xs font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title={hasScheduledService ? 'Quick check in next member' : checkInEligibility.message}
               >
                 <UserCheck className="w-4 h-4 shrink-0" />
                 <span>Next</span>
@@ -601,25 +654,43 @@ export const UsherTool: React.FC = () => {
               />
             </div>
 
-            {/* Filter Tabs */}
-            <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold">
-              {[
-                { id: 'all', label: `All Members (${members.length})` },
-                { id: 'unchecked', label: `Unchecked (${uncheckedMembers.length})` },
-                { id: 'checked', label: `Checked In (${members.length - uncheckedMembers.length})` },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setFilterMode(tab.id as any)}
-                  className={`px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                    filterMode === tab.id
-                      ? 'bg-[#6C5CE7] text-white shadow-sm'
-                      : 'text-[#5B5F7A] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
-                  }`}
+            {/* Filter Tabs & Ministry/Cell Group Filter */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                {[
+                  { id: 'all', label: `All Members (${members.length})` },
+                  { id: 'unchecked', label: `Unchecked (${uncheckedMembers.length})` },
+                  { id: 'checked', label: `Checked In (${members.length - uncheckedMembers.length})` },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setFilterMode(tab.id as any)}
+                    className={`px-3 py-1.5 rounded-xl transition-all shrink-0 cursor-pointer ${
+                      filterMode === tab.id
+                        ? 'bg-[#6C5CE7] text-white shadow-sm'
+                        : 'text-[#5B5F7A] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {activeSettingsGroups.length > 0 && (
+                <select
+                  aria-label="Filter roster by ministry or cell group"
+                  value={selectedGroupFilter}
+                  onChange={(e) => setSelectedGroupFilter(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-50 dark:bg-black/20 border border-[#E3E5F2] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
                 >
-                  {tab.label}
-                </button>
-              ))}
+                  <option value="all">All Ministries &amp; Cells</option>
+                  {activeSettingsGroups.map((g) => (
+                    <option key={g.id} value={g.name}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -627,11 +698,14 @@ export const UsherTool: React.FC = () => {
           <ul className="space-y-2.5 max-h-[620px] overflow-y-auto pr-1" role="list">
             {filteredMembers.length > 0 ? (
               filteredMembers.map((m) => {
-                const record = attendanceRecords.find(
-                  (r) =>
-                    r.personId === m.id &&
-                    (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
-                );
+                const record = currentService.id
+                  ? attendanceRecords.find(
+                      (r) =>
+                        r.personId === m.id &&
+                        (r.serviceInstanceId === currentService.id ||
+                          (!r.serviceInstanceId && services.length === 1))
+                    )
+                  : undefined;
                 const isChecked = !!record;
                 const isWaitingSync = record?.waitingToSync;
 
@@ -659,7 +733,14 @@ export const UsherTool: React.FC = () => {
                           <span>·</span>
                           <span className="font-mono">{formatPhone(m.phoneE164 || m.phoneNumber)}</span>
                           <span>·</span>
-                          <span className="truncate">{m.groupName || m.homeCellGroup || 'General Congregation'}</span>
+                          <span className="truncate">
+                            {m.groupName || m.homeCellGroup || 'General Congregation'}
+                            {m.department &&
+                            m.department !== 'General Congregation' &&
+                            m.department !== (m.groupName || m.homeCellGroup)
+                              ? ` · ${m.department}`
+                              : ''}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -679,9 +760,11 @@ export const UsherTool: React.FC = () => {
                       ) : (
                         <button
                           onClick={() => triggerCheckIn(m.id)}
-                          className="bg-[#6C5CE7] hover:bg-[#5b4be0] text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          disabled={!hasScheduledService}
+                          title={hasScheduledService ? `Check in ${m.firstName}` : checkInEligibility.message}
+                          className="bg-[#6C5CE7] hover:bg-[#5b4be0] disabled:opacity-45 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
                         >
-                          Check in
+                          {hasScheduledService ? 'Check in' : 'Unavailable'}
                         </button>
                       )}
                     </div>
@@ -740,7 +823,8 @@ export const UsherTool: React.FC = () => {
               <div>
                 <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Register First-Time Visitor</h2>
                 <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
-                  Quick entrance capture. Pastoral follow-up SMS dispatched tomorrow.
+                  Quick entrance capture. Follow-up assigned within {systemSettings.firstTimerFollowupHours || 24}h via{' '}
+                  {systemSettings.smsGatewayProvider || 'Pastoral Care'}.
                 </p>
               </div>
               <button
@@ -778,7 +862,7 @@ export const UsherTool: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold mb-1.5 text-[#1D1B3A] dark:text-[#F2F2FA]">
-                How did they hear about {systemSettings.churchName}?
+                How did they hear about {systemSettings.churchName || 'this church'}?
               </label>
               <select
                 value={visitorHowHeard}
@@ -792,6 +876,26 @@ export const UsherTool: React.FC = () => {
                 <option>Other</option>
               </select>
             </div>
+
+            {activeSettingsGroups.length > 0 && (
+              <div>
+                <label className="block text-xs font-bold mb-1.5 text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Connect to Ministry / Cell Group (Optional)
+                </label>
+                <select
+                  value={visitorPreferredGroup}
+                  onChange={(e) => setVisitorPreferredGroup(e.target.value)}
+                  className="w-full p-3 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-xs font-medium text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6C5CE7]"
+                >
+                  <option value="">Welcome &amp; Visitors Team (Default)</option>
+                  {activeSettingsGroups.map((g) => (
+                    <option key={g.id} value={g.name}>
+                      {g.name} (Leader: {g.leaderName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="flex gap-2.5 pt-2">
               <button

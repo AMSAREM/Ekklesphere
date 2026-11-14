@@ -1,8 +1,9 @@
 // server.ts - Ekklesphere Church Management, Proximity Radar & Creator Console Server
+import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
+import { createServer } from 'http';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -33,8 +34,6 @@ import { consoleRouter } from './src/server/consoleRouter.ts';
 import { churchWallStore } from './src/server/churchWallStore.ts';
 import type { ImportDuplicateMode } from './src/shared/memberImportValidation.ts';
 import { MediaProxyError, proxyExternalImage } from './src/server/mediaProxy.ts';
-
-dotenv.config();
 
 // Fail closed at startup in production if JWT_SECRET, SUPABASE_URL, or SUPABASE_SERVICE_ROLE_KEY are missing.
 assertProductionAuthConfig();
@@ -820,7 +819,7 @@ const EventSchema = z.object({
   organizationId: z.string().regex(uuidRegex, 'Invalid UUID').optional(),
   personId: z.string().min(1).max(128).optional(),
   personName: z.string().min(1).max(160).optional(),
-  serviceInstanceId: z.string().min(1).max(128).optional(),
+  serviceInstanceId: z.string().max(128).optional(),
   type: z.enum(['enter', 'exit', 'manual_in', 'manual_out']),
   source: z.enum(['geofence', 'manual', 'web']),
   platform: z.enum(['android', 'web', 'ios']).default('web'),
@@ -1808,7 +1807,19 @@ app.post(
 
     try {
       const nowIso = new Date().toISOString();
-      const targetServiceInstanceId = body.serviceInstanceId || 'svc-sun-1';
+      const targetServiceInstanceId =
+        typeof body.serviceInstanceId === 'string' ? body.serviceInstanceId.trim() : '';
+      if (
+        !targetServiceInstanceId ||
+        targetServiceInstanceId === 'svc-live-main' ||
+        targetServiceInstanceId === 'svc-sun-1'
+      ) {
+        return res.status(400).json({
+          error: 'NO_SERVICE_SCHEDULED',
+          code: 'NO_SERVICE_SCHEDULED',
+          message: 'No service is scheduled. Please schedule a service before checking in members.',
+        });
+      }
       const result = await platformStore.recordLiveCheckin(req.organizationId!, {
         id: body.id || `rec-${body.personId}-${Date.now()}`,
         personId: body.personId,
@@ -1836,6 +1847,7 @@ app.post(
     } catch (err: any) {
       return res.status(err?.status || 500).json({
         error: err?.code || 'live_checkin_failed',
+        code: err?.code || 'live_checkin_failed',
         message: err?.message || 'Failed to save attendance check-in to database.',
       });
     }
@@ -1945,32 +1957,62 @@ async function handleAttendanceEvent(req: Request, res: Response) {
     !reasons.some((r) => r.startsWith('outside_') || r.includes('mock')) &&
     (distance === null || distance <= siteRadius + 25);
 
+  let checkinRecorded = false;
+  let checkinBlockedReason: string | null = null;
+  let checkinBlockedMessage: string | null = null;
+
   if (isApproved && e.personId) {
-    const targetServiceInstanceId = e.serviceInstanceId || 'svc-sun-1';
-    await platformStore.recordLiveCheckin(orgId, {
-      id: `rec-${e.personId}-${Date.now()}`,
-      personId: e.personId,
-      personName: e.personName,
-      serviceInstanceId: targetServiceInstanceId,
-      campusId: site?.id || PRIMARY_CAMPUS_SITE_ID,
-      method: e.source === 'geofence' ? 'geofence' : 'manual',
-      confidence:
-        typeof e.accuracyM === 'number' ? Math.max(70, Math.min(99, Math.round(100 - e.accuracyM / 3))) : 95,
-      checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      checkedInIso: now,
-      late: false,
-      recordedBy: 'GPS Geofence Radar',
-      note: `Verified Live GPS (${distance ?? 0}m from center, ±${Math.round(e.accuracyM ?? 0)}m)`,
-      distanceM: distance,
-      lat: e.lat,
-      lng: e.lng,
-    });
+    const targetServiceInstanceId =
+      typeof e.serviceInstanceId === 'string' ? e.serviceInstanceId.trim() : '';
+    if (
+      !targetServiceInstanceId ||
+      targetServiceInstanceId === 'svc-live-main' ||
+      targetServiceInstanceId === 'svc-sun-1'
+    ) {
+      checkinBlockedReason = 'NO_SERVICE_SCHEDULED';
+      checkinBlockedMessage =
+        'No service is scheduled. Please schedule a service before checking in members.';
+    } else {
+      try {
+        await platformStore.recordLiveCheckin(orgId, {
+          id: `rec-${e.personId}-${Date.now()}`,
+          personId: e.personId,
+          personName: e.personName,
+          serviceInstanceId: targetServiceInstanceId,
+          campusId: site?.id || PRIMARY_CAMPUS_SITE_ID,
+          method: e.source === 'geofence' ? 'geofence' : 'manual',
+          confidence:
+            typeof e.accuracyM === 'number'
+              ? Math.max(70, Math.min(99, Math.round(100 - e.accuracyM / 3)))
+              : 95,
+          checkedInAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          checkedInIso: now,
+          late: false,
+          recordedBy: 'GPS Geofence Radar',
+          note: `Verified Live GPS (${distance ?? 0}m from center, ±${Math.round(e.accuracyM ?? 0)}m)`,
+          distanceM: distance,
+          lat: e.lat,
+          lng: e.lng,
+        });
+        checkinRecorded = true;
+      } catch (err: any) {
+        if (err?.code === 'NO_SERVICE_SCHEDULED' || err?.code === 'SERVICE_NOT_OPEN') {
+          checkinBlockedReason = err.code;
+          checkinBlockedMessage = err.message;
+        } else {
+          throw err;
+        }
+      }
+    }
   }
 
   return res.status(200).json({
     ...row,
     site_radius_m: siteRadius,
     site_name: site?.name || premiseData.premiseSettings?.campusName || null,
+    checkin_recorded: checkinRecorded,
+    checkin_blocked_reason: checkinBlockedReason,
+    checkin_blocked_message: checkinBlockedMessage,
   });
 }
 
@@ -2830,6 +2872,9 @@ const updateOwnProfileSchema = z.object({
     .optional(),
   preferredName: z.string().trim().min(1).max(120).optional(),
   autoCheckinOptedIn: z.boolean().optional(),
+  groupName: z.string().trim().min(1).max(120).optional(),
+  homeCellGroup: z.string().trim().min(1).max(120).optional(),
+  department: z.string().trim().min(1).max(120).optional(),
 });
 
 app.get(
@@ -3683,11 +3728,16 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  const httpServer = createServer(app);
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
+    const hmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: hmrDisabled ? false : { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -3698,13 +3748,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Ekklesphere] Server running at http://0.0.0.0:${PORT} (${platformStore.storageBackend})`);
   });
 }
 
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST && !process.env.VERCEL) {
-  startServer();
+  startServer().catch((err) => {
+    console.error('[Ekklesphere] Failed to start server:', err);
+    process.exit(1);
+  });
 }
 
 export { app };

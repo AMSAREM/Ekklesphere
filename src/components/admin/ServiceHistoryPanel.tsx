@@ -23,6 +23,7 @@ import { MemberAvatar } from '../common/MemberAvatar';
 import {
   BinaryServiceStatus,
   computeServiceBinaryStatus,
+  evaluateServiceCheckInEligibility,
   formatAllowanceDeadline,
 } from '../../utils/serviceStatus';
 import { EditableServiceTarget, EditServiceModal } from './AdminDashboardModals';
@@ -424,6 +425,25 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
     );
   }, [filteredServices, selectedServiceId, activeServiceId]);
 
+  const selectedServiceEligibility = useMemo(() => {
+    if (!selectedService) {
+      return evaluateServiceCheckInEligibility(services, null, null, {
+        nowMs: tickNowMs,
+        defaultAllowanceMinutes: systemSettings.dwellTimeMinutes,
+      });
+    }
+    return evaluateServiceCheckInEligibility(services, selectedService.id, null, {
+      nowMs: tickNowMs,
+      defaultAllowanceMinutes: systemSettings.dwellTimeMinutes,
+    });
+  }, [services, selectedService, tickNowMs, systemSettings.dwellTimeMinutes]);
+
+  useEffect(() => {
+    if (!selectedServiceEligibility.eligible && isQuickCheckinOpen) {
+      setIsQuickCheckinOpen(false);
+    }
+  }, [selectedServiceEligibility.eligible, isQuickCheckinOpen]);
+
   const filteredAttendees = useMemo(() => {
     if (!selectedService) return [];
     const q = attendeeSearch.trim().toLowerCase();
@@ -520,6 +540,10 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
   const handleQuickCheckinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedService || isCheckingIn) return;
+    if (!selectedServiceEligibility.eligible) {
+      showToast(selectedServiceEligibility.message);
+      return;
+    }
     const targetId = quickCheckinMemberId || unarrivedMembersForSelected[0]?.id;
     if (!targetId) {
       showToast('Select a member to check in');
@@ -1077,13 +1101,19 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                   <button
                     type="button"
+                    disabled={!selectedServiceEligibility.eligible}
+                    title={
+                      selectedServiceEligibility.eligible
+                        ? 'Record member check-in'
+                        : selectedServiceEligibility.message
+                    }
                     onClick={() => {
                       setIsQuickCheckinOpen((prev) => !prev);
                       if (!quickCheckinMemberId && unarrivedMembersForSelected[0]) {
                         setQuickCheckinMemberId(unarrivedMembersForSelected[0].id);
                       }
                     }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <UserPlus className="w-3.5 h-3.5" />
                     <span>{isQuickCheckinOpen ? 'Close Check-In' : 'Check In Member'}</span>

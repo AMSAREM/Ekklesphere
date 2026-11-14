@@ -87,6 +87,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     pushSubscribersCount,
     requestPushPermission,
     sendTestPushNotification,
+    requestedSettingsTab,
+    setAdminSubTab,
   } = useEkklesphere();
 
   const isSettingsAdmin =
@@ -94,7 +96,15 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     currentUser?.role === 'super_admin' ||
     currentUser?.role === 'creator';
 
-  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways' | 'staff' | 'billing'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways' | 'staff' | 'billing'>(
+    requestedSettingsTab?.tab || 'general'
+  );
+
+  useEffect(() => {
+    if (requestedSettingsTab?.tab) {
+      setActiveTab(requestedSettingsTab.tab);
+    }
+  }, [requestedSettingsTab]);
   const [billingPlans, setBillingPlans] = useState<ConsolePlan[]>([]);
   const [licenseEval, setLicenseEval] = useState<LicenseEvaluationResult | null>(null);
   const [currentLicense, setCurrentLicense] = useState<SystemLicense | null>(null);
@@ -1480,6 +1490,24 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </button>
               </div>
             )}
+            {/* Connected Modules Summary Bar */}
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div>
+                <div className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Connected Across Ekklesphere Modules
+                </div>
+                <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                  Active Ministries feed Department selectors &amp; Analytics; Cell Groups &amp; Fellowships sync to Directory filters, Usher Check-in, Member Registration, Pastoral Auto-Assignment, and Broadcast Audiences.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminSubTab('dashboard')}
+                className="px-3.5 py-2 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Open Analytics &amp; Directory
+              </button>
+            </div>
           </div>
         )}
 
@@ -1787,6 +1815,28 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   />
                   <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#6D5CF2]" />
                 </label>
+              </div>
+
+              {/* Connected Pastoral Routing Preview */}
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div>
+                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Live Care Routing:{' '}
+                  </span>
+                  <span className="text-[#666A86] dark:text-[#A9ACC8]">
+                    {formData.autoAssignCellLeaders
+                      ? `${churchGroups.filter((g) => g.active && g.leaderName).length} active group/ministry leaders linked for automatic assignment`
+                      : `All new care tasks assign directly to ${formData.seniorPastor || 'Pastoral Care Team'}`}
+                    {' · '}Visitor SLA: Within {formData.firstTimerFollowupHours}h
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('groups')}
+                  className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Review Group Leaders
+                </button>
               </div>
             </div>
           </div>

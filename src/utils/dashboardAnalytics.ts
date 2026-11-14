@@ -310,10 +310,12 @@ export function computeDashboardAnalytics(
     return bucket;
   };
 
-  // Pre-seed ministry/department groups if churchGroups explicitly defines ministries
+  // Pre-seed ministry/department groups if churchGroups explicitly defines active ministries
+  const configuredMinistryKeys = new Set<string>();
   for (const grp of churchGroups) {
-    if (grp.category === 'ministry' && grp.name.trim()) {
+    if (grp.category === 'ministry' && grp.active !== false && grp.name.trim()) {
       ensureDept(grp.name);
+      configuredMinistryKeys.add(getCanonicalKey(grp.name));
     }
   }
 
@@ -367,7 +369,12 @@ export function computeDashboardAnalytics(
   }
 
   const departments: DepartmentAnalyticRow[] = Array.from(deptMap.values())
-    .filter((d) => d.totalMembers > 0 || deptMap.size <= 12)
+    .filter(
+      (d) =>
+        d.totalMembers > 0 ||
+        configuredMinistryKeys.has(getCanonicalKey(d.displayName)) ||
+        deptMap.size <= 12
+    )
     .map((d) => ({
       name: d.displayName,
       totalMembers: d.totalMembers,

@@ -49,7 +49,7 @@ export const UnifiedAuthScreen: React.FC = () => {
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [regGroup, setRegGroup] = useState('General Congregation');
   const [regOrgSlug, setRegOrgSlug] = useState('');
-  const [regAutoCheckin, setRegAutoCheckin] = useState(true);
+  const [regAutoCheckin, setRegAutoCheckin] = useState(!systemSettings.requireExplicitConsent);
 
   // Organisation Trial Sign Up form state
   const [orgName, setOrgName] = useState('');
@@ -630,16 +630,23 @@ export const UnifiedAuthScreen: React.FC = () => {
                       className="w-full px-3 py-2 text-xs rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1A1A3A] text-[#1D1B3A] dark:text-[#F2F2FA] focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                     >
                       <option value="General Congregation">General Congregation</option>
-                      {churchGroups.map((g) => (
-                        <option key={g.id} value={g.name}>
-                          {g.name}
-                        </option>
-                      ))}
-                      <option value="Youth Fellowship">Youth Fellowship</option>
-                      <option value="Choir & Music">Choir & Music</option>
-                      <option value="Ushering Ministry">Ushering Ministry</option>
-                      <option value="Men’s Fellowship">Men’s Fellowship</option>
-                      <option value="Women’s Fellowship">Women’s Fellowship</option>
+                      {churchGroups.filter((g) => g.active !== false).length > 0 ? (
+                        churchGroups
+                          .filter((g) => g.active !== false)
+                          .map((g) => (
+                            <option key={g.id} value={g.name}>
+                              {g.name} ({g.category === 'ministry' ? 'Ministry' : g.category === 'fellowship' ? 'Fellowship' : 'Cell Group'})
+                            </option>
+                          ))
+                      ) : (
+                        <>
+                          <option value="Youth Fellowship">Youth Fellowship</option>
+                          <option value="Choir & Music">Choir & Music</option>
+                          <option value="Ushering Ministry">Ushering Ministry</option>
+                          <option value="Men’s Fellowship">Men’s Fellowship</option>
+                          <option value="Women’s Fellowship">Women’s Fellowship</option>
+                        </>
+                      )}
                     </select>
                   </div>
                   <div>
@@ -672,10 +679,13 @@ export const UnifiedAuthScreen: React.FC = () => {
                     className="mt-0.5 rounded text-[#6D5CF2] focus:ring-[#6D5CF2]"
                   />
                   <label htmlFor="autoCheckinConsent" className="text-xs text-[#1D1B3A] dark:text-[#F2F2FA] cursor-pointer">
-                    <span className="font-bold block">Opt-in to Automated Proximity Check-in</span>
+                    <span className="font-bold block">
+                      Opt-in to Automated Proximity Check-in
+                      {systemSettings.requireExplicitConsent ? ' (Explicit Consent Required)' : ''}
+                    </span>
                     <span className="text-[#666A86] dark:text-[#A9ACC8] text-[11px] block mt-0.5">
                       Your phone will automatically acknowledge your presence when you arrive at{' '}
-                      {systemSettings.campusName || 'church'} via the active campus geofence.
+                      {systemSettings.campusName || 'church'} within the {systemSettings.innerGeofenceMeters}m campus geofence.
                     </span>
                   </label>
                 </div>

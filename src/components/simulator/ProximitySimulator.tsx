@@ -48,6 +48,8 @@ export const ProximitySimulator: React.FC = () => {
     systemSettings,
     currentUser,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     attendanceRecords,
     auditLogs,
     checkInPerson,
@@ -183,6 +185,11 @@ export const ProximitySimulator: React.FC = () => {
       setRadarFeedback('Church premise coordinates must be set by Admin before verifying arrival.');
       return;
     }
+    if (!hasScheduledService || !currentService.id) {
+      setRadarFeedback(checkInEligibility.message);
+      showToast(checkInEligibility.message);
+      return;
+    }
     if (!liveGps) {
       setRadarFeedback('Start Live Radar first to acquire a fresh GPS fix.');
       return;
@@ -211,16 +218,26 @@ export const ProximitySimulator: React.FC = () => {
       });
       const data = await res.json();
       if (res.ok) {
+        if (data.checkin_recorded === false || data.checkin_blocked_reason) {
+          const blockedMsg = data.checkin_blocked_message || checkInEligibility.message;
+          setRadarFeedback(blockedMsg);
+          showToast(blockedMsg);
+          return;
+        }
         const accepted =
           data.status === 'accepted' ||
           (data.status === 'flagged' && !data.flag_reasons?.includes('outside_site'));
         if (accepted) {
-          checkInPerson(
+          const started = checkInPerson(
             targetPersonId,
             'geofence',
             Math.max(70, Math.min(99, Math.round(100 - liveGps.accuracy / 3))),
             `Live Radar GPS (${data.distance_m ?? 0}m)`
           );
+          if (!started) {
+            setRadarFeedback(checkInEligibility.message);
+            return;
+          }
           await refreshLivePremise();
           setRadarFeedback(`Server accepted check-in (${data.distance_m ?? 0}m from premise).`);
           showToast(`Verified inside premise (${data.distance_m ?? 0}m)`);

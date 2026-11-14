@@ -31,6 +31,9 @@ import {
   Send,
   Cake,
   KeyRound,
+  Users,
+  Phone,
+  Edit3,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
@@ -40,6 +43,12 @@ import {
   MemberBirthdaysModule,
   formatBirthdayMonthDay,
 } from './MemberBirthdaysModule';
+import {
+  findMatchingChurchGroup,
+  getCurrencyDisplay,
+  mergeSelectableCellGroups,
+  mergeSelectableDepartments,
+} from '../../utils/settingsConnections';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -58,9 +67,12 @@ function computeDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: n
 export const MemberApp: React.FC = () => {
   const {
     systemSettings,
+    churchGroups,
     members,
     services,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     memberConsents,
     updateMemberConsent,
     memberRsvps,
@@ -103,12 +115,20 @@ export const MemberApp: React.FC = () => {
   const watchIdRef = useRef<number | null>(null);
   const autoVerifiedRef = useRef<boolean>(false);
 
+  const currency = getCurrencyDisplay(systemSettings.currency);
+
   // Giving state
-  const [giveAmount, setGiveAmount] = useState<number>(50);
+  const [giveAmount, setGiveAmount] = useState<number>(currency.presetAmounts[1] || 50);
   const [giveCustomAmount, setGiveCustomAmount] = useState<string>('');
   const [giveFund, setGiveFund] = useState<string>('Tithe');
   const [giveMethod, setGiveMethod] = useState<'MTN MoMo' | 'Telecel Cash' | 'Card'>('MTN MoMo');
   const [givenSuccess, setGivenSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!currency.presetAmounts.includes(giveAmount) && !giveCustomAmount) {
+      setGiveAmount(currency.presetAmounts[1] || currency.presetAmounts[0]);
+    }
+  }, [systemSettings.currency]);
 
   // Resolve real signed-in member identity
   const matchedMember = members.find(
@@ -136,6 +156,26 @@ export const MemberApp: React.FC = () => {
   const memberDepartment = matchedMember?.department;
   const memberEmail = matchedMember?.email || currentUser?.email || systemSettings.contactEmail;
   const memberPhone = matchedMember?.phoneE164 || systemSettings.contactPhone;
+
+  const { cellOrFellowshipGroup, ministryGroup } = findMatchingChurchGroup(churchGroups, {
+    groupName: matchedMember?.groupName,
+    homeCellGroup: matchedMember?.homeCellGroup,
+    department: matchedMember?.department,
+  });
+  const selectableCellGroups = mergeSelectableCellGroups(churchGroups, members);
+  const selectableDepartments = mergeSelectableDepartments(churchGroups, members);
+
+  const [isEditingMyGroups, setIsEditingMyGroups] = useState(false);
+  const [draftCellGroup, setDraftCellGroup] = useState(memberGroup);
+  const [draftDepartment, setDraftDepartment] = useState(memberDepartment || 'General Congregation');
+  const [isSavingMyGroups, setIsSavingMyGroups] = useState(false);
+
+  useEffect(() => {
+    if (!isEditingMyGroups) {
+      setDraftCellGroup(memberGroup);
+      setDraftDepartment(memberDepartment || 'General Congregation');
+    }
+  }, [memberGroup, memberDepartment, isEditingMyGroups]);
 
   const [localPhotoOverride, setLocalPhotoOverride] = useState<string | null>(() => {
     try {
@@ -242,11 +282,49 @@ export const MemberApp: React.FC = () => {
     }
   };
 
-  const myAttendanceRecord = attendanceRecords.find(
-    (r) =>
-      r.personId === targetPersonId &&
-      (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
-  );
+  const handleSaveMyGroups = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nextCell = draftCellGroup.trim() || 'General Congregation';
+    const nextDept = draftDepartment.trim() || 'General Congregation';
+    setIsSavingMyGroups(true);
+    try {
+      if (matchedMember) {
+        await updateMember(matchedMember.id, {
+          groupName: nextCell,
+          homeCellGroup: nextCell,
+          department: nextDept,
+        });
+      } else {
+        const res = await fetch('/api/members/me/profile', {
+          method: 'PATCH',
+          headers: getMemberAuthHeaders(),
+          body: JSON.stringify({
+            groupName: nextCell,
+            homeCellGroup: nextCell,
+            department: nextDept,
+          }),
+        });
+        if (res.ok) {
+          showToast('Ministry & fellowship preferences saved.');
+        } else {
+          const errBody = await res.json().catch(() => ({}));
+          showToast(errBody?.message || 'Could not update group preferences.');
+        }
+      }
+      setIsEditingMyGroups(false);
+    } finally {
+      setIsSavingMyGroups(false);
+    }
+  };
+
+  const myAttendanceRecord = currentService.id
+    ? attendanceRecords.find(
+        (r) =>
+          r.personId === targetPersonId &&
+          (r.serviceInstanceId === currentService.id ||
+            (!r.serviceInstanceId && services.length === 1))
+      )
+    : undefined;
   const isCheckedIn = Boolean(myAttendanceRecord);
   const isPremiseConfigured =
     systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null;
@@ -289,6 +367,14 @@ export const MemberApp: React.FC = () => {
     accuracy: number,
     source: 'geofence' | 'web'
   ) => {
+    if (!hasScheduledService || !currentService.id) {
+      autoVerifiedRef.current = false;
+      setRejectionReason(checkInEligibility.message);
+      setGpsStatus(watchIdRef.current !== null ? 'watching' : 'idle');
+      showToast(checkInEligibility.message);
+      return;
+    }
+
     setGpsStatus('verifying');
     setRejectionReason(null);
     try {
@@ -319,6 +405,15 @@ export const MemberApp: React.FC = () => {
         return;
       }
 
+      if (data.checkin_recorded === false || data.checkin_blocked_reason) {
+        autoVerifiedRef.current = false;
+        const blockedMsg = data.checkin_blocked_message || checkInEligibility.message;
+        setRejectionReason(blockedMsg);
+        setGpsStatus(watchIdRef.current !== null ? 'watching' : 'idle');
+        showToast(blockedMsg);
+        return;
+      }
+
       const isWithinFence =
         data.distance_m !== null
           ? data.distance_m <= (data.site_radius_m || systemSettings.innerGeofenceMeters || 60) + 25
@@ -332,12 +427,18 @@ export const MemberApp: React.FC = () => {
 
       if (isAccepted) {
         const confidence = Math.max(70, Math.min(99, Math.round(100 - accuracy / 3)));
-        checkInPerson(
+        const checkedIn = checkInPerson(
           targetPersonId,
           'geofence',
           confidence,
           `Verified Live GPS (${data.distance_m ?? 0}m from premise, ±${Math.round(accuracy)}m)`
         );
+        if (!checkedIn) {
+          autoVerifiedRef.current = false;
+          setRejectionReason(checkInEligibility.message);
+          setGpsStatus(watchIdRef.current !== null ? 'watching' : 'idle');
+          return;
+        }
         await refreshLivePremise();
         setRejectionReason(null);
         setGpsFeedback(
@@ -363,6 +464,11 @@ export const MemberApp: React.FC = () => {
   const handleVerifyMyGpsNow = () => {
     if (!isPremiseConfigured) {
       setRejectionReason('Church premise GPS location has not been set by the Admin yet.');
+      return;
+    }
+    if (!hasScheduledService) {
+      setRejectionReason(checkInEligibility.message);
+      showToast(checkInEligibility.message);
       return;
     }
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -410,6 +516,11 @@ export const MemberApp: React.FC = () => {
   const startAutoProximityRadar = () => {
     if (!isPremiseConfigured) {
       setRejectionReason('Church premise GPS location has not been set by the Admin yet.');
+      return;
+    }
+    if (!hasScheduledService) {
+      setRejectionReason(checkInEligibility.message);
+      showToast(checkInEligibility.message);
       return;
     }
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -631,6 +742,43 @@ export const MemberApp: React.FC = () => {
                 <button
                   onClick={() => setIsQrSheetOpen(true)}
                   className="bg-white/20 hover:bg-white/30 text-white rounded-2xl px-4 py-2.5 text-xs font-bold flex items-center gap-2 transition-colors"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Show My Entry Code</span>
+                </button>
+              </div>
+            </div>
+          ) : !hasScheduledService ? (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-amber-400/20 text-amber-200 flex items-center justify-center shrink-0">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold">
+                      {checkInEligibility.reasonCode === 'NO_SERVICE_SCHEDULED'
+                        ? 'No Service Scheduled Right Now'
+                        : 'Service Check-In Closed'}
+                    </h3>
+                    <p className="text-xs text-white/90">
+                      {checkInEligibility.message}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <button
+                  onClick={() => refreshLivePremise()}
+                  className="bg-white text-[#6C5CE7] hover:bg-slate-100 rounded-2xl px-4 py-2.5 text-xs font-bold shadow-sm flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Refresh Service Schedule</span>
+                </button>
+                <button
+                  onClick={() => setIsQrSheetOpen(true)}
+                  className="bg-white/20 hover:bg-white/30 text-white rounded-2xl px-4 py-2.5 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <QrCode className="w-4 h-4" />
                   <span>Show My Entry Code</span>
@@ -941,13 +1089,19 @@ export const MemberApp: React.FC = () => {
                   )}
                 </div>
                 <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5">
-                  Instant arrival confirmations ("Welcome {memberFirstName}, you are checked in"), service reminders, and care notes.
+                  {systemSettings.enablePushNotifications
+                    ? `Instant arrival confirmations ("Welcome ${memberFirstName}, you are checked in"), service reminders, and care notes.`
+                    : `Push alerts are paused by church admin. Arrival checks will confirm in-app${systemSettings.smsGatewayProvider ? ` with ${systemSettings.smsGatewayProvider} SMS fallback` : ''}.`}
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 pt-1 sm:pt-0 shrink-0">
-              {pushPermissionStatus !== 'granted' ? (
+              {!systemSettings.enablePushNotifications ? (
+                <span className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-white/5 text-[#5B5F7A] dark:text-[#A9ACC8] text-xs font-bold">
+                  Paused in Settings
+                </span>
+              ) : pushPermissionStatus !== 'granted' ? (
                 <button
                   type="button"
                   onClick={() => requestPushPermission()}
@@ -1024,7 +1178,7 @@ export const MemberApp: React.FC = () => {
             </div>
 
             <div className="pt-4 flex items-center gap-2">
-              {[50, 100, 200].map((amt) => (
+              {currency.presetAmounts.slice(1, 4).map((amt) => (
                 <button
                   key={amt}
                   onClick={() => {
@@ -1032,9 +1186,9 @@ export const MemberApp: React.FC = () => {
                     setGiveCustomAmount('');
                     setActiveTab('give');
                   }}
-                  className="flex-1 py-2 rounded-xl text-xs font-bold border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 hover:bg-[#EEEBFF] hover:border-[#6C5CE7] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all"
+                  className="flex-1 py-2 rounded-xl text-xs font-bold border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 hover:bg-[#EEEBFF] hover:border-[#6C5CE7] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all tabular-nums"
                 >
-                  GHS {amt}
+                  {currency.code} {amt}
                 </button>
               ))}
               <button
@@ -1043,6 +1197,100 @@ export const MemberApp: React.FC = () => {
               >
                 Give
               </button>
+            </div>
+          </div>
+        </div>
+
+        {/* My Ministry & Cell Group Connection Card */}
+        <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-5 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-2xl bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
+                <Users className="w-4.5 h-4.5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  My Ministry &amp; Cell Group
+                </h3>
+                <p className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  Synced with {systemSettings.churchName} Ministries &amp; Cell Directory
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('me');
+                setIsEditingMyGroups(true);
+              }}
+              className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-[#6C5CE7]" />
+              <span>Update Ministry / Cell</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Cell / Fellowship Group */}
+            <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-[#6C5CE7] dark:text-[#8C7DFF]">
+                Cell / Fellowship Group
+              </div>
+              <div className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                {cellOrFellowshipGroup?.name || memberGroup}
+              </div>
+              {cellOrFellowshipGroup ? (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] space-y-0.5">
+                  <div>
+                    Leader: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{cellOrFellowshipGroup.leaderName || 'Assigned by Pastor'}</span>
+                    {cellOrFellowshipGroup.leaderPhone && (
+                      <span className="ml-1.5 font-mono">· {cellOrFellowshipGroup.leaderPhone}</span>
+                    )}
+                  </div>
+                  {(cellOrFellowshipGroup.meetingDay || cellOrFellowshipGroup.meetingTime || cellOrFellowshipGroup.meetingLocation) && (
+                    <div>
+                      {[cellOrFellowshipGroup.meetingDay, cellOrFellowshipGroup.meetingTime, cellOrFellowshipGroup.meetingLocation]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  Leader &amp; schedule appear once linked to an active cell group.
+                </div>
+              )}
+            </div>
+
+            {/* Serving Ministry / Department */}
+            <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                Serving Ministry / Department
+              </div>
+              <div className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                {ministryGroup?.name || memberDepartment || 'General Congregation'}
+              </div>
+              {ministryGroup ? (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] space-y-0.5">
+                  <div>
+                    Ministry Lead: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{ministryGroup.leaderName || systemSettings.seniorPastor}</span>
+                    {ministryGroup.leaderPhone && (
+                      <span className="ml-1.5 font-mono">· {ministryGroup.leaderPhone}</span>
+                    )}
+                  </div>
+                  {(ministryGroup.meetingDay || ministryGroup.meetingTime || ministryGroup.meetingLocation) && (
+                    <div>
+                      {[ministryGroup.meetingDay, ministryGroup.meetingTime, ministryGroup.meetingLocation]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  Join a serving ministry from your Me profile to connect with department leads.
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1200,7 +1448,7 @@ export const MemberApp: React.FC = () => {
                 Thank you for your gift, {memberFirstName}!
               </h3>
               <p className="text-xs sm:text-sm text-[#5B5F7A] dark:text-[#A9ACC8] leading-relaxed max-w-md mx-auto">
-                GHS {giveCustomAmount || giveAmount} received for <b>{giveFund}</b> via <b>{giveMethod}</b>. A formal
+                {currency.code} {giveCustomAmount || giveAmount} received for <b>{giveFund}</b> via <b>{giveMethod}</b>. A formal
                 statement has been sent to <b>{memberEmail}</b>.
               </p>
               <div className="text-[11px] text-[#8A5700] dark:text-[#F5B84A] bg-[#FFEFD0] dark:bg-[#3D2E10] p-3 rounded-2xl max-w-md mx-auto font-medium">
@@ -1221,10 +1469,10 @@ export const MemberApp: React.FC = () => {
               {/* Preset Amount Chips */}
               <div>
                 <label className="block text-xs font-bold mb-2 text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Select Amount (GHS)
+                  Select Amount ({currency.code})
                 </label>
                 <div className="grid grid-cols-4 gap-2 mb-2.5">
-                  {[20, 50, 100, 200].map((amt) => (
+                  {currency.presetAmounts.map((amt) => (
                     <button
                       key={amt}
                       type="button"
@@ -1232,19 +1480,19 @@ export const MemberApp: React.FC = () => {
                         setGiveAmount(amt);
                         setGiveCustomAmount('');
                       }}
-                      className={`py-2.5 rounded-2xl text-xs font-bold transition-all ${
+                      className={`py-2.5 rounded-2xl text-xs font-bold transition-all tabular-nums ${
                         giveAmount === amt && !giveCustomAmount
                           ? 'bg-[#6C5CE7] text-white shadow-sm ring-2 ring-[#6C5CE7]/30'
                           : 'bg-slate-50 dark:bg-black/20 border border-[#E3E5F2] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-100'
                       }`}
                     >
-                      GHS {amt}
+                      {currency.code} {amt}
                     </button>
                   ))}
                 </div>
                 <input
                   type="number"
-                  placeholder="Or enter custom amount (e.g. 350)"
+                  placeholder={`Or enter custom amount (e.g. ${currency.presetAmounts[3] * 2})`}
                   value={giveCustomAmount}
                   onChange={(e) => setGiveCustomAmount(e.target.value)}
                   className="w-full p-3 rounded-2xl text-xs border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6C5CE7]"
@@ -1295,9 +1543,9 @@ export const MemberApp: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3.5 rounded-2xl bg-[#1D1B3A] dark:bg-[#6C5CE7] hover:bg-[#282855] text-white text-xs sm:text-sm font-bold shadow-lg transition-all mt-4"
+                className="w-full py-3.5 rounded-2xl bg-[#1D1B3A] dark:bg-[#6C5CE7] hover:bg-[#282855] text-white text-xs sm:text-sm font-bold shadow-lg transition-all mt-4 tabular-nums"
               >
-                Proceed to Give GHS {giveCustomAmount || giveAmount}
+                Proceed to Give {currency.code} {giveCustomAmount || giveAmount}
               </button>
             </form>
           )}
@@ -1375,9 +1623,14 @@ export const MemberApp: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* Privacy Permissions */}
         <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-4">
-          <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide">
-            Automated Presence & Communication Consents
-          </h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide">
+              Automated Presence &amp; Communication Consents
+            </h2>
+            <span className="text-[11px] font-semibold text-[#6C5CE7] dark:text-[#8C7DFF]">
+              {systemSettings.requireExplicitConsent ? 'Act 843 Explicit Opt-In' : 'Standard Consent'}
+            </span>
+          </div>
           <div className="divide-y divide-[#E3E5F2] dark:divide-[#2D2D55]">
             {/* Auto check-in */}
             <div className="py-3 first:pt-0 flex items-center justify-between gap-3">
@@ -1386,7 +1639,7 @@ export const MemberApp: React.FC = () => {
                   Proximity Auto Check-in
                 </b>
                 <span className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] leading-tight block">
-                  Verifies live GPS against the Admin's configured church premise only on arrival. No location trails stored.
+                  Verifies live GPS within {systemSettings.innerGeofenceMeters}m of {systemSettings.campusName} only on arrival. No location trails stored.
                 </span>
               </div>
               <button
@@ -1508,9 +1761,19 @@ export const MemberApp: React.FC = () => {
         {/* Member Profile & Data Rights */}
         <div className="space-y-4">
           <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">
-            <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide">
-              Official Church Records
-            </h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide">
+                Official Church Records
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsEditingMyGroups((prev) => !prev)}
+                className="text-[11px] font-bold text-[#6C5CE7] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Edit3 className="w-3 h-3" />
+                <span>{isEditingMyGroups ? 'Close Editor' : 'Edit Ministry / Cell'}</span>
+              </button>
+            </div>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Member ID</span>
@@ -1529,8 +1792,12 @@ export const MemberApp: React.FC = () => {
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberEmail}</b>
               </div>
               <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Fellowship Group</span>
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Cell / Fellowship Group</span>
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberGroup}</b>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Ministry / Department</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberDepartment || 'General Congregation'}</b>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8] inline-flex items-center gap-1">
@@ -1542,6 +1809,90 @@ export const MemberApp: React.FC = () => {
                 </b>
               </div>
             </div>
+
+            {isEditingMyGroups && (
+              <form
+                onSubmit={handleSaveMyGroups}
+                className="p-3.5 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/80 dark:bg-black/20 space-y-3"
+              >
+                <div>
+                  <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Cell / Fellowship Group
+                  </label>
+                  <select
+                    value={draftCellGroup}
+                    onChange={(e) => setDraftCellGroup(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1C1C3C] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6C5CE7]"
+                  >
+                    {selectableCellGroups.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                    {!selectableCellGroups.includes(draftCellGroup) && (
+                      <option value={draftCellGroup}>{draftCellGroup}</option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Serving Ministry / Department
+                  </label>
+                  <select
+                    value={draftDepartment}
+                    onChange={(e) => setDraftDepartment(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1C1C3C] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6C5CE7]"
+                  >
+                    {selectableDepartments.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                    {!selectableDepartments.includes(draftDepartment) && (
+                      <option value={draftDepartment}>{draftDepartment}</option>
+                    )}
+                  </select>
+                </div>
+
+                {(() => {
+                  const preview = findMatchingChurchGroup(churchGroups, {
+                    groupName: draftCellGroup,
+                    homeCellGroup: draftCellGroup,
+                    department: draftDepartment,
+                  });
+                  const matchedInfo = preview.ministryGroup || preview.cellOrFellowshipGroup;
+                  if (!matchedInfo) return null;
+                  return (
+                    <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] flex items-center gap-1.5">
+                      <Phone className="w-3 h-3 text-[#6C5CE7] shrink-0" />
+                      <span>
+                        Lead: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{matchedInfo.leaderName || systemSettings.seniorPastor}</b>
+                        {matchedInfo.meetingDay ? ` · ${matchedInfo.meetingDay}` : ''}
+                        {matchedInfo.meetingTime ? ` ${matchedInfo.meetingTime}` : ''}
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingMyGroups(false)}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold text-[#5B5F7A] dark:text-[#A9ACC8] hover:bg-slate-200/70 dark:hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingMyGroups}
+                    className="px-4 py-1.5 rounded-xl text-xs font-bold bg-[#6C5CE7] hover:bg-[#5b4be0] text-white disabled:opacity-50"
+                  >
+                    {isSavingMyGroups ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            )}
 
             {/* Data Protection Actions */}
             <div className="grid grid-cols-2 gap-2 pt-2">

@@ -127,30 +127,38 @@ describe('Service History Archive & Uploaded Member Photo Persistence', () => {
     });
 
     // 3. Record historical check-ins across past + live services
-    await platformStore.recordLiveCheckin(TEST_ANCHOR_ORGANIZATION_ID, {
-      id: 'att-past-1',
-      campusId: 'campus-main',
-      personId: m1.body.id,
-      personName: 'Abena Ofori',
-      serviceInstanceId: pastService.id,
-      method: 'geofence',
-      confidence: 98,
-      late: false,
-      checkedInAt: '07:54 AM',
-      checkedInIso: `${pastDate}T07:54:00.000Z`,
-    });
-    await platformStore.recordLiveCheckin(TEST_ANCHOR_ORGANIZATION_ID, {
-      id: 'att-past-2',
-      campusId: 'campus-main',
-      personId: m2.body.id,
-      personName: 'Kwame Mensah',
-      serviceInstanceId: pastService.id,
-      method: 'usher',
-      confidence: 100,
-      checkedInAt: '08:25 AM',
-      checkedInIso: `${pastDate}T08:25:00.000Z`,
-      late: true,
-    });
+    await platformStore.recordLiveCheckin(
+      TEST_ANCHOR_ORGANIZATION_ID,
+      {
+        id: 'att-past-1',
+        campusId: 'campus-main',
+        personId: m1.body.id,
+        personName: 'Abena Ofori',
+        serviceInstanceId: pastService.id,
+        method: 'geofence',
+        confidence: 98,
+        late: false,
+        checkedInAt: '07:54 AM',
+        checkedInIso: `${pastDate}T07:54:00.000Z`,
+      },
+      { bypassWindowCheck: true }
+    );
+    await platformStore.recordLiveCheckin(
+      TEST_ANCHOR_ORGANIZATION_ID,
+      {
+        id: 'att-past-2',
+        campusId: 'campus-main',
+        personId: m2.body.id,
+        personName: 'Kwame Mensah',
+        serviceInstanceId: pastService.id,
+        method: 'usher',
+        confidence: 100,
+        checkedInAt: '08:25 AM',
+        checkedInIso: `${pastDate}T08:25:00.000Z`,
+        late: true,
+      },
+      { bypassWindowCheck: true }
+    );
     await platformStore.recordLiveCheckin(TEST_ANCHOR_ORGANIZATION_ID, {
       id: 'att-live-1',
       campusId: 'campus-main',
@@ -163,6 +171,19 @@ describe('Service History Archive & Uploaded Member Photo Persistence', () => {
       checkedInAt: '07:50 AM',
       checkedInIso: liveStartIso,
     });
+
+    // Verify HTTP check-in is blocked for expired-window and not-yet-started services even with DB status 'active'
+    const expiredHttpCheckin = await request(app)
+      .post('/api/live-checkins')
+      .set('Authorization', `Bearer ${usherToken}`)
+      .send({
+        personId: m2.body.id,
+        personName: 'Kwame Mensah',
+        serviceInstanceId: futureService.id,
+        method: 'usher',
+      });
+    expect(expiredHttpCheckin.status).toBe(400);
+    expect(expiredHttpCheckin.body.code).toBe('SERVICE_NOT_OPEN');
 
     // 4. Create a second organisation with its own service & check-in to verify tenant isolation
     const secondOrg = await platformStore.createOrganisation({
@@ -733,14 +754,29 @@ describe('Service History Archive & Uploaded Member Photo Persistence', () => {
       expect(reopenRes.status).toBe(200);
       expect(storedEvent.status).toBe('active');
 
-      // 4. POST /api/live-checkins with non-UUID placeholder 'svc-sun-1' resolves to Supabase event UUID & upserts attendance
-      const checkinRes = await request(app)
+      // 4a. POST /api/live-checkins rejects placeholder 'svc-sun-1' with NO_SERVICE_SCHEDULED
+      const placeholderRes = await request(app)
         .post('/api/live-checkins')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
           personId: memberId,
           personName: 'Kofi Boateng',
           serviceInstanceId: 'svc-sun-1',
+          method: 'usher',
+          confidence: 95,
+        });
+      expect(placeholderRes.status).toBe(400);
+      expect(placeholderRes.body.error).toBe('NO_SERVICE_SCHEDULED');
+      expect(attendanceUpserts.length).toBe(0);
+
+      // 4b. POST /api/live-checkins with scheduled Supabase event UUID succeeds & upserts attendance
+      const checkinRes = await request(app)
+        .post('/api/live-checkins')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          personId: memberId,
+          personName: 'Kofi Boateng',
+          serviceInstanceId: eventId,
           method: 'usher',
           confidence: 95,
         });
@@ -767,7 +803,7 @@ describe('Service History Archive & Uploaded Member Photo Persistence', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
           personId: 'non-existent-local-id',
-          serviceInstanceId: 'svc-sun-1',
+          serviceInstanceId: eventId,
           method: 'usher',
         });
       expect(badCheckinRes.status).toBe(400);

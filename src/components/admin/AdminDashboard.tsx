@@ -88,6 +88,7 @@ export const AdminDashboard: React.FC = () => {
     theme,
     adminSubTab,
     setAdminSubTab,
+    requestOpenSettings,
     isAddServiceOpen,
     setIsAddServiceOpen,
     isFollowupModalOpen,
@@ -101,6 +102,8 @@ export const AdminDashboard: React.FC = () => {
     resolveFollowupTask,
     addFollowupTask,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     services,
     setActiveServiceId,
     activeServiceId,
@@ -297,13 +300,18 @@ export const AdminDashboard: React.FC = () => {
   );
 
   const handleQuickArrivalCheckin = useCallback(() => {
+    if (!hasScheduledService) {
+      showToast(checkInEligibility.message);
+      setIsAddServiceOpen(true);
+      return;
+    }
     openFilteredDirectory({ department: 'all', group: 'all', displayMode: 'table' });
     showToast(
       members.length > 0
         ? 'Select a member from the live directory to check in.'
         : 'Add members first to begin recording live check-ins.'
     );
-  }, [openFilteredDirectory, showToast, members.length]);
+  }, [hasScheduledService, checkInEligibility.message, setIsAddServiceOpen, openFilteredDirectory, showToast, members.length]);
 
   const handleSelectServiceFromChild = useCallback(
     (svcId: string) => {
@@ -526,7 +534,9 @@ export const AdminDashboard: React.FC = () => {
                           : 'bg-white/50'
                       }`}
                     />
-                    {dashboardAnalytics.activeService.binaryStatus === 'live'
+                    {services.length === 0
+                      ? 'No Service Scheduled'
+                      : dashboardAnalytics.activeService.binaryStatus === 'live'
                       ? 'Live Service'
                       : 'Closed Service'}
                   </span>
@@ -538,11 +548,13 @@ export const AdminDashboard: React.FC = () => {
                   )}
                   <span aria-hidden="true" className="text-white/40">·</span>
                   <span>
-                    {currentService.date
-                      ? formatServiceDate(currentService.date, true)
-                      : 'Current Schedule'}{' '}
-                    · {currentService.startsAt}–{currentService.endsAt} (+
-                    {dashboardAnalytics.activeService.dwellMinutes}m allowance)
+                    {services.length === 0
+                      ? 'Schedule a service to enable member check-ins'
+                      : `${
+                          currentService.date
+                            ? formatServiceDate(currentService.date, true)
+                            : 'Current Schedule'
+                        } · ${currentService.startsAt}–${currentService.endsAt} (+${dashboardAnalytics.activeService.dwellMinutes}m allowance)`}
                   </span>
                 </div>
 
@@ -591,8 +603,10 @@ export const AdminDashboard: React.FC = () => {
 
                   <button
                     type="button"
+                    disabled={!hasScheduledService}
+                    title={hasScheduledService ? 'Check members in' : checkInEligibility.message}
                     onClick={handleQuickArrivalCheckin}
-                    className="inline-flex items-center gap-1.5 bg-white text-[#1D1B3A] hover:bg-white/90 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 bg-white text-[#1D1B3A] hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />
                     <span>Check People In</span>
@@ -1017,7 +1031,7 @@ export const AdminDashboard: React.FC = () => {
                       openFilteredDirectory({ group: grp, department: 'all', displayMode: 'table' })
                     }
                     onSelectService={handleSelectServiceFromChild}
-                    onOpenSettings={() => navigateTab('settings')}
+                    onOpenSettings={() => requestOpenSettings('groups')}
                     onAddMember={() => {
                       setEditingMember(null);
                       setIsAddMemberOpen(true);
@@ -1722,6 +1736,8 @@ export const AdminDashboard: React.FC = () => {
                 checkInPerson(id, 'usher', 95);
               }}
               checkedInIds={checkedInMemberIds}
+              canCheckIn={hasScheduledService}
+              checkInDisabledReason={checkInEligibility.message}
               initialDepartmentFilter={directoryDeptFilter}
               initialGroupFilter={directoryGroupFilter}
               initialDisplayMode={directoryDisplayMode}
@@ -1826,6 +1842,34 @@ export const AdminDashboard: React.FC = () => {
                   className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold cursor-pointer"
                 >
                   Test MoMo Webhook
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div>
+                <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Active SMS Gateway:{' '}
+                </strong>
+                <span className="text-[#666A86] dark:text-[#A9ACC8]">
+                  {systemSettings.smsGatewayProvider} (Sender: {systemSettings.smsSenderId}) · Push Engine:{' '}
+                  {systemSettings.enablePushNotifications ? 'Enabled' : 'Paused'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => requestOpenSettings('proximity')}
+                  className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] cursor-pointer"
+                >
+                  Configure Geofence
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestOpenSettings('gateways')}
+                  className="px-3 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] cursor-pointer"
+                >
+                  Configure Gateways
                 </button>
               </div>
             </div>
@@ -1950,6 +1994,11 @@ export const AdminDashboard: React.FC = () => {
         churchGroups={churchGroups}
         churchName={systemSettings.churchName}
         serviceStartsAt={currentService.startsAt}
+        absenteeThresholdServices={systemSettings.absenteeThresholdServices}
+        smsGatewayProvider={systemSettings.smsGatewayProvider}
+        smsSenderId={systemSettings.smsSenderId}
+        enablePushNotifications={systemSettings.enablePushNotifications}
+        onOpenGatewaySettings={() => requestOpenSettings('gateways')}
         onNotify={showToast}
       />
 
@@ -1958,6 +2007,10 @@ export const AdminDashboard: React.FC = () => {
         onClose={() => setIsFollowupModalOpen(false)}
         followupTasks={followupTasks}
         members={members}
+        absenteeThresholdServices={systemSettings.absenteeThresholdServices}
+        firstTimerFollowupHours={systemSettings.firstTimerFollowupHours}
+        autoAssignCellLeaders={systemSettings.autoAssignCellLeaders}
+        onOpenPastoralSettings={() => requestOpenSettings('pastoral')}
         onResolveTask={resolveFollowupTask}
         onNotify={showToast}
       />
@@ -1966,6 +2019,8 @@ export const AdminDashboard: React.FC = () => {
         isOpen={isNewAssignmentOpen}
         onClose={() => setIsNewAssignmentOpen(false)}
         members={members}
+        churchGroups={churchGroups}
+        systemSettings={systemSettings}
         onCreateTask={(personId, reason, notes) =>
           addFollowupTask(personId, reason, notes || '')
         }

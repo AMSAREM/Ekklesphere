@@ -230,28 +230,38 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
               </div>
             </div>
 
-            <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <button
+                  type="button"
+                  onClick={() => setDeptSortKey('members')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                    deptSortKey === 'members'
+                      ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
+                      : 'text-[#666A86] dark:text-[#A9ACC8]'
+                  }`}
+                >
+                  Sort by Size
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeptSortKey('turnout')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                    deptSortKey === 'turnout'
+                      ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
+                      : 'text-[#666A86] dark:text-[#A9ACC8]'
+                  }`}
+                >
+                  Sort by Turnout %
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={() => setDeptSortKey('members')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
-                  deptSortKey === 'members'
-                    ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8]'
-                }`}
+                onClick={onOpenSettings}
+                className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Sort by Size
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeptSortKey('turnout')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
-                  deptSortKey === 'turnout'
-                    ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
-                    : 'text-[#666A86] dark:text-[#A9ACC8]'
-                }`}
-              >
-                Sort by Turnout %
+                <Settings className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                <span>Manage Departments</span>
               </button>
             </div>
           </div>

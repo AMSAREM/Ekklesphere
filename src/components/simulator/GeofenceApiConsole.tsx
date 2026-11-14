@@ -87,6 +87,8 @@ export const GeofenceApiConsole: React.FC = () => {
     isSessionVerified,
     handleUnauthorizedSession,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     checkInPerson,
     removeCheckIn,
     refreshLivePremise,
@@ -495,14 +497,21 @@ export const GeofenceApiConsole: React.FC = () => {
           (data.status === 'flagged' && !data.flag_reasons?.includes('outside_site'));
 
         if (eventType === 'enter' && isAccepted) {
-          checkInPerson(
-            targetPersonId,
-            'geofence',
-            Math.max(70, Math.min(99, Math.round(100 - liveCoords.accuracy / 3))),
-            `Live GPS Geofence (${data.distance_m ?? 0}m)`
-          );
-          await refreshLivePremise();
-          showToast(`Attendance verified via Live GPS (${data.distance_m ?? 0}m)`);
+          if (data.checkin_recorded === false || data.checkin_blocked_reason || !hasScheduledService) {
+            const blockedMsg = data.checkin_blocked_message || checkInEligibility.message;
+            setStatusFeedback(blockedMsg);
+            showToast(blockedMsg);
+          } else if (
+            checkInPerson(
+              targetPersonId,
+              'geofence',
+              Math.max(70, Math.min(99, Math.round(100 - liveCoords.accuracy / 3))),
+              `Live GPS Geofence (${data.distance_m ?? 0}m)`
+            )
+          ) {
+            await refreshLivePremise();
+            showToast(`Attendance verified via Live GPS (${data.distance_m ?? 0}m)`);
+          }
         } else if (eventType === 'exit') {
           removeCheckIn(targetPersonId);
           await refreshLivePremise();
@@ -571,13 +580,20 @@ export const GeofenceApiConsole: React.FC = () => {
               data.status === 'accepted' ||
               (data.status === 'flagged' && !data.flag_reasons?.includes('outside_site'));
             if (type === 'manual_in' && isAccepted) {
-              checkInPerson(
-                targetPersonId,
-                'geofence',
-                Math.max(70, Math.min(99, Math.round(100 - pos.coords.accuracy / 3))),
-                `Web Live GPS (${data.distance_m ?? 0}m)`
-              );
-              await refreshLivePremise();
+              if (data.checkin_recorded === false || data.checkin_blocked_reason || !hasScheduledService) {
+                const blockedMsg = data.checkin_blocked_message || checkInEligibility.message;
+                setStatusFeedback(blockedMsg);
+                showToast(blockedMsg);
+              } else if (
+                checkInPerson(
+                  targetPersonId,
+                  'geofence',
+                  Math.max(70, Math.min(99, Math.round(100 - pos.coords.accuracy / 3))),
+                  `Web Live GPS (${data.distance_m ?? 0}m)`
+                )
+              ) {
+                await refreshLivePremise();
+              }
             } else if (type === 'manual_out') {
               removeCheckIn(targetPersonId);
               await refreshLivePremise();

@@ -4574,7 +4574,8 @@ class PlatformStore {
 
   public async recordLiveCheckin(
     organizationId: string,
-    record: Omit<LiveCheckinItem, 'tenantId' | 'organizationId'>
+    record: Omit<LiveCheckinItem, 'tenantId' | 'organizationId'>,
+    options?: { bypassWindowCheck?: boolean }
   ): Promise<{ record: LiveCheckinItem; liveCheckins: LiveCheckinItem[] }> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
@@ -4584,41 +4585,77 @@ class PlatformStore {
       organizationId: orgId,
     };
 
+    const rawServiceId = String(fullRecord.serviceInstanceId || '').trim();
+    if (
+      !rawServiceId ||
+      rawServiceId === 'svc-live-main' ||
+      rawServiceId === 'svc-sun-1'
+    ) {
+      const noSvcErr: any = new Error(
+        'No service is scheduled. Please schedule a service before checking in members.'
+      );
+      noSvcErr.status = 400;
+      noSvcErr.code = 'NO_SERVICE_SCHEDULED';
+      throw noSvcErr;
+    }
+
     if (this.supabase) {
-      let resolvedEventId = fullRecord.serviceInstanceId;
-      if (!UUID_REGEX.test(resolvedEventId)) {
-        const { data: existingEvents } = await this.supabase
-          .from('events')
-          .select('id')
-          .eq('organization_id', orgId)
-          .order('start_time', { ascending: false })
-          .limit(1);
-        if (existingEvents && existingEvents.length > 0 && existingEvents[0]?.id) {
-          resolvedEventId = String(existingEvents[0].id);
-        } else {
-          const now = new Date();
-          const end = new Date(now.getTime() + 150 * 60_000);
-          const { data: createdEv, error: createEvErr } = await this.supabase
-            .from('events')
-            .insert({
-              organization_id: orgId,
-              name: 'Sunday Worship Service',
-              start_time: now.toISOString(),
-              end_time: end.toISOString(),
-              dwell_min: 15,
-              status: 'active',
-            })
-            .select('id')
-            .single();
-          if (createEvErr || !createdEv?.id) {
-            throw new Error(
-              `Failed to resolve service event in Supabase: ${createEvErr?.message || 'missing event'}`
-            );
-          }
-          resolvedEventId = String(createdEv.id);
-        }
-        fullRecord.serviceInstanceId = resolvedEventId;
+      if (!UUID_REGEX.test(rawServiceId)) {
+        const noSvcErr: any = new Error(
+          'No service is scheduled. Please schedule a service before checking in members.'
+        );
+        noSvcErr.status = 400;
+        noSvcErr.code = 'NO_SERVICE_SCHEDULED';
+        throw noSvcErr;
       }
+
+      const { data: matchedEvent, error: eventLookupErr } = await this.supabase
+        .from('events')
+        .select('id, name, status, start_time, end_time, dwell_min')
+        .eq('organization_id', orgId)
+        .eq('id', rawServiceId)
+        .maybeSingle();
+
+      if (eventLookupErr) {
+        throw new Error(`Failed to verify scheduled service in Supabase: ${eventLookupErr.message}`);
+      }
+      if (!matchedEvent?.id) {
+        const noSvcErr: any = new Error(
+          'Selected service is not scheduled. Please schedule an active service before checking in members.'
+        );
+        noSvcErr.status = 404;
+        noSvcErr.code = 'NO_SERVICE_SCHEDULED';
+        throw noSvcErr;
+      }
+      const evStatus = String(matchedEvent.status || '').trim().toLowerCase();
+      if (evStatus === 'closed' || evStatus === 'completed' || evStatus === 'cancelled') {
+        const closedErr: any = new Error(
+          `Check-in is closed for "${matchedEvent.name}". Reopen or schedule a live service within its active window first.`
+        );
+        closedErr.status = 400;
+        closedErr.code = 'SERVICE_NOT_OPEN';
+        throw closedErr;
+      }
+      if (!options?.bypassWindowCheck) {
+        const windowResult = resolveServiceWindow({
+          startTimeIso: matchedEvent.start_time,
+          endTimeIso: matchedEvent.end_time,
+          allowanceMinutes: Number(matchedEvent.dwell_min ?? 0) || 0,
+          rawStatus: evStatus || 'active',
+          nowMs: Date.now(),
+        });
+        if (windowResult.status !== 'live') {
+          const closedErr: any = new Error(
+            `Check-in is closed for "${matchedEvent.name}". Reopen or schedule a live service within its active window first.`
+          );
+          closedErr.status = 400;
+          closedErr.code = 'SERVICE_NOT_OPEN';
+          throw closedErr;
+        }
+      }
+
+      const resolvedEventId = String(matchedEvent.id);
+      fullRecord.serviceInstanceId = resolvedEventId;
 
       if (!UUID_REGEX.test(fullRecord.personId)) {
         const { data: matchedMember } = await this.supabase
@@ -4664,6 +4701,46 @@ class PlatformStore {
         throw new Error(`Failed to record live check-in in Supabase: ${error.message}`);
       }
       return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
+    }
+
+    const orgEvents = this.eventsByOrg.get(orgId) || [];
+    const matchedMemEvent = orgEvents.find((ev) => ev.id === rawServiceId);
+    if (!matchedMemEvent) {
+      const noSvcErr: any = new Error(
+        'No service is scheduled. Please schedule a service before checking in members.'
+      );
+      noSvcErr.status = 400;
+      noSvcErr.code = 'NO_SERVICE_SCHEDULED';
+      throw noSvcErr;
+    }
+    const memEvStatus = String(matchedMemEvent.status || '').trim().toLowerCase();
+    if (memEvStatus === 'closed' || memEvStatus === 'completed' || memEvStatus === 'cancelled') {
+      const closedErr: any = new Error(
+        `Check-in is closed for "${matchedMemEvent.name}". Reopen or schedule a live service within its active window first.`
+      );
+      closedErr.status = 400;
+      closedErr.code = 'SERVICE_NOT_OPEN';
+      throw closedErr;
+    }
+    if (!options?.bypassWindowCheck) {
+      const memWindow = resolveServiceWindow({
+        date: matchedMemEvent.date,
+        startsAt: matchedMemEvent.starts_at,
+        endsAt: matchedMemEvent.ends_at,
+        startTimeIso: matchedMemEvent.start_time,
+        endTimeIso: matchedMemEvent.end_time,
+        allowanceMinutes: Number(matchedMemEvent.dwell_min ?? 0) || 0,
+        rawStatus: memEvStatus || 'active',
+        nowMs: Date.now(),
+      });
+      if (memWindow.status !== 'live') {
+        const closedErr: any = new Error(
+          `Check-in is closed for "${matchedMemEvent.name}". Reopen or schedule a live service within its active window first.`
+        );
+        closedErr.status = 400;
+        closedErr.code = 'SERVICE_NOT_OPEN';
+        throw closedErr;
+      }
     }
 
     const list = this.checkinsByOrg.get(orgId) || [];
@@ -5648,6 +5725,9 @@ class PlatformStore {
       dateOfBirth?: string;
       preferredName?: string;
       autoCheckinOptedIn?: boolean;
+      groupName?: string;
+      homeCellGroup?: string;
+      department?: string;
     },
     fallbackName?: string
   ): Promise<Record<string, any>> {
@@ -5668,7 +5748,9 @@ class PlatformStore {
           dateOfBirth: updates.dateOfBirth,
           imageUrl: updates.imageUrl || undefined,
           autoCheckinOptedIn: updates.autoCheckinOptedIn ?? true,
-          groupName: 'General Congregation',
+          groupName: updates.groupName || updates.homeCellGroup || 'General Congregation',
+          homeCellGroup: updates.homeCellGroup || updates.groupName || 'General Congregation',
+          department: updates.department || 'General Congregation',
           status: 'member',
         },
         { skipAutoCredentials: true }
@@ -5683,6 +5765,9 @@ class PlatformStore {
     if (updates.autoCheckinOptedIn !== undefined) {
       safeUpdates.autoCheckinOptedIn = Boolean(updates.autoCheckinOptedIn);
     }
+    if (updates.groupName !== undefined) safeUpdates.groupName = updates.groupName;
+    if (updates.homeCellGroup !== undefined) safeUpdates.homeCellGroup = updates.homeCellGroup;
+    if (updates.department !== undefined) safeUpdates.department = updates.department;
 
     return this.updateMember(organizationId, String(matched.id), safeUpdates);
   }

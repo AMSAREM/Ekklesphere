@@ -26,9 +26,15 @@ import {
   ImageOff,
   Copy,
   Check,
+  Settings,
 } from 'lucide-react';
 import { Person, MEMBERSHIP_TABLE_HEADERS } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { useEkklesphere } from '../../context/EkklesphereContext';
+import {
+  mergeSelectableCellGroups,
+  mergeSelectableDepartments,
+} from '../../utils/settingsConnections';
 import {
   getExternalImageOpenUrl,
   getImageFallbackUrls,
@@ -44,6 +50,8 @@ interface MemberDirectoryTableProps {
   onOpenImportModal: () => void;
   onCheckinMember: (id: string) => void;
   checkedInIds: Set<string>;
+  canCheckIn?: boolean;
+  checkInDisabledReason?: string;
   initialDepartmentFilter?: string | null;
   initialGroupFilter?: string | null;
   initialDisplayMode?: 'table' | 'photos';
@@ -57,10 +65,13 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   onOpenImportModal,
   onCheckinMember,
   checkedInIds,
+  canCheckIn = true,
+  checkInDisabledReason,
   initialDepartmentFilter,
   initialGroupFilter,
   initialDisplayMode,
 }) => {
+  const { churchGroups, requestOpenSettings } = useEkklesphere();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>(
@@ -188,23 +199,19 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
     setVisibleColumns(updated);
   };
 
-  // Distinct groups & departments
-  const cellGroups = useMemo(() => {
-    const set = new Set<string>();
-    members.forEach((m) => {
-      if (m.homeCellGroup) set.add(m.homeCellGroup);
-      if (m.groupName) set.add(m.groupName);
-    });
-    return Array.from(set).filter(Boolean);
-  }, [members]);
+  // Distinct groups & departments synced with Settings churchGroups
+  const cellGroups = useMemo(
+    () => mergeSelectableCellGroups(churchGroups, members),
+    [churchGroups, members]
+  );
 
-  const departments = useMemo(() => {
-    const set = new Set<string>();
-    members.forEach((m) => {
-      if (m.department) set.add(m.department);
-    });
-    return Array.from(set).filter(Boolean);
-  }, [members]);
+  const departments = useMemo(
+    () =>
+      mergeSelectableDepartments(churchGroups, members).filter(
+        (d) => d.toLowerCase() !== 'general congregation' || members.some((m) => !m.department || m.department.toLowerCase() === 'general congregation')
+      ),
+    [churchGroups, members]
+  );
 
   const uploadedPhotosCount = useMemo(
     () => members.filter((m) => Boolean(m.imageUrl && m.imageUrl.trim().length > 0)).length,
@@ -485,6 +492,16 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={() => requestOpenSettings('groups')}
+            title="Add or edit ministries, departments & cell groups in Settings"
+            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center gap-1 hover:border-[#6D5CF2]/50 transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Manage Groups</span>
+          </button>
 
           {/* Column Picker Dropdown */}
           <div className="relative">
@@ -1001,13 +1018,21 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       <td className="py-3 px-4 text-right sticky right-0 bg-white/95 dark:bg-[#1D1D3D]/95 backdrop-blur-xs shadow-[-6px_0_12px_rgba(0,0,0,0.03)]">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            type="button"
+                            disabled={!canCheckIn}
                             onClick={() => onCheckinMember(member.id)}
-                            className={`p-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            className={`p-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
                               isCheckedIn
                                 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
                                 : 'text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55]'
                             }`}
-                            title={isCheckedIn ? 'Checked in today' : 'Check in to current service'}
+                            title={
+                              !canCheckIn
+                                ? checkInDisabledReason || 'No service scheduled for check-in'
+                                : isCheckedIn
+                                ? 'Checked in today'
+                                : 'Check in to current service'
+                            }
                           >
                             <CheckSquare className="w-3.5 h-3.5" />
                           </button>

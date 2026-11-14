@@ -42,6 +42,8 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
     attendanceRecords,
     showToast,
     currentService,
+    hasScheduledService,
+    checkInEligibility,
     services,
     churchGroups,
     systemSettings,
@@ -95,6 +97,11 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   };
 
   const handleProcessScan = (targetMember: Person) => {
+    if (!hasScheduledService || !currentService.id) {
+      showToast(checkInEligibility.message);
+      return;
+    }
+
     setIsScanning(false);
     playScanBeep();
 
@@ -102,11 +109,21 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
     const isAlreadyCheckedIn = attendanceRecords.some(
       (r) =>
         r.personId === targetMember.id &&
-        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
+        (r.serviceInstanceId === currentService.id ||
+          (!r.serviceInstanceId && services.length === 1))
     );
 
     if (!isAlreadyCheckedIn) {
-      checkInPerson(targetMember.id, 'posted_qr', 98, `Scanned in ${fellowshipContext}`);
+      const started = checkInPerson(
+        targetMember.id,
+        'posted_qr',
+        98,
+        `Scanned in ${fellowshipContext}`
+      );
+      if (!started) {
+        setIsScanning(true);
+        return;
+      }
     }
 
     setScannedMember(targetMember);
@@ -231,6 +248,16 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           {activeMode === 'scanner' && (
             <div className="space-y-4">
+              {!hasScheduledService && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-2xl bg-amber-500/15 border border-amber-400/35 text-amber-200 text-xs flex items-start gap-2"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
+                  <span>{checkInEligibility.message}</span>
+                </div>
+              )}
+
               {/* Event / Fellowship Gathering Target Pill */}
               <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-2xl bg-white/5 border border-white/10 text-xs">
                 <span className="text-slate-400 text-[11px] font-semibold">Gathering:</span>
@@ -257,10 +284,14 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 onScan={handleDecodedString}
                 soundEnabled={soundEnabled}
                 onToggleSound={() => setSoundEnabled(!soundEnabled)}
-                isActive={activeMode === 'scanner' && isScanning && !scannedMember}
+                isActive={hasScheduledService && activeMode === 'scanner' && isScanning && !scannedMember}
                 className="aspect-4/3 w-full"
                 reticleSize="md"
-                instructionsText={`Align member QR pass for ${fellowshipContext}`}
+                instructionsText={
+                  hasScheduledService
+                    ? `Align member QR pass for ${fellowshipContext}`
+                    : 'Check-in paused until a service is scheduled'
+                }
               />
 
               {/* SCAN RESULT CONFIRMATION CARD (when a member is scanned) */}
@@ -356,16 +387,21 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 {/* Carousel of available members */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                   {availableMembers.slice(0, 9).map((member) => {
-                    const isChecked = attendanceRecords.some(
-                      (r) =>
-                        r.personId === member.id &&
-                        (r.serviceInstanceId === currentService.id || !r.serviceInstanceId)
-                    );
+                    const isChecked =
+                      Boolean(currentService.id) &&
+                      attendanceRecords.some(
+                        (r) =>
+                          r.personId === member.id &&
+                          (r.serviceInstanceId === currentService.id ||
+                            (!r.serviceInstanceId && services.length === 1))
+                      );
                     return (
                       <button
                         key={member.id}
+                        disabled={!hasScheduledService}
+                        title={hasScheduledService ? 'Scan member badge' : checkInEligibility.message}
                         onClick={() => handleProcessScan(member)}
-                        className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-left transition-all group cursor-pointer flex flex-col justify-between"
+                        className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 disabled:opacity-45 disabled:cursor-not-allowed border border-white/10 text-left transition-all group cursor-pointer flex flex-col justify-between"
                       >
                         <div className="flex items-center justify-between mb-1">
                           <MemberAvatar
