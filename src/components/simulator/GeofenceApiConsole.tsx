@@ -155,14 +155,25 @@ export const GeofenceApiConsole: React.FC = () => {
     return Math.round(R * c * 10) / 10;
   }
 
+  const getConsoleAuthHeaders = (withJsonContentType = false): HeadersInit => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    return {
+      ...(withJsonContentType ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
   // Fetch status, events, shifts, and sites
   const fetchData = async () => {
+    const authHeaders = getConsoleAuthHeaders(false);
     try {
       const [resHealth, resEvents, resShifts, resSites] = await Promise.all([
         fetch('/api/health').catch(() => null),
-        fetch('/api/attendance/raw-events').catch(() => null),
-        fetch('/api/attendance/shifts').catch(() => null),
-        fetch('/api/attendance/sites').catch(() => null),
+        fetch('/api/attendance/raw-events', { headers: authHeaders }).catch(() => null),
+        fetch('/api/attendance/shifts', { headers: authHeaders }).catch(() => null),
+        fetch('/api/attendance/sites', { headers: authHeaders }).catch(() => null),
       ]);
 
       if (resHealth?.ok) {
@@ -190,7 +201,7 @@ export const GeofenceApiConsole: React.FC = () => {
     fetchData();
     const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentUser?.token, currentUser?.organization_id]);
 
   // Cleanup watch on unmount
   useEffect(() => {
@@ -354,7 +365,7 @@ export const GeofenceApiConsole: React.FC = () => {
     try {
       const res = await fetch('/api/campus-premise/resolve-link', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getConsoleAuthHeaders(true),
         body: JSON.stringify({ input: sharedMapLinkInput.trim() }),
       });
       const data = await res.json();
@@ -454,7 +465,7 @@ export const GeofenceApiConsole: React.FC = () => {
 
       const res = await fetch('/api/attendance/events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getConsoleAuthHeaders(true),
         body: JSON.stringify(payload),
       });
 
@@ -532,7 +543,7 @@ export const GeofenceApiConsole: React.FC = () => {
 
           const res = await fetch('/api/attendance/events', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getConsoleAuthHeaders(true),
             body: JSON.stringify(payload),
           });
 
@@ -583,7 +594,7 @@ export const GeofenceApiConsole: React.FC = () => {
     try {
       const res = await fetch('/api/attendance/auto-close', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getConsoleAuthHeaders(true),
         body: JSON.stringify({ maxHours: 12 }),
       });
       const data = await res.json();

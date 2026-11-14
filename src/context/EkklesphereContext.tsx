@@ -221,7 +221,7 @@ interface EkklesphereContextType {
   ) => Promise<Person[]>;
   updateMember: (memberId: string, updates: Partial<Person>) => Promise<Person>;
   deleteMember: (memberId: string) => Promise<void>;
-  updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => void;
+  updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => Promise<void>;
 
   // System Settings & Live Church Premise Location (Supabase Postgres RLS)
   systemSettings: SystemSettings;
@@ -288,8 +288,8 @@ interface EkklesphereContextType {
 
   // Follow-up & Pastoral Care
   followupTasks: FollowupTask[];
-  resolveFollowupTask: (taskId: string, outcome: string) => void;
-  addFollowupTask: (personId: string, reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual', notes: string) => void;
+  resolveFollowupTask: (taskId: string, outcome: string) => Promise<void>;
+  addFollowupTask: (personId: string, reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual', notes: string) => Promise<void>;
 
   // Member App States
   memberConsents: {
@@ -299,9 +299,9 @@ interface EkklesphereContextType {
     email: boolean;
   };
   memberRsvps: Record<string, boolean>;
-  toggleRsvp: (eventName: string) => void;
+  toggleRsvp: (eventName: string, eventId?: string) => Promise<void>;
   donations: Donation[];
-  submitDonation: (amountGhs: number, fund: string, method: 'MTN MoMo' | 'Telecel Cash' | 'Card') => void;
+  submitDonation: (amountGhs: number, fund: string, method: 'MTN MoMo' | 'Telecel Cash' | 'Card') => Promise<boolean>;
   churchWallPosts: ChurchWallPost[];
   refreshChurchWallPosts: () => Promise<void>;
   addChurchWallPost: (input: {
@@ -928,6 +928,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setServices([]);
     setAttendanceRecords([]);
     setAuditLogs([]);
+    setDonations([]);
+    setFollowupTasks([]);
+    setMemberConsents({ autoCheckin: true, push: true, sms: false, email: true });
+    setMemberRsvps({});
     setPushSubscribersCount(0);
     try {
       signOutSupabaseBrowser().catch(() => {});
@@ -1390,6 +1394,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setServices([]);
       setChurchGroups([]);
       setAttendanceRecords([]);
+      setDonations([]);
+      setFollowupTasks([]);
+      setMemberConsents({ autoCheckin: true, push: true, sms: false, email: true });
+      setMemberRsvps({});
       if (currentUser) {
         setCurrentUser(null);
       }
@@ -1863,21 +1871,30 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // Check them in immediately
     checkInPerson(savedPerson.id, 'usher', 95, `Visitor registration. Heard via ${howHeard}`);
 
-    // Create visitor follow-up task
-    setFollowupTasks((prev) => [
-      {
-        id: `task-vis-${Date.now()}`,
-        personId: savedPerson!.id,
-        personName: name,
-        groupName: 'Visitors Welcome Team',
-        reason: 'first_timer',
-        assignedToName: systemSettings.seniorPastor || 'Welcome & Pastoral Care Team',
-        status: 'open',
-        dueOn: 'Tomorrow 10:00 AM',
-        createdAt: new Date().toISOString().split('T')[0],
-      },
-      ...prev,
-    ]);
+    // Create visitor follow-up task in Supabase
+    try {
+      const taskRes = await fetch('/api/followup-tasks', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          personId: savedPerson!.id,
+          personName: name,
+          groupName: 'Visitors Welcome Team',
+          reason: 'first_timer',
+          assignedToName: systemSettings.seniorPastor || 'Welcome & Pastoral Care Team',
+          dueOn: 'Tomorrow 10:00 AM',
+          notes: `First-time visitor check-in (${howHeard})`,
+        }),
+      });
+      if (taskRes.ok) {
+        const taskData = await taskRes.json().catch(() => null);
+        if (taskData?.task) {
+          setFollowupTasks((prev) => [taskData.task, ...prev]);
+        }
+      }
+    } catch {
+      // transient network failure ignored
+    }
 
     showToast(`${name} saved to directory! Welcome follow-up task created.`);
   };
@@ -2715,6 +2732,77 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`Service "${svcToDelete?.name || 'Event'}" deleted from database`);
   };
 
+  const refreshDonations = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+    try {
+      const res = await fetch('/api/donations', { headers: getAuthHeaders() });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data?.donations)) {
+          setDonations(data.donations);
+        }
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
+  const refreshFollowupTasks = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    const role = currentUser?.verifiedRole || currentUser?.role;
+    const isStaff =
+      role === 'admin' ||
+      role === 'pastor' ||
+      role === 'usher' ||
+      role === 'group_leader' ||
+      role === 'super_admin' ||
+      role === 'creator';
+    if (!token || !isStaff) return;
+    try {
+      const res = await fetch('/api/followup-tasks', { headers: getAuthHeaders() });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data?.tasks)) {
+          setFollowupTasks(data.tasks);
+        }
+      }
+    } catch {
+      // ignore transient network errors
+    }
+  };
+
+  const refreshMemberConsentsAndRsvps = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+    try {
+      const [cRes, rRes] = await Promise.all([
+        fetch('/api/consents/me', { headers: getAuthHeaders() }).catch(() => null),
+        fetch('/api/rsvps/me', { headers: getAuthHeaders() }).catch(() => null),
+      ]);
+      if (cRes?.ok) {
+        const cData = await cRes.json().catch(() => ({}));
+        if (cData?.consents) {
+          setMemberConsents(cData.consents);
+        }
+      }
+      if (rRes?.ok) {
+        const rData = await rRes.json().catch(() => ({}));
+        if (rData?.rsvps && typeof rData.rsvps === 'object') {
+          setMemberRsvps(rData.rsvps);
+        }
+      }
+    } catch {
+      // ignore transient errors
+    }
+  };
+
   useEffect(() => {
     refreshSystemSettings();
     refreshChurchGroups();
@@ -2722,6 +2810,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     refreshLivePremise();
     refreshMembers();
     refreshServices();
+    refreshDonations();
+    refreshFollowupTasks();
+    refreshMemberConsentsAndRsvps();
     const interval = setInterval(refreshLivePremise, 4000);
     return () => clearInterval(interval);
   }, [currentUser?.id, currentUser?.organization_id, currentUser?.token]);
@@ -3139,51 +3230,107 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return count;
   };
 
-  const updateMemberConsent = (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => {
-    setMemberConsents({ autoCheckin, push, sms, email });
+  const updateMemberConsent = async (
+    autoCheckin: boolean,
+    push: boolean,
+    sms: boolean,
+    email: boolean
+  ): Promise<void> => {
+    const previous = memberConsents;
+    const nextConsents = { autoCheckin, push, sms, email };
+    setMemberConsents(nextConsents);
     const targetMemberId = currentUser?.memberId || currentUser?.id;
     if (targetMemberId) {
       setMembers((prev) =>
         prev.map((m) => (m.id === targetMemberId ? { ...m, autoCheckinOptedIn: autoCheckin } : m))
       );
     }
-    showToast(
-      autoCheckin
-        ? 'Auto check-in activated. Location is used only when arriving at church.'
-        : 'Auto check-in deactivated. Background location is stopped.'
-    );
+
+    try {
+      const res = await fetch('/api/consents/me', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(nextConsents),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        setMemberConsents(previous);
+        showToast(errBody?.message || 'Could not save privacy consent preferences to database.');
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (data?.consents) {
+        setMemberConsents(data.consents);
+      }
+      showToast(
+        autoCheckin
+          ? 'Auto check-in activated. Location is used only when arriving at church.'
+          : 'Auto check-in deactivated. Background location is stopped.'
+      );
+    } catch {
+      setMemberConsents(previous);
+      showToast('Network error saving privacy consent preferences.');
+    }
   };
 
-  const toggleRsvp = (eventName: string) => {
-    setMemberRsvps((prev) => {
-      const next = !prev[eventName];
-      showToast(next ? `RSVP confirmed for ${eventName}` : `RSVP removed for ${eventName}`);
-      return { ...prev, [eventName]: next };
-    });
+  const toggleRsvp = async (eventName: string, eventId?: string): Promise<void> => {
+    const nextAttending = !memberRsvps[eventName];
+    try {
+      const res = await fetch('/api/rsvps/me', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          eventTitle: eventName,
+          ...(eventId ? { eventId } : {}),
+          attending: nextAttending,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        showToast(errBody?.message || 'Could not update RSVP in database.');
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data?.rsvps && typeof data.rsvps === 'object') {
+        setMemberRsvps(data.rsvps);
+      } else {
+        setMemberRsvps((prev) => ({ ...prev, [eventName]: nextAttending }));
+      }
+      showToast(nextAttending ? `RSVP confirmed for ${eventName}` : `RSVP removed for ${eventName}`);
+    } catch {
+      showToast('Network error updating event RSVP.');
+    }
   };
 
-  const submitDonation = (
+  const submitDonation = async (
     amountGhs: number,
     fund: string,
     method: 'MTN MoMo' | 'Telecel Cash' | 'Card'
-  ) => {
-    const donorId = currentUser?.memberId || currentUser?.id || 'guest';
-    const donorName = currentUser?.name || 'Member';
-    const newDonation: Donation = {
-      id: `don-${Date.now()}`,
-      personId: donorId,
-      personName: donorName,
-      fundId: fund.toLowerCase().replace(/\s+/g, '-'),
-      fundName: fund,
-      amountMinor: amountGhs * 100,
-      currency: 'GHS',
-      method: method === 'Card' ? 'card' : 'momo',
-      provider: method,
-      status: 'paid',
-      paidAt: new Date().toISOString().split('T')[0],
-    };
-    setDonations((prev) => [newDonation, ...prev]);
-    showToast(`Thank you! GHS ${amountGhs} given to ${fund} via ${method}.`);
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/donations', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          amountGhs,
+          fundName: fund,
+          fundId: fund.toLowerCase().replace(/\s+/g, '-'),
+          provider: method,
+          method: method === 'Card' ? 'card' : 'momo',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.donation) {
+        showToast(data?.message || 'Could not record donation in database.');
+        return false;
+      }
+      setDonations((prev) => [data.donation, ...prev.filter((d) => d.id !== data.donation.id)]);
+      showToast(`Thank you! GHS ${amountGhs} given to ${fund} via ${method}.`);
+      return true;
+    } catch {
+      showToast('Network error submitting donation.');
+      return false;
+    }
   };
 
   const activeWallOrgKey = currentUser?.organization_id || currentUser?.tenant_id || 'default';
@@ -3332,36 +3479,55 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  const resolveFollowupTask = (taskId: string, outcome: string) => {
-    setFollowupTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? { ...t, status: 'resolved', outcome, resolvedAt: new Date().toISOString() }
-          : t
-      )
-    );
-    showToast(`Care task marked resolved: ${outcome}`);
+  const resolveFollowupTask = async (taskId: string, outcome: string): Promise<void> => {
+    try {
+      const res = await fetch(`/api/followup-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ status: 'resolved', outcome }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.task) {
+        showToast(data?.message || 'Could not resolve follow-up task in database.');
+        return;
+      }
+      setFollowupTasks((prev) => prev.map((t) => (t.id === taskId ? data.task : t)));
+      showToast(`Care task marked resolved: ${outcome}`);
+    } catch {
+      showToast('Network error resolving follow-up task.');
+    }
   };
 
-  const addFollowupTask = (
+  const addFollowupTask = async (
     personId: string,
     reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual',
-    _notes: string
-  ) => {
+    notes: string
+  ): Promise<void> => {
     const person = members.find((m) => m.id === personId);
-    const newTask: FollowupTask = {
-      id: `task-${Date.now()}`,
-      personId,
-      personName: person ? `${person.firstName} ${person.lastName}` : 'Member',
-      groupName: person?.groupName || 'General',
-      reason,
-      assignedToName: systemSettings.seniorPastor || currentUser?.name || 'Pastoral Care Team',
-      status: 'open',
-      dueOn: 'In 3 days',
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-    setFollowupTasks((prev) => [newTask, ...prev]);
-    showToast(`Follow-up assignment created for ${newTask.personName}`);
+    try {
+      const res = await fetch('/api/followup-tasks', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          personId,
+          personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
+          groupName: person?.groupName || 'General',
+          reason,
+          assignedToName: systemSettings.seniorPastor || currentUser?.name || 'Pastoral Care Team',
+          dueOn: 'In 3 days',
+          notes,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.task) {
+        showToast(data?.message || 'Could not save follow-up task to database.');
+        return;
+      }
+      setFollowupTasks((prev) => [data.task, ...prev.filter((t) => t.id !== data.task.id)]);
+      showToast(`Follow-up assignment created for ${data.task.personName}`);
+    } catch {
+      showToast('Network error creating follow-up task.');
+    }
   };
 
   // Proximity simulator engine

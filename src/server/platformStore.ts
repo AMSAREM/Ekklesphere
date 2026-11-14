@@ -27,6 +27,10 @@ import type {
   ConsoleDashboardSummary,
   ConsolePlan,
   DataPrivacyRequest,
+  Donation,
+  FollowupReason,
+  FollowupStatus,
+  FollowupTask,
   LandingPageConfig,
   LicenseEvaluationResult,
   LicenseOverrides,
@@ -404,6 +408,23 @@ class PlatformStore {
   private membersByOrg = new Map<string, Record<string, any>[]>();
   private eventsByOrg = new Map<string, Record<string, any>[]>();
   private pushSubsByOrg = new Map<string, PushSubscriptionItem[]>();
+  private donationsByOrg = new Map<string, Donation[]>();
+  private followupTasksByOrg = new Map<string, FollowupTask[]>();
+  private memberConsentsByOrg = new Map<
+    string,
+    Record<
+      string,
+      {
+        autoCheckin: boolean;
+        push: boolean;
+        sms: boolean;
+        email: boolean;
+        memberId?: string;
+        updatedAt: string;
+      }
+    >
+  >();
+  private eventRsvpsByOrg = new Map<string, Record<string, boolean>>();
   private legacyTenantsForDryRun: Array<{ id: string; name: string; slug: string }> = [];
   private userCredentials = new Map<string, UserCredentialRecord>();
 
@@ -503,6 +524,10 @@ class PlatformStore {
     this.membersByOrg.clear();
     this.eventsByOrg.clear();
     this.pushSubsByOrg.clear();
+    this.donationsByOrg.clear();
+    this.followupTasksByOrg.clear();
+    this.memberConsentsByOrg.clear();
+    this.eventRsvpsByOrg.clear();
     this.legacyTenantsForDryRun = [];
     this.userCredentials.clear();
     this.customSupabaseClientOverride = null;
@@ -5490,20 +5515,42 @@ class PlatformStore {
       imageUrl?: string | null;
       dateOfBirth?: string;
       preferredName?: string;
-    }
+      autoCheckinOptedIn?: boolean;
+    },
+    fallbackName?: string
   ): Promise<Record<string, any>> {
-    const matched = await this.getMemberProfileForSession(organizationId, userId, email);
+    let matched = await this.getMemberProfileForSession(organizationId, userId, email);
     if (!matched) {
-      const notFoundErr: any = new Error('Member profile not found in your organisation.');
-      notFoundErr.code = 'MEMBER_PROFILE_NOT_FOUND';
-      notFoundErr.status = 404;
-      throw notFoundErr;
+      const cleanName = (fallbackName || email?.split('@')[0] || 'Church Member').trim();
+      const parts = cleanName.split(/\s+/).filter(Boolean);
+      const firstName = parts[0] || 'Church';
+      const lastName = parts.slice(1).join(' ') || 'Member';
+      matched = await this.createMember(
+        organizationId,
+        {
+          id: UUID_REGEX.test(userId) ? userId : undefined,
+          firstName,
+          lastName,
+          email: email ? email.trim().toLowerCase() : undefined,
+          preferredName: updates.preferredName || cleanName,
+          dateOfBirth: updates.dateOfBirth,
+          imageUrl: updates.imageUrl || undefined,
+          autoCheckinOptedIn: updates.autoCheckinOptedIn ?? true,
+          groupName: 'General Congregation',
+          status: 'member',
+        },
+        { skipAutoCredentials: true }
+      );
+      return matched;
     }
 
     const safeUpdates: Record<string, any> = {};
     if (updates.imageUrl !== undefined) safeUpdates.imageUrl = updates.imageUrl || '';
     if (updates.dateOfBirth !== undefined) safeUpdates.dateOfBirth = updates.dateOfBirth;
     if (updates.preferredName !== undefined) safeUpdates.preferredName = updates.preferredName;
+    if (updates.autoCheckinOptedIn !== undefined) {
+      safeUpdates.autoCheckinOptedIn = Boolean(updates.autoCheckinOptedIn);
+    }
 
     return this.updateMember(organizationId, String(matched.id), safeUpdates);
   }
@@ -5582,6 +5629,10 @@ class PlatformStore {
 
       await safeDeleteMemberDep('attendance', { organization_id: orgId, member_id: memberId });
       await safeDeleteMemberDep('attendance_records', { tenant_id: orgId, person_id: memberId });
+      await safeDeleteMemberDep('donations', { organization_id: orgId, member_id: memberId });
+      await safeDeleteMemberDep('followup_tasks', { organization_id: orgId, member_id: memberId });
+      await safeDeleteMemberDep('member_consents', { organization_id: orgId, member_id: memberId });
+      await safeDeleteMemberDep('event_rsvps', { organization_id: orgId, member_id: memberId });
       await safeDeleteMemberDep('push_subscriptions', { organization_id: orgId, person_id: memberId });
       await safeDeleteMemberDep('church_wall_posts', { organization_id: orgId, author_id: memberId });
       await safeDeleteMemberDep('church_wall_posts', { organization_id: orgId, target_member_id: memberId });
@@ -5628,6 +5679,16 @@ class PlatformStore {
     this.pushSubsByOrg.set(
       orgId,
       existingSubs.filter((s) => s.personId !== memberId)
+    );
+    const existingDonations = this.donationsByOrg.get(orgId) || [];
+    this.donationsByOrg.set(
+      orgId,
+      existingDonations.filter((d) => d.personId !== memberId)
+    );
+    const existingFollowups = this.followupTasksByOrg.get(orgId) || [];
+    this.followupTasksByOrg.set(
+      orgId,
+      existingFollowups.filter((t) => t.personId !== memberId)
     );
     for (const [credId, cred] of this.userCredentials.entries()) {
       if (cred.organizationId.toLowerCase() === orgId && cred.memberId === memberId && !cred.isCreator) {
@@ -6642,7 +6703,12 @@ class PlatformStore {
         ['attendance', 'organization_id'],
         ['attendance_records', 'tenant_id'],
         ['attendance_events', 'organization_id'],
+        ['donations', 'organization_id'],
         ['donations', 'tenant_id'],
+        ['followup_tasks', 'organization_id'],
+        ['followup_tasks', 'tenant_id'],
+        ['member_consents', 'organization_id'],
+        ['event_rsvps', 'organization_id'],
         ['service_instances', 'tenant_id'],
         ['services', 'tenant_id'],
         ['events', 'organization_id'],
@@ -6729,6 +6795,10 @@ class PlatformStore {
     this.membersByOrg.delete(orgId);
     this.eventsByOrg.delete(orgId);
     this.pushSubsByOrg.delete(orgId);
+    this.donationsByOrg.delete(orgId);
+    this.followupTasksByOrg.delete(orgId);
+    this.memberConsentsByOrg.delete(orgId);
+    this.eventRsvpsByOrg.delete(orgId);
     for (const [credId, cred] of this.userCredentials.entries()) {
       if (cred.organizationId.toLowerCase() === orgId && !cred.isCreator) {
         this.userCredentials.delete(credId);
@@ -8472,6 +8542,924 @@ class PlatformStore {
       dryRun: false,
       organizationsInserted: toInsert.length,
       completedAt: new Date().toISOString(),
+    };
+  }
+
+  // ===========================================================================
+  // DONATIONS / MOBILE GIVING LEDGER (ORG-SCOPED)
+  // ===========================================================================
+
+  private mapSupabaseDonationRow(row: Record<string, any>): Donation {
+    const fundName = String(row.fund_name || 'General Tithe');
+    const fundId = String(row.fund_key || row.fund_id || fundName.toLowerCase().replace(/\s+/g, '-'));
+    const rawProvider = String(row.provider || 'MTN MoMo');
+    const provider: Donation['provider'] =
+      rawProvider === 'Telecel Cash' || rawProvider === 'Card' || rawProvider === 'Cash'
+        ? rawProvider
+        : 'MTN MoMo';
+    const rawMethod = String(row.method || 'momo');
+    const method: Donation['method'] =
+      rawMethod === 'card' || rawMethod === 'cash' || rawMethod === 'bank' ? rawMethod : 'momo';
+    const rawStatus = String(row.status || 'paid');
+    const status: Donation['status'] =
+      rawStatus === 'pending' || rawStatus === 'failed' ? rawStatus : 'paid';
+    const paidIso = String(row.paid_at || row.created_at || new Date().toISOString());
+
+    return {
+      id: String(row.id),
+      personId: row.member_id
+        ? String(row.member_id)
+        : row.person_id
+        ? String(row.person_id)
+        : undefined,
+      personName: row.person_name ? String(row.person_name) : undefined,
+      fundId,
+      fundName,
+      amountMinor: Number(row.amount_minor || 0),
+      currency: 'GHS',
+      method,
+      provider,
+      status,
+      paidAt: paidIso.slice(0, 10),
+    };
+  }
+
+  public async listDonations(
+    organizationId: string,
+    filters?: { personId?: string }
+  ): Promise<Donation[]> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) return [];
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return [];
+      const { data, error } = await this.supabase
+        .from('donations')
+        .select('*')
+        .or(`organization_id.eq.${orgId},tenant_id.eq.${orgId}`)
+        .order('paid_at', { ascending: false })
+        .limit(250);
+
+      if (error) {
+        if (/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+          return [];
+        }
+        throw new Error(`Failed to fetch donations from Supabase: ${error.message}`);
+      }
+
+      const mapped = (data || []).map((row) => this.mapSupabaseDonationRow(row));
+      if (filters?.personId) {
+        return mapped.filter((d) => d.personId === filters.personId);
+      }
+      return mapped;
+    }
+
+    const list = [...(this.donationsByOrg.get(orgId) || [])];
+    if (filters?.personId) {
+      return list.filter((d) => d.personId === filters.personId);
+    }
+    return list;
+  }
+
+  public async createDonation(
+    organizationId: string,
+    input: {
+      personId?: string;
+      personName?: string;
+      fundName: string;
+      fundId?: string;
+      amountMinor: number;
+      method: 'momo' | 'card' | 'cash' | 'bank';
+      provider: 'MTN MoMo' | 'Telecel Cash' | 'Card' | 'Cash';
+      status?: 'pending' | 'paid' | 'failed';
+      paidAt?: string;
+    }
+  ): Promise<Donation> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const cleanFundName = (input.fundName || 'Tithe').trim();
+    const cleanFundKey = (input.fundId || cleanFundName.toLowerCase().replace(/\s+/g, '-')).trim();
+    const nowIso = new Date().toISOString();
+    const paidAtIso = input.paidAt ? new Date(input.paidAt).toISOString() : nowIso;
+    const amountMinor = Math.max(1, Math.round(Number(input.amountMinor || 0)));
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) {
+        throw new Error('Valid organisation ID is required to record donations.');
+      }
+      const memberUuid = input.personId && UUID_REGEX.test(input.personId) ? input.personId : null;
+      const insertRow: Record<string, unknown> = {
+        id: randomUUID(),
+        organization_id: orgId,
+        member_id: memberUuid,
+        person_name: input.personName || 'Member',
+        fund_key: cleanFundKey,
+        fund_name: cleanFundName,
+        amount_minor: amountMinor,
+        currency: 'GHS',
+        method: input.method,
+        provider: input.provider,
+        status: input.status || 'paid',
+        paid_at: paidAtIso,
+      };
+
+      const { data, error } = await this.supabase
+        .from('donations')
+        .insert(insertRow)
+        .select('*')
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to record donation in Supabase: ${error.message}`);
+      }
+      return this.mapSupabaseDonationRow(data);
+    }
+
+    const created: Donation = {
+      id: randomUUID(),
+      personId: input.personId,
+      personName: input.personName || 'Member',
+      fundId: cleanFundKey,
+      fundName: cleanFundName,
+      amountMinor,
+      currency: 'GHS',
+      method: input.method,
+      provider: input.provider,
+      status: input.status || 'paid',
+      paidAt: paidAtIso.slice(0, 10),
+    };
+    const existing = this.donationsByOrg.get(orgId) || [];
+    this.donationsByOrg.set(orgId, [created, ...existing]);
+    return created;
+  }
+
+  // ===========================================================================
+  // PASTORAL CARE FOLLOW-UP TASKS (ORG-SCOPED)
+  // ===========================================================================
+
+  private mapSupabaseFollowupRow(row: Record<string, any>): FollowupTask {
+    const rawReason = String(row.reason || 'manual');
+    const reason: FollowupReason =
+      rawReason === 'absent_2' ||
+      rawReason === 'absent_3' ||
+      rawReason === 'first_timer' ||
+      rawReason === 'manual'
+        ? rawReason
+        : 'manual';
+    const rawStatus = String(row.status || 'open');
+    const status: FollowupStatus =
+      rawStatus === 'contacted' || rawStatus === 'resolved' || rawStatus === 'dismissed'
+        ? rawStatus
+        : 'open';
+    const createdIso = String(row.created_at || new Date().toISOString());
+
+    return {
+      id: String(row.id),
+      personId: String(row.member_id || row.person_id || ''),
+      personName: String(row.person_name || 'Member'),
+      groupName: String(row.group_name || 'General'),
+      reason,
+      assignedToName: String(row.assigned_to_name || 'Pastoral Care Team'),
+      status,
+      dueOn: String(row.due_label || row.due_on || 'In 3 days'),
+      outcome: row.outcome ? String(row.outcome) : undefined,
+      createdAt: createdIso.slice(0, 10),
+      resolvedAt: row.resolved_at ? String(row.resolved_at) : undefined,
+    };
+  }
+
+  public async listFollowupTasks(organizationId: string): Promise<FollowupTask[]> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) return [];
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return [];
+      const { data, error } = await this.supabase
+        .from('followup_tasks')
+        .select('*')
+        .or(`organization_id.eq.${orgId},tenant_id.eq.${orgId}`)
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (error) {
+        if (/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+          return [];
+        }
+        throw new Error(`Failed to fetch follow-up tasks from Supabase: ${error.message}`);
+      }
+
+      return (data || []).map((row) => this.mapSupabaseFollowupRow(row));
+    }
+
+    return [...(this.followupTasksByOrg.get(orgId) || [])];
+  }
+
+  public async createFollowupTask(
+    organizationId: string,
+    input: {
+      personId: string;
+      personName?: string;
+      groupName?: string;
+      reason: FollowupReason;
+      assignedToName?: string;
+      dueOn?: string;
+      notes?: string;
+    }
+  ): Promise<FollowupTask> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const orgMembers = await this.getMembers(orgId);
+    const matchedMember = orgMembers.find((m) => String(m.id) === input.personId);
+    const resolvedPersonName =
+      (input.personName || '').trim() ||
+      (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : 'Member');
+    const resolvedGroupName =
+      (input.groupName || '').trim() || matchedMember?.groupName || 'General';
+    const resolvedAssignee = (input.assignedToName || '').trim() || 'Pastoral Care Team';
+    const resolvedDueLabel = (input.dueOn || '').trim() || (input.reason === 'first_timer' ? 'Tomorrow 10:00 AM' : 'In 3 days');
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) {
+        throw new Error('Valid organisation ID is required for follow-up tasks.');
+      }
+      const memberUuid = UUID_REGEX.test(input.personId) ? input.personId : null;
+      const insertRow: Record<string, unknown> = {
+        id: randomUUID(),
+        organization_id: orgId,
+        member_id: memberUuid,
+        person_name: resolvedPersonName,
+        group_name: resolvedGroupName,
+        reason: input.reason,
+        assigned_to_name: resolvedAssignee,
+        status: 'open',
+        due_label: resolvedDueLabel,
+        notes: input.notes || null,
+      };
+
+      const { data, error } = await this.supabase
+        .from('followup_tasks')
+        .insert(insertRow)
+        .select('*')
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to create follow-up task in Supabase: ${error.message}`);
+      }
+      return this.mapSupabaseFollowupRow(data);
+    }
+
+    const created: FollowupTask = {
+      id: randomUUID(),
+      personId: input.personId,
+      personName: resolvedPersonName,
+      groupName: resolvedGroupName,
+      reason: input.reason,
+      assignedToName: resolvedAssignee,
+      status: 'open',
+      dueOn: resolvedDueLabel,
+      createdAt: new Date().toISOString().slice(0, 10),
+    };
+    const existing = this.followupTasksByOrg.get(orgId) || [];
+    this.followupTasksByOrg.set(orgId, [created, ...existing]);
+    return created;
+  }
+
+  public async updateFollowupTask(
+    organizationId: string,
+    taskId: string,
+    patch: {
+      status?: FollowupStatus;
+      outcome?: string;
+      assignedToName?: string;
+      notes?: string;
+    }
+  ): Promise<FollowupTask> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const nowIso = new Date().toISOString();
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(taskId)) {
+        const err: any = new Error('Follow-up task not found.');
+        err.status = 404;
+        throw err;
+      }
+
+      const updateFields: Record<string, unknown> = {};
+      if (patch.status !== undefined) {
+        updateFields.status = patch.status;
+        if (patch.status === 'resolved' || patch.status === 'dismissed') {
+          updateFields.resolved_at = nowIso;
+        }
+      }
+      if (patch.outcome !== undefined) updateFields.outcome = patch.outcome;
+      if (patch.assignedToName !== undefined) updateFields.assigned_to_name = patch.assignedToName;
+      if (patch.notes !== undefined) updateFields.notes = patch.notes;
+
+      const { data, error } = await this.supabase
+        .from('followup_tasks')
+        .update(updateFields)
+        .eq('organization_id', orgId)
+        .eq('id', taskId)
+        .select('*')
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to update follow-up task in Supabase: ${error.message}`);
+      }
+      if (!data) {
+        const err: any = new Error('Follow-up task not found.');
+        err.status = 404;
+        throw err;
+      }
+      return this.mapSupabaseFollowupRow(data);
+    }
+
+    const list = this.followupTasksByOrg.get(orgId) || [];
+    const idx = list.findIndex((t) => t.id === taskId);
+    if (idx < 0) {
+      const err: any = new Error('Follow-up task not found.');
+      err.status = 404;
+      throw err;
+    }
+    const updated: FollowupTask = {
+      ...list[idx],
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(patch.outcome !== undefined ? { outcome: patch.outcome } : {}),
+      ...(patch.assignedToName !== undefined ? { assignedToName: patch.assignedToName } : {}),
+      ...(patch.status === 'resolved' || patch.status === 'dismissed'
+        ? { resolvedAt: nowIso }
+        : {}),
+    };
+    list[idx] = updated;
+    this.followupTasksByOrg.set(orgId, list);
+    return updated;
+  }
+
+  public async deleteFollowupTask(organizationId: string, taskId: string): Promise<void> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(taskId)) {
+        const err: any = new Error('Follow-up task not found.');
+        err.status = 404;
+        throw err;
+      }
+      const { data, error } = await this.supabase
+        .from('followup_tasks')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('id', taskId)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        throw new Error(`Failed to delete follow-up task in Supabase: ${error.message}`);
+      }
+      if (!data) {
+        const err: any = new Error('Follow-up task not found.');
+        err.status = 404;
+        throw err;
+      }
+      return;
+    }
+
+    const list = this.followupTasksByOrg.get(orgId) || [];
+    if (!list.some((t) => t.id === taskId)) {
+      const err: any = new Error('Follow-up task not found.');
+      err.status = 404;
+      throw err;
+    }
+    this.followupTasksByOrg.set(
+      orgId,
+      list.filter((t) => t.id !== taskId)
+    );
+  }
+
+  // ===========================================================================
+  // MEMBER CONSENTS & EVENT RSVPS (ORG + USER SCOPED)
+  // ===========================================================================
+
+  public async getMemberConsents(
+    organizationId: string,
+    userId: string,
+    email?: string
+  ): Promise<{ autoCheckin: boolean; push: boolean; sms: boolean; email: boolean }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const defaultConsents = { autoCheckin: true, push: true, sms: false, email: true };
+    if (!orgId || !userId) return defaultConsents;
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return defaultConsents;
+      const { data, error } = await this.supabase
+        .from('member_consents')
+        .select('*')
+        .eq('organization_id', orgId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error) {
+        if (/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+          return defaultConsents;
+        }
+        throw new Error(`Failed to fetch member consents from Supabase: ${error.message}`);
+      }
+      if (data) {
+        return {
+          autoCheckin: Boolean(data.auto_checkin),
+          push: Boolean(data.push),
+          sms: Boolean(data.sms),
+          email: Boolean(data.email),
+        };
+      }
+      const profile = await this.getMemberProfileForSession(orgId, userId, email);
+      return {
+        ...defaultConsents,
+        autoCheckin: profile?.autoCheckinOptedIn !== undefined ? Boolean(profile.autoCheckinOptedIn) : true,
+      };
+    }
+
+    const byOrg = this.memberConsentsByOrg.get(orgId) || {};
+    if (byOrg[userId]) {
+      const { autoCheckin, push, sms, email: emailConsent } = byOrg[userId];
+      return { autoCheckin, push, sms, email: emailConsent };
+    }
+    const profile = await this.getMemberProfileForSession(orgId, userId, email);
+    return {
+      ...defaultConsents,
+      autoCheckin: profile?.autoCheckinOptedIn !== undefined ? Boolean(profile.autoCheckinOptedIn) : true,
+    };
+  }
+
+  public async upsertMemberConsents(
+    organizationId: string,
+    userId: string,
+    email: string | undefined,
+    consents: { autoCheckin: boolean; push: boolean; sms: boolean; email: boolean },
+    fallbackName?: string
+  ): Promise<{ autoCheckin: boolean; push: boolean; sms: boolean; email: boolean }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const profile = await this.getMemberProfileForSession(orgId, userId, email);
+    const memberId = profile?.id ? String(profile.id) : undefined;
+    const nowIso = new Date().toISOString();
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) {
+        throw new Error('Valid organisation ID is required to save consents.');
+      }
+      const memberUuid = memberId && UUID_REGEX.test(memberId) ? memberId : null;
+      const { data, error } = await this.supabase
+        .from('member_consents')
+        .upsert(
+          {
+            organization_id: orgId,
+            user_id: userId,
+            member_id: memberUuid,
+            auto_checkin: Boolean(consents.autoCheckin),
+            push: Boolean(consents.push),
+            sms: Boolean(consents.sms),
+            email: Boolean(consents.email),
+            updated_at: nowIso,
+          },
+          { onConflict: 'organization_id,user_id' }
+        )
+        .select('*')
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to persist member consents in Supabase: ${error.message}`);
+      }
+
+      if (memberUuid || email || fallbackName) {
+        await this.updateOwnMemberProfile(
+          orgId,
+          userId,
+          email,
+          { autoCheckinOptedIn: Boolean(consents.autoCheckin) },
+          fallbackName
+        ).catch(() => {});
+      }
+
+      return {
+        autoCheckin: Boolean(data.auto_checkin),
+        push: Boolean(data.push),
+        sms: Boolean(data.sms),
+        email: Boolean(data.email),
+      };
+    }
+
+    const byOrg = this.memberConsentsByOrg.get(orgId) || {};
+    byOrg[userId] = {
+      autoCheckin: Boolean(consents.autoCheckin),
+      push: Boolean(consents.push),
+      sms: Boolean(consents.sms),
+      email: Boolean(consents.email),
+      memberId,
+      updatedAt: nowIso,
+    };
+    this.memberConsentsByOrg.set(orgId, byOrg);
+
+    if (memberId) {
+      await this.updateMember(orgId, memberId, {
+        autoCheckinOptedIn: Boolean(consents.autoCheckin),
+      }).catch(() => {});
+    }
+
+    return {
+      autoCheckin: Boolean(consents.autoCheckin),
+      push: Boolean(consents.push),
+      sms: Boolean(consents.sms),
+      email: Boolean(consents.email),
+    };
+  }
+
+  public async listEventRsvps(organizationId: string, userId: string): Promise<Record<string, boolean>> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId || !userId) return {};
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return {};
+      const { data, error } = await this.supabase
+        .from('event_rsvps')
+        .select('event_title, attending')
+        .eq('organization_id', orgId)
+        .eq('user_id', userId);
+
+      if (error) {
+        if (/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+          return {};
+        }
+        throw new Error(`Failed to fetch event RSVPs from Supabase: ${error.message}`);
+      }
+
+      const map: Record<string, boolean> = {};
+      for (const row of data || []) {
+        if (row.event_title) {
+          map[String(row.event_title)] = Boolean(row.attending);
+        }
+      }
+      return map;
+    }
+
+    const byOrg = this.eventRsvpsByOrg.get(orgId) || {};
+    const prefix = `${userId}::`;
+    const result: Record<string, boolean> = {};
+    for (const [k, val] of Object.entries(byOrg)) {
+      if (k.startsWith(prefix)) {
+        result[k.slice(prefix.length)] = val;
+      }
+    }
+    return result;
+  }
+
+  public async upsertEventRsvp(
+    organizationId: string,
+    userId: string,
+    email: string | undefined,
+    input: { eventTitle: string; eventId?: string; attending: boolean }
+  ): Promise<{ eventTitle: string; attending: boolean; rsvps: Record<string, boolean> }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const eventTitle = (input.eventTitle || '').trim();
+    const profile = await this.getMemberProfileForSession(orgId, userId, email);
+    const memberUuid = profile?.id && UUID_REGEX.test(String(profile.id)) ? String(profile.id) : null;
+    const nowIso = new Date().toISOString();
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) {
+        throw new Error('Valid organisation ID is required to save event RSVPs.');
+      }
+      const { error } = await this.supabase
+        .from('event_rsvps')
+        .upsert(
+          {
+            organization_id: orgId,
+            event_id: input.eventId || null,
+            event_title: eventTitle,
+            user_id: userId,
+            member_id: memberUuid,
+            attending: Boolean(input.attending),
+            updated_at: nowIso,
+          },
+          { onConflict: 'organization_id,user_id,event_title' }
+        );
+
+      if (error) {
+        throw new Error(`Failed to save event RSVP in Supabase: ${error.message}`);
+      }
+      const rsvps = await this.listEventRsvps(orgId, userId);
+      return { eventTitle, attending: Boolean(input.attending), rsvps };
+    }
+
+    const byOrg = this.eventRsvpsByOrg.get(orgId) || {};
+    byOrg[`${userId}::${eventTitle}`] = Boolean(input.attending);
+    this.eventRsvpsByOrg.set(orgId, byOrg);
+    const rsvps = await this.listEventRsvps(orgId, userId);
+    return { eventTitle, attending: Boolean(input.attending), rsvps };
+  }
+
+  // ===========================================================================
+  // ORGANISATION STAFF DIRECTORY & RBAC PROVISIONING (SUPABASE + AUTH)
+  // ===========================================================================
+
+  public async listOrganizationStaff(organizationId: string): Promise<
+    Array<{
+      id: string;
+      memberId?: string;
+      organizationId: string;
+      email?: string;
+      username?: string;
+      phoneE164?: string;
+      fullName: string;
+      role: ChurchRole;
+      status: 'active' | 'suspended';
+      mustChangePassword: boolean;
+      lastLoginAt: string | null;
+      createdAt?: string;
+    }>
+  > {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (organizationId || '').trim().toLowerCase();
+    if (!cleanOrgId) return [];
+
+    const staffRoles = ['owner', 'admin', 'pastor', 'usher', 'group_leader', 'leader', 'finance', 'super_admin'];
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(cleanOrgId)) return [];
+      const { data, error } = await this.supabase
+        .from('account_credentials')
+        .select(
+          'id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, last_login_at, created_at, must_change_password'
+        )
+        .eq('organization_id', cleanOrgId)
+        .eq('is_creator', false)
+        .in('role', staffRoles)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        throw new Error(`Failed to load organisation staff accounts: ${error.message}`);
+      }
+
+      return (data || []).map((row) => ({
+        id: String(row.id),
+        memberId: row.member_id ? String(row.member_id) : undefined,
+        organizationId: cleanOrgId,
+        email: row.email ? String(row.email).toLowerCase() : undefined,
+        username: row.username ? String(row.username).toLowerCase() : undefined,
+        phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
+        fullName: String(row.full_name || 'Church Staff'),
+        role:
+          String(row.role || '').toLowerCase() === 'super_admin'
+            ? 'super_admin'
+            : mapSupabaseRoleToChurchRole(row.role),
+        status: row.status === 'suspended' || row.status === 'locked' ? 'suspended' : 'active',
+        mustChangePassword: Boolean(row.must_change_password),
+        lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+        createdAt: row.created_at ? String(row.created_at) : undefined,
+      }));
+    }
+
+    const result: Array<{
+      id: string;
+      memberId?: string;
+      organizationId: string;
+      email?: string;
+      username?: string;
+      phoneE164?: string;
+      fullName: string;
+      role: ChurchRole;
+      status: 'active' | 'suspended';
+      mustChangePassword: boolean;
+      lastLoginAt: string | null;
+      createdAt?: string;
+    }> = [];
+
+    for (const c of this.userCredentials.values()) {
+      if (
+        c.organizationId.toLowerCase() === cleanOrgId &&
+        !c.isCreator &&
+        ['admin', 'pastor', 'usher', 'group_leader', 'finance', 'super_admin'].includes(c.role)
+      ) {
+        result.push({
+          id: c.id,
+          memberId: c.memberId,
+          organizationId: c.organizationId,
+          email: c.email,
+          username: c.username,
+          phoneE164: c.phoneE164,
+          fullName: c.name,
+          role: c.role,
+          status: c.status === 'suspended' || c.status === 'locked' ? 'suspended' : 'active',
+          mustChangePassword: Boolean(c.mustChangePassword),
+          lastLoginAt: null,
+          createdAt: c.createdAt,
+        });
+      }
+    }
+
+    return result;
+  }
+
+  public async provisionOrganizationStaff(params: {
+    organizationId: string;
+    fullName: string;
+    email: string;
+    phone?: string;
+    role: 'admin' | 'pastor' | 'usher' | 'group_leader' | 'finance' | 'super_admin';
+    password?: string;
+    ipAddress?: string;
+  }): Promise<{
+    staff: {
+      id: string;
+      memberId?: string;
+      organizationId: string;
+      email?: string;
+      phoneE164?: string;
+      fullName: string;
+      role: ChurchRole;
+      status: 'active' | 'suspended';
+      mustChangePassword: boolean;
+    };
+    temporaryPassword?: string;
+    resetExisting: boolean;
+  }> {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (params.organizationId || '').trim().toLowerCase();
+    const org = await this.getOrganisationById(cleanOrgId);
+    if (!org) {
+      const err: any = new Error('Target organisation not found.');
+      err.code = 'NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    const email = (params.email || '').trim().toLowerCase();
+    const phoneE164 = params.phone ? normalizePhone(params.phone) : '';
+    const fullName = (params.fullName || '').trim();
+    if (!fullName || !email) {
+      const err: any = new Error('Full name and official email are required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    const suppliedPassword = (params.password || '').trim();
+    if (suppliedPassword && suppliedPassword.length < 8) {
+      const err: any = new Error('Password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+    const generatedTempPassword = suppliedPassword
+      ? undefined
+      : `Ek!${randomBytes(6).toString('base64url')}9`;
+    const effectivePassword = suppliedPassword || generatedTempPassword!;
+
+    // Check duplicate credentials across other orgs / creator
+    let existingSameOrg: UserCredentialRecord | undefined;
+    if (this.supabase) {
+      const orFilters = [`email.ilike.${email}`];
+      if (phoneE164) orFilters.push(`phone_e164.eq.${phoneE164}`);
+      const { data: rows, error } = await this.supabase
+        .from('account_credentials')
+        .select('*')
+        .or(orFilters.join(','))
+        .limit(5);
+      if (error) {
+        throw new Error(`Failed querying staff credentials in Supabase: ${error.message}`);
+      }
+      if (Array.isArray(rows) && rows.length > 0) {
+        for (const row of rows) {
+          const rowOrgId = String(row.organization_id || '').toLowerCase();
+          if (row.is_creator || (rowOrgId && rowOrgId !== cleanOrgId)) {
+            const err: any = new Error(
+              'This email or phone already belongs to another organisation or platform creator.'
+            );
+            err.code = 'DUPLICATE_CREDENTIAL';
+            err.status = 409;
+            throw err;
+          }
+        }
+        const sameRow = rows[0];
+        existingSameOrg = {
+          id: String(sameRow.id),
+          memberId: sameRow.member_id ? String(sameRow.member_id) : undefined,
+          organizationId: cleanOrgId,
+          email: sameRow.email ? String(sameRow.email).toLowerCase() : undefined,
+          username: sameRow.username ? String(sameRow.username).toLowerCase() : undefined,
+          phoneE164: sameRow.phone_e164 ? String(sameRow.phone_e164) : undefined,
+          name: String(sameRow.full_name || fullName),
+          role: mapSupabaseRoleToChurchRole(sameRow.role),
+          isCreator: false,
+          passwordHash: '',
+          passwordSalt: '',
+          status: 'active',
+        };
+      }
+    } else {
+      for (const c of this.userCredentials.values()) {
+        const matches =
+          (c.email && c.email.toLowerCase() === email) ||
+          (phoneE164 && c.phoneE164 && c.phoneE164 === phoneE164);
+        if (matches) {
+          if (c.isCreator || (c.organizationId && c.organizationId.toLowerCase() !== cleanOrgId)) {
+            const err: any = new Error(
+              'This email or phone is already assigned to another account or platform creator.'
+            );
+            err.code = 'DUPLICATE_CREDENTIAL';
+            err.status = 409;
+            throw err;
+          }
+          existingSameOrg = c;
+          break;
+        }
+      }
+    }
+
+    let targetMemberId = existingSameOrg?.memberId;
+    if (!targetMemberId) {
+      const orgMembers = await this.getMembers(cleanOrgId);
+      const matchedMember = orgMembers.find(
+        (m) =>
+          String(m.email || '').toLowerCase() === email ||
+          (phoneE164 && normalizePhone(m.phoneE164 || m.phone) === phoneE164)
+      );
+      if (matchedMember) {
+        targetMemberId = String(matchedMember.id);
+        await this.updateMember(cleanOrgId, targetMemberId, {
+          role: params.role === 'super_admin' ? 'admin' : params.role,
+          status: 'active',
+          email,
+          ...(phoneE164 ? { phoneE164 } : {}),
+        });
+      } else {
+        const nameParts = fullName.split(/\s+/).filter(Boolean);
+        const firstName = nameParts[0] || 'Staff';
+        const lastName = nameParts.slice(1).join(' ') || 'Member';
+        const createdMember = await this.createMember(
+          cleanOrgId,
+          {
+            firstName,
+            lastName,
+            email,
+            phoneE164: phoneE164 || undefined,
+            groupName: 'Church Leadership',
+            autoCheckinOptedIn: false,
+            role: params.role === 'super_admin' ? 'admin' : params.role,
+            status: 'active',
+          },
+          { skipAutoCredentials: true }
+        );
+        targetMemberId = String(createdMember.id);
+      }
+    }
+
+    const credId = existingSameOrg?.id || (UUID_REGEX.test(targetMemberId) ? targetMemberId : randomUUID());
+    const nowIso = new Date().toISOString();
+
+    const record = await this.provisionCredentialRecord({
+      id: credId,
+      memberId: targetMemberId,
+      organizationId: cleanOrgId,
+      email,
+      phoneE164: phoneE164 || undefined,
+      name: fullName,
+      role: params.role,
+      isCreator: params.role === 'super_admin',
+      password: effectivePassword,
+      mustChangePassword: !suppliedPassword,
+      passwordUpdatedAt: nowIso,
+    });
+
+    await this.recordAuthAuditEvent({
+      organizationId: cleanOrgId,
+      accountId: record.id,
+      identifier: email,
+      eventType: existingSameOrg ? 'password_changed' : 'account_auto_provisioned',
+      ipAddress: params.ipAddress,
+      success: true,
+      reason: `staff_provisioned:${params.role}`,
+    });
+
+    return {
+      staff: {
+        id: record.id,
+        memberId: record.memberId,
+        organizationId: cleanOrgId,
+        email: record.email,
+        phoneE164: record.phoneE164,
+        fullName: record.name,
+        role: record.role,
+        status: 'active',
+        mustChangePassword: Boolean(record.mustChangePassword),
+      },
+      ...(generatedTempPassword ? { temporaryPassword: generatedTempPassword } : {}),
+      resetExisting: Boolean(existingSameOrg),
     };
   }
 }

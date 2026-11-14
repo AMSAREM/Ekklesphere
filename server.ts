@@ -2692,6 +2692,7 @@ const updateOwnProfileSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be YYYY-MM-DD')
     .optional(),
   preferredName: z.string().trim().min(1).max(120).optional(),
+  autoCheckinOptedIn: z.boolean().optional(),
 });
 
 app.get(
@@ -2727,7 +2728,8 @@ app.patch(
         req.organizationId!,
         req.user!.id,
         req.user!.email,
-        parsed.data
+        parsed.data,
+        req.user!.name
       );
       return res.status(200).json(updated);
     } catch (err: any) {
@@ -3043,6 +3045,415 @@ app.post(
       message: 'Authorized super admin action executed successfully',
       callerRole: req.user?.role,
     });
+  }
+);
+
+// =========================================================================
+// DONATIONS / MOBILE GIVING LEDGER (ORG-SCOPED)
+// =========================================================================
+
+const createDonationSchema = z.object({
+  amountGhs: z.number().positive().max(1000000).optional(),
+  amountMinor: z.number().int().positive().max(100000000).optional(),
+  fundName: z.string().trim().min(1).max(100),
+  fundId: z.string().trim().max(100).optional(),
+  provider: z.enum(['MTN MoMo', 'Telecel Cash', 'Card', 'Cash']).optional().default('MTN MoMo'),
+  method: z.enum(['momo', 'card', 'cash', 'bank']).optional(),
+});
+
+app.get(
+  '/api/donations',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const callerRole = req.user!.role;
+      const canViewOrgLedger = ['admin', 'pastor', 'finance', 'super_admin', 'creator'].includes(
+        callerRole
+      );
+      let filterPersonId: string | undefined;
+      if (!canViewOrgLedger) {
+        const profile = await platformStore.getMemberProfileForSession(
+          req.organizationId!,
+          req.user!.id,
+          req.user!.email
+        );
+        filterPersonId = profile?.id ? String(profile.id) : req.user!.id;
+      }
+      const donations = await platformStore.listDonations(
+        req.organizationId!,
+        filterPersonId ? { personId: filterPersonId } : undefined
+      );
+      return res.status(200).json({ donations });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'donations_fetch_failed',
+        message: err?.message || 'Failed to load donations.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/donations',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = createDonationSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid donation payload.',
+      });
+    }
+
+    const computedAmountMinor =
+      parsed.data.amountMinor ??
+      (parsed.data.amountGhs ? Math.round(parsed.data.amountGhs * 100) : 0);
+    if (!computedAmountMinor || computedAmountMinor <= 0) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: 'Donation amount must be greater than zero.',
+      });
+    }
+
+    const derivedMethod =
+      parsed.data.method ||
+      (parsed.data.provider === 'Card'
+        ? 'card'
+        : parsed.data.provider === 'Cash'
+        ? 'cash'
+        : 'momo');
+
+    try {
+      const profile = await platformStore.getMemberProfileForSession(
+        req.organizationId!,
+        req.user!.id,
+        req.user!.email
+      );
+      const personId = profile?.id ? String(profile.id) : req.user!.id;
+      const personName = profile
+        ? `${profile.firstName || ''} ${profile.lastName || ''}`.trim()
+        : req.user!.name || req.user!.email || 'Member';
+
+      const donation = await platformStore.createDonation(req.organizationId!, {
+        personId,
+        personName,
+        fundName: parsed.data.fundName,
+        fundId: parsed.data.fundId,
+        amountMinor: computedAmountMinor,
+        method: derivedMethod,
+        provider: parsed.data.provider,
+        status: 'paid',
+      });
+      return res.status(201).json({ donation });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'donation_create_failed',
+        message: err?.message || 'Failed to record donation.',
+      });
+    }
+  }
+);
+
+// =========================================================================
+// PASTORAL CARE FOLLOW-UP TASKS (ORG-SCOPED)
+// =========================================================================
+
+const createFollowupSchema = z.object({
+  personId: z.string().trim().min(1, 'Member ID is required'),
+  personName: z.string().trim().max(150).optional(),
+  groupName: z.string().trim().max(150).optional(),
+  reason: z.enum(['absent_2', 'absent_3', 'first_timer', 'manual']).default('manual'),
+  assignedToName: z.string().trim().max(150).optional(),
+  dueOn: z.string().trim().max(100).optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+const updateFollowupSchema = z.object({
+  status: z.enum(['open', 'contacted', 'resolved', 'dismissed']).optional(),
+  outcome: z.string().trim().max(500).optional(),
+  assignedToName: z.string().trim().max(150).optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+app.get(
+  '/api/followup-tasks',
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const tasks = await platformStore.listFollowupTasks(req.organizationId!);
+      return res.status(200).json({ tasks });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_fetch_failed',
+        message: err?.message || 'Failed to load follow-up tasks.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/followup-tasks',
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = createFollowupSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid follow-up task payload.',
+      });
+    }
+
+    try {
+      const task = await platformStore.createFollowupTask(req.organizationId!, parsed.data);
+      return res.status(201).json({ task });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_create_failed',
+        message: err?.message || 'Failed to create follow-up task.',
+      });
+    }
+  }
+);
+
+app.patch(
+  '/api/followup-tasks/:id',
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = updateFollowupSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid follow-up task update.',
+      });
+    }
+
+    try {
+      const task = await platformStore.updateFollowupTask(
+        req.organizationId!,
+        req.params.id,
+        parsed.data
+      );
+      return res.status(200).json({ task });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_update_failed',
+        message: err?.message || 'Failed to update follow-up task.',
+      });
+    }
+  }
+);
+
+app.delete(
+  '/api/followup-tasks/:id',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      await platformStore.deleteFollowupTask(req.organizationId!, req.params.id);
+      return res.status(200).json({ success: true });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_delete_failed',
+        message: err?.message || 'Failed to delete follow-up task.',
+      });
+    }
+  }
+);
+
+// =========================================================================
+// MEMBER PRIVACY CONSENTS & EVENT RSVPS (ORG + USER SCOPED)
+// =========================================================================
+
+const updateConsentsSchema = z.object({
+  autoCheckin: z.boolean(),
+  push: z.boolean(),
+  sms: z.boolean(),
+  email: z.boolean(),
+});
+
+app.get(
+  '/api/consents/me',
+  requireUser,
+  enforceOrganizationScope,
+  async (req: Request, res: Response) => {
+    try {
+      const consents = await platformStore.getMemberConsents(
+        req.organizationId!,
+        req.user!.id,
+        req.user!.email
+      );
+      return res.status(200).json({ consents });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'consents_fetch_failed',
+        message: err?.message || 'Failed to load consent settings.',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/consents/me',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = updateConsentsSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid consent settings payload.',
+      });
+    }
+
+    try {
+      const consents = await platformStore.upsertMemberConsents(
+        req.organizationId!,
+        req.user!.id,
+        req.user!.email,
+        parsed.data,
+        req.user!.name
+      );
+      return res.status(200).json({ consents });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'consents_update_failed',
+        message: err?.message || 'Failed to save consent settings.',
+      });
+    }
+  }
+);
+
+const updateRsvpSchema = z.object({
+  eventTitle: z.string().trim().min(1, 'Event title is required').max(200),
+  eventId: z.string().trim().max(120).optional(),
+  attending: z.boolean(),
+});
+
+app.get(
+  '/api/rsvps/me',
+  requireUser,
+  enforceOrganizationScope,
+  async (req: Request, res: Response) => {
+    try {
+      const rsvps = await platformStore.listEventRsvps(req.organizationId!, req.user!.id);
+      return res.status(200).json({ rsvps });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'rsvps_fetch_failed',
+        message: err?.message || 'Failed to load event RSVPs.',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/rsvps/me',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = updateRsvpSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid RSVP payload.',
+      });
+    }
+
+    try {
+      const result = await platformStore.upsertEventRsvp(
+        req.organizationId!,
+        req.user!.id,
+        req.user!.email,
+        parsed.data
+      );
+      return res.status(200).json(result);
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'rsvp_update_failed',
+        message: err?.message || 'Failed to update event RSVP.',
+      });
+    }
+  }
+);
+
+// =========================================================================
+// ORGANISATION STAFF DIRECTORY & PROVISIONING (ADMIN / CREATOR)
+// =========================================================================
+
+const createStaffSchema = z.object({
+  fullName: z.string().trim().min(2, 'Full name is required').max(150),
+  email: z.string().trim().email('Valid email address is required'),
+  phone: z.string().trim().max(40).optional(),
+  role: z.enum(['admin', 'pastor', 'usher', 'group_leader', 'finance', 'super_admin']),
+  password: z.string().min(8, 'Password must be at least 8 characters').optional(),
+});
+
+app.get(
+  '/api/staff',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    try {
+      const staff = await platformStore.listOrganizationStaff(req.organizationId!);
+      return res.status(200).json({ staff });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'staff_fetch_failed',
+        message: err?.message || 'Failed to load organisation staff.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/staff',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = createStaffSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid staff provisioning payload.',
+      });
+    }
+
+    const callerIsCreator =
+      req.user?.role === 'creator' ||
+      req.user?.role === 'super_admin' ||
+      Boolean(req.user?.is_creator);
+    if (parsed.data.role === 'super_admin' && !callerIsCreator) {
+      return res.status(403).json({
+        error: 'forbidden',
+        message: 'Only platform creators or super admins may provision a Platform Super Admin.',
+      });
+    }
+
+    try {
+      const result = await platformStore.provisionOrganizationStaff({
+        organizationId: req.organizationId!,
+        fullName: parsed.data.fullName,
+        email: parsed.data.email,
+        phone: parsed.data.phone,
+        role: parsed.data.role,
+        password: parsed.data.password,
+        ipAddress: req.ip,
+      });
+      return res.status(201).json(result);
+    } catch (err: any) {
+      return res.status(err?.status || 400).json({
+        error: err?.code || 'staff_provision_failed',
+        message: err?.message || 'Failed to provision staff account.',
+      });
+    }
   }
 );
 

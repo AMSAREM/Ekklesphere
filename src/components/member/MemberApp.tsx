@@ -155,6 +155,16 @@ export const MemberApp: React.FC = () => {
 
   const memberPhotoUrl = matchedMember?.imageUrl || localPhotoOverride || currentUser?.avatar || null;
 
+  const getMemberAuthHeaders = (): HeadersInit => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
   const handleUpdateMemberPhoto = async (dataUrl: string) => {
     try {
       localStorage.setItem(`ekklesphere_member_photo_${targetPersonId}`, dataUrl);
@@ -165,6 +175,21 @@ export const MemberApp: React.FC = () => {
 
     if (matchedMember) {
       await updateMember(matchedMember.id, { imageUrl: dataUrl });
+    } else {
+      try {
+        const res = await fetch('/api/members/me/profile', {
+          method: 'PATCH',
+          headers: getMemberAuthHeaders(),
+          body: JSON.stringify({ imageUrl: dataUrl }),
+        });
+        if (!res.ok) {
+          showToast('Photo cached locally — sign in to save to your member profile.');
+        } else {
+          showToast('Profile photo saved to database!');
+        }
+      } catch {
+        showToast('Network error saving photo to database.');
+      }
     }
     if (currentUser) {
       setCurrentUser({ ...currentUser, avatar: dataUrl });
@@ -199,7 +224,21 @@ export const MemberApp: React.FC = () => {
     if (matchedMember) {
       await updateMember(matchedMember.id, { dateOfBirth });
     } else {
-      showToast('Birthday saved to your member profile!');
+      try {
+        const res = await fetch('/api/members/me/profile', {
+          method: 'PATCH',
+          headers: getMemberAuthHeaders(),
+          body: JSON.stringify({ dateOfBirth }),
+        });
+        if (res.ok) {
+          showToast('Birthday saved to your member profile in database!');
+        } else {
+          const errBody = await res.json().catch(() => ({}));
+          showToast(errBody?.message || 'Could not save birthday to database.');
+        }
+      } catch {
+        showToast('Network error saving birthday.');
+      }
     }
   };
 
@@ -255,7 +294,7 @@ export const MemberApp: React.FC = () => {
     try {
       const res = await fetch('/api/attendance/events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getMemberAuthHeaders(),
         body: JSON.stringify({
           clientEventId: crypto.randomUUID(),
           siteId: PRIMARY_CAMPUS_SITE_ID,
@@ -480,15 +519,17 @@ export const MemberApp: React.FC = () => {
     };
   });
 
-  const handleGiveSubmit = (e: React.FormEvent) => {
+  const handleGiveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const finalAmount = giveCustomAmount ? parseInt(giveCustomAmount, 10) : giveAmount;
     if (!finalAmount || finalAmount <= 0) {
       showToast('Please enter a valid amount');
       return;
     }
-    submitDonation(finalAmount, giveFund, giveMethod);
-    setGivenSuccess(true);
+    const ok = await submitDonation(finalAmount, giveFund, giveMethod);
+    if (ok) {
+      setGivenSuccess(true);
+    }
   };
 
   /* =========================================================================
@@ -1044,7 +1085,7 @@ export const MemberApp: React.FC = () => {
                   </span>
                 </div>
                 <button
-                  onClick={() => toggleRsvp(ev.title)}
+                  onClick={() => toggleRsvp(ev.title, ev.id)}
                   className={`text-xs font-bold px-3.5 py-2 rounded-xl transition-all shrink-0 ${
                     memberRsvps[ev.title]
                       ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'
@@ -1114,7 +1155,7 @@ export const MemberApp: React.FC = () => {
                 <span>{ev.timeVenue}</span>
               </span>
               <button
-                onClick={() => toggleRsvp(ev.title)}
+                onClick={() => toggleRsvp(ev.title, ev.id)}
                 className={`text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm ${
                   memberRsvps[ev.title]
                     ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'

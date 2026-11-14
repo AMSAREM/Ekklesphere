@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { UserManagement } from '../UserManagement';
 import {
   SystemSettings,
   ChurchGroup,
@@ -51,6 +52,7 @@ import {
   MessageSquare,
   Navigation,
   Crosshair,
+  Shield,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -90,7 +92,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     currentUser?.role === 'super_admin' ||
     currentUser?.role === 'creator';
 
-  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways' | 'billing'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'groups' | 'proximity' | 'pastoral' | 'privacy' | 'gateways' | 'staff' | 'billing'>('general');
   const [billingPlans, setBillingPlans] = useState<ConsolePlan[]>([]);
   const [licenseEval, setLicenseEval] = useState<LicenseEvaluationResult | null>(null);
   const [currentLicense, setCurrentLicense] = useState<SystemLicense | null>(null);
@@ -878,6 +880,19 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         >
           <Send className="w-3.5 h-3.5" />
           <span>SMS & Paystack Gateways</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('staff')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'staff'
+              ? 'bg-[#6D5CF2] text-white shadow-xs'
+              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5" />
+          <span>Staff &amp; Roles</span>
         </button>
 
         <button
@@ -2026,7 +2041,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         )}
 
         {/* Save Bar Footer (for system parameters) */}
-        {activeTab !== 'groups' && activeTab !== 'billing' && (
+        {activeTab !== 'groups' && activeTab !== 'billing' && activeTab !== 'staff' && (
           <div className="p-4 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-4">
             <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
               Last saved: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{lastSavedTime}</span>
@@ -2052,6 +2067,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           </div>
         )}
       </form>
+
+      {/* TAB: Church Staff & RBAC Provisioning */}
+      {activeTab === 'staff' && (
+        <div className="animate-in fade-in duration-200">
+          <UserManagement />
+        </div>
+      )}
 
       {/* TAB 7: Plan Status, Free Trial Countdown & Self-Service Upgrade */}
       {activeTab === 'billing' && (
