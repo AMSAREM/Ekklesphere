@@ -4823,9 +4823,23 @@ class PlatformStore {
       'consecutiveAbsences',
     ];
     for (const key of extendedKeys) {
-      if (payload[key] !== undefined && payload[key] !== null && payload[key] !== '') {
+      if (payload[key] === '' || payload[key] === null) {
+        delete next[key];
+      } else if (payload[key] !== undefined) {
         next[key] = payload[key];
       }
+    }
+    const resolvedInputImg = [
+      payload.imageUrl,
+      payload.image_url,
+      payload.photo_url,
+      payload.photoUrl,
+      payload.image,
+    ].find((val) => typeof val === 'string' && val.trim().length > 0);
+    if (payload.imageUrl === '' || payload.imageUrl === null) {
+      delete next.imageUrl;
+    } else if (typeof resolvedInputImg === 'string') {
+      next.imageUrl = resolvedInputImg.trim();
     }
     if (payload.status !== undefined) {
       next.memberStatus = payload.status;
@@ -4893,7 +4907,10 @@ class PlatformStore {
         row.emergency_contact_person ?? custom.emergencyContactPerson,
       emergencyContactPhone:
         row.emergency_phone ?? custom.emergencyContactPhone,
-      imageUrl: row.image_url ?? row.photo_url ?? custom.imageUrl,
+      imageUrl:
+        [row.image_url, row.photo_url, custom.imageUrl, custom.image, row.avatar_url].find(
+          (val) => typeof val === 'string' && val.trim().length > 0
+        )?.trim() || undefined,
       dateOfBaptism: row.date_of_baptism ?? custom.dateOfBaptism,
       dateOfMarriage: row.date_of_marriage ?? custom.dateOfMarriage,
       dateOfSalvation: row.date_of_salvation ?? custom.dateOfSalvation,
@@ -4982,6 +4999,16 @@ class PlatformStore {
         : null;
     const customAttributes = this.extractMemberCustomAttributes(payload);
 
+    const resolvedCreateImage = [
+      payload.imageUrl,
+      payload.image_url,
+      payload.photo_url,
+      payload.photoUrl,
+      payload.image,
+    ]
+      .find((val) => typeof val === 'string' && val.trim().length > 0)
+      ?.trim() || null;
+
     let createdMember: Record<string, any>;
 
     if (this.supabase) {
@@ -4998,7 +5025,7 @@ class PlatformStore {
         status: this.mapPersonStatusToDbStatus(payload.status),
         gender: genderVal,
         date_of_birth: dobVal,
-        photo_url: payload.imageUrl || null,
+        photo_url: resolvedCreateImage,
         custom_attributes: customAttributes,
       };
 
@@ -5024,7 +5051,7 @@ class PlatformStore {
           typeof payload.numberOfChildren === 'number' ? payload.numberOfChildren : 0,
         emergency_contact_person: payload.emergencyContactPerson || null,
         emergency_phone: payload.emergencyContactPhone || null,
-        image_url: payload.imageUrl || null,
+        image_url: resolvedCreateImage,
         date_of_baptism: payload.dateOfBaptism || null,
         date_of_marriage: payload.dateOfMarriage || null,
         date_of_salvation: payload.dateOfSalvation || null,
@@ -5395,9 +5422,22 @@ class PlatformStore {
       ) {
         patch.date_of_birth = String(updates.dateOfBirth);
       }
-      if (updates.imageUrl !== undefined) {
-        patch.photo_url = updates.imageUrl || null;
-        patch.image_url = updates.imageUrl || null;
+      if (
+        updates.imageUrl !== undefined ||
+        updates.image_url !== undefined ||
+        updates.photo_url !== undefined ||
+        updates.photoUrl !== undefined ||
+        updates.image !== undefined
+      ) {
+        const nextImg = [
+          updates.imageUrl,
+          updates.image_url,
+          updates.photo_url,
+          updates.photoUrl,
+          updates.image,
+        ].find((val) => typeof val === 'string' && val.trim().length > 0);
+        patch.photo_url = typeof nextImg === 'string' ? nextImg.trim() : null;
+        patch.image_url = typeof nextImg === 'string' ? nextImg.trim() : null;
       }
       if (updates.status !== undefined) {
         patch.status = this.mapPersonStatusToDbStatus(updates.status);

@@ -641,18 +641,15 @@ export const UsherTool: React.FC = () => {
                     className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-3 sm:p-3.5 flex items-center justify-between gap-3 shadow-sm hover:border-[#6C5CE7]/50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      {m.imageUrl ? (
-                        <img
-                          src={m.imageUrl}
-                          alt={`${m.firstName} ${m.lastName}`}
-                          referrerPolicy="no-referrer"
-                          className="w-11 h-11 rounded-2xl object-cover border border-[#E3E5F2] dark:border-[#2D2D55] shrink-0"
-                        />
-                      ) : (
-                        <div className="w-11 h-11 rounded-2xl bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF] font-bold text-sm flex items-center justify-center shrink-0">
-                          {m.avatarInitials || 'MB'}
-                        </div>
-                      )}
+                      <MemberAvatar
+                        src={m.imageUrl}
+                        name={`${m.firstName} ${m.lastName}`}
+                        initials={m.avatarInitials || 'MB'}
+                        sizeClass="w-11 h-11 rounded-2xl"
+                        textClass="text-sm font-bold"
+                        bgClass="bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#8C7DFF]"
+                        borderClass="border border-[#E3E5F2] dark:border-[#2D2D55]"
+                      />
                       <div className="min-w-0">
                         <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                           {m.firstName} {m.lastName}

@@ -1778,40 +1778,32 @@ export const CreatorsPanel: React.FC = () => {
       <nav
         aria-label="Desktop Console Modules"
         aria-expanded={!isSidebarCollapsed}
-        className={`hidden md:flex bg-white dark:bg-[#151532] border-r border-[#D8DAE8] dark:border-[#202046] transition-all duration-200 ease-in-out z-30 fixed top-14 sm:top-16 bottom-0 left-0 flex-col justify-between overflow-y-auto ${
+        className={`hidden md:flex bg-white dark:bg-[#13132B] border-r border-[#E2E4F0] dark:border-[#202046] transition-all duration-200 ease-in-out z-30 fixed top-14 sm:top-16 bottom-0 left-0 flex-col justify-between overflow-y-auto ${
           isSidebarCollapsed ? 'w-[68px]' : 'w-64'
         }`}
       >
         <div className="flex flex-col h-full justify-between">
           <div>
-            {/* Top Bar inside Sidebar (Live Prod badge + Toggle) */}
-            <div className="flex items-center justify-between px-3.5 py-3 border-b border-[#D8DAE8]/70 dark:border-[#202046]/80 bg-slate-50/60 dark:bg-white/[0.02]">
-              {!isSidebarCollapsed ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#666A86] dark:text-[#8D92B5]">
-                    Modules
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-extrabold uppercase border border-emerald-500/20">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Live Prod
-                  </span>
-                </div>
-              ) : (
-                <div className="flex justify-center w-full py-0.5" title="Live Prod Mode Active">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                </div>
+            {/* Top Bar inside Sidebar (Section label + Collapse Toggle) */}
+            <div
+              className={`flex items-center h-11 px-3 border-b border-[#E5E7F0] dark:border-[#202046] ${
+                isSidebarCollapsed ? 'justify-center' : 'justify-between'
+              }`}
+            >
+              {!isSidebarCollapsed && (
+                <span className="text-xs font-semibold tracking-tight text-[#525672] dark:text-[#9CA1C2] truncate">
+                  Console Modules
+                </span>
               )}
               <button
                 type="button"
                 onClick={toggleSidebar}
-                className={`p-1.5 rounded-xl text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:white hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors cursor-pointer ${
-                  isSidebarCollapsed ? 'mx-auto mt-1' : ''
-                }`}
+                className="p-1.5 rounded-lg text-[#666A86] dark:text-[#8D92B5] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6D5CF2]/40"
                 title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
                 {isSidebarCollapsed ? (
-                  <PanelLeftOpen className="w-4 h-4 text-[#6D5CF2]" />
+                  <PanelLeftOpen className="w-4 h-4 text-[#6D5CF2] dark:text-[#A594FD]" />
                 ) : (
                   <PanelLeftClose className="w-4 h-4" />
                 )}
@@ -1819,57 +1811,91 @@ export const CreatorsPanel: React.FC = () => {
             </div>
 
             {/* Navigation Items */}
-            <div className="p-2.5 flex flex-col gap-1.5">
-              {moduleItems.map((tab) => {
+            <div className="px-2.5 py-3 flex flex-col gap-0.5">
+              {moduleItems.map((tab, index) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
+                const groupHeading =
+                  index === 0
+                    ? 'Workspace'
+                    : tab.id === 'alerts'
+                    ? 'Governance'
+                    : tab.id === 'profile'
+                    ? 'Account'
+                    : null;
+
                 return (
-                  <div key={tab.id} className="relative group w-full">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab(tab.id);
-                        if (tab.id !== 'organisations') setSelectedOrgId(null);
-                      }}
-                      className={`flex items-center gap-2.5 w-full rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                        isSidebarCollapsed ? 'justify-center px-0 py-2.5' : 'px-3.5 py-2.5'
-                      } ${
-                        isActive
-                          ? 'bg-[#6D5CF2] text-white shadow-md shadow-[#6D5CF2]/20 font-bold'
-                          : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5 hover:text-[#1D1B3A] dark:hover:white'
-                      }`}
-                      aria-current={isActive ? 'page' : undefined}
-                      title={isSidebarCollapsed ? tab.label : undefined}
-                    >
-                      <Icon className="w-4 h-4 shrink-0" />
-                      {!isSidebarCollapsed && (
-                        <span className="truncate text-left flex-1">{tab.label}</span>
-                      )}
-                      {!isSidebarCollapsed && typeof tab.count === 'number' && tab.count > 0 && (
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                            isActive
-                              ? 'bg-white/25 text-white'
-                              : 'bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300'
+                  <React.Fragment key={tab.id}>
+                    {groupHeading &&
+                      (!isSidebarCollapsed ? (
+                        <div
+                          className={`px-2.5 pb-1 text-[11px] font-medium text-[#7A7E9A] dark:text-[#787DA2] select-none ${
+                            index === 0 ? 'pt-0.5' : 'pt-3.5 mt-1 border-t border-[#ECEDF5] dark:border-[#202046]/80'
                           }`}
                         >
-                          {tab.count}
-                        </span>
-                      )}
-                    </button>
+                          {groupHeading}
+                        </div>
+                      ) : (
+                        index > 0 && (
+                          <div className="my-1.5 mx-2 border-t border-[#ECEDF5] dark:border-[#202046]/80" />
+                        )
+                      ))}
 
-                    {/* Popover Tooltip for Collapsed State */}
-                    {isSidebarCollapsed && (
-                      <div className="hidden group-hover:flex items-center gap-2 absolute left-full ml-2.5 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-2xl pointer-events-none whitespace-nowrap z-50 border border-white/10">
-                        <span>{tab.label}</span>
-                        {typeof tab.count === 'number' && tab.count > 0 && (
-                          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-[#6D5CF2] text-white font-bold">
+                    <div className="relative group w-full">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab(tab.id);
+                          if (tab.id !== 'organisations') setSelectedOrgId(null);
+                        }}
+                        className={`flex items-center gap-2.5 w-full rounded-lg text-[13px] leading-none min-h-[36px] transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6D5CF2]/40 ${
+                          isSidebarCollapsed ? 'justify-center px-0 py-2' : 'px-2.5 py-2'
+                        } ${
+                          isActive
+                            ? 'bg-[#6D5CF2]/[0.09] dark:bg-[#6D5CF2]/[0.18] text-[#4E3FD4] dark:text-[#C0B6FF] font-semibold ring-1 ring-inset ring-[#6D5CF2]/15 dark:ring-[#8C7DFF]/25'
+                            : 'text-[#4B4F6B] dark:text-[#A0A5C4] font-medium hover:bg-slate-100/90 dark:hover:bg-white/[0.05] hover:text-[#1D1B3A] dark:hover:text-white'
+                        }`}
+                        aria-current={isActive ? 'page' : undefined}
+                        title={isSidebarCollapsed ? tab.label : undefined}
+                      >
+                        <Icon
+                          className={`w-4 h-4 shrink-0 transition-colors duration-150 ${
+                            isActive
+                              ? 'text-[#6D5CF2] dark:text-[#A594FD]'
+                              : 'text-[#7A7E9A] dark:text-[#787DA2] group-hover:text-[#3A3E59] dark:group-hover:text-[#D5D8EE]'
+                          }`}
+                        />
+                        {!isSidebarCollapsed && (
+                          <span className="truncate text-left flex-1 whitespace-nowrap">
+                            {tab.label}
+                          </span>
+                        )}
+                        {!isSidebarCollapsed && typeof tab.count === 'number' && tab.count > 0 && (
+                          <span
+                            className={`text-[11px] font-mono tabular-nums font-medium shrink-0 ${
+                              isActive
+                                ? 'text-[#5846E8] dark:text-[#C0B6FF]'
+                                : 'text-[#7A7E9A] dark:text-[#787DA2]'
+                            }`}
+                          >
                             {tab.count}
                           </span>
                         )}
-                      </div>
-                    )}
-                  </div>
+                      </button>
+
+                      {/* Popover Tooltip for Collapsed State */}
+                      {isSidebarCollapsed && (
+                        <div className="hidden group-hover:flex items-center gap-2 absolute left-full ml-2.5 top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-medium rounded-lg shadow-lg pointer-events-none whitespace-nowrap z-50 border border-white/10 dark:border-black/10">
+                          <span>{tab.label}</span>
+                          {typeof tab.count === 'number' && tab.count > 0 && (
+                            <span className="text-[11px] font-mono tabular-nums opacity-80">
+                              {tab.count}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </React.Fragment>
                 );
               })}
             </div>

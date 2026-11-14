@@ -268,18 +268,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 <div className="p-4 rounded-3xl bg-emerald-950/40 border border-emerald-500/40 animate-in zoom-in-95 duration-200 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      {scannedMember.imageUrl ? (
-                        <img
-                          src={scannedMember.imageUrl}
-                          alt={scannedMember.firstName}
-                          referrerPolicy="no-referrer"
-                          className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-400 shadow-md"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-300 font-bold text-base flex items-center justify-center border-2 border-emerald-400 shadow-md">
-                          {scannedMember.avatarInitials}
-                        </div>
-                      )}
+                      <MemberAvatar
+                        src={scannedMember.imageUrl}
+                        name={`${scannedMember.firstName} ${scannedMember.lastName}`}
+                        initials={scannedMember.avatarInitials}
+                        sizeClass="w-12 h-12 rounded-2xl"
+                        textClass="font-bold text-base"
+                        bgClass="bg-emerald-500/20 text-emerald-300"
+                        borderClass="border-2 border-emerald-400 shadow-md"
+                      />
                       <div>
                         <div className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />

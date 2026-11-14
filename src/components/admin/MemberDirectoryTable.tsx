@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Filter,
@@ -23,9 +23,18 @@ import {
   Camera,
   LayoutGrid,
   Table2,
+  ImageOff,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Person, MEMBERSHIP_TABLE_HEADERS } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import {
+  getExternalImageOpenUrl,
+  getImageFallbackUrls,
+  probeImageProxyDiagnostic,
+  rememberWorkingImageUrl,
+} from '../../utils/imageUrl';
 
 interface MemberDirectoryTableProps {
   members: Person[];
@@ -53,7 +62,38 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   const [displayMode, setDisplayMode] = useState<'table' | 'photos'>('table');
   const [photosOnlyFilter, setPhotosOnlyFilter] = useState(false);
   const [previewMember, setPreviewMember] = useState<Person | null>(null);
+  const [previewAttemptIndex, setPreviewAttemptIndex] = useState(0);
+  const [previewDiagnostic, setPreviewDiagnostic] = useState<string | null>(null);
+  const [gridAttemptIndices, setGridAttemptIndices] = useState<Record<string, number>>({});
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
+
+  const openPhotoPreview = (member: Person) => {
+    setPreviewAttemptIndex(0);
+    setPreviewDiagnostic(null);
+    setCopiedUrl(false);
+    setPreviewMember(member);
+  };
+
+  useEffect(() => {
+    if (!previewMember?.imageUrl) {
+      setPreviewDiagnostic(null);
+      return;
+    }
+    const candidates = getImageFallbackUrls(previewMember.imageUrl, 'full');
+    if (previewAttemptIndex < candidates.length) {
+      return;
+    }
+    let cancelled = false;
+    probeImageProxyDiagnostic(previewMember.imageUrl).then((msg) => {
+      if (!cancelled && msg) {
+        setPreviewDiagnostic(msg);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewMember, previewAttemptIndex]);
 
   // Column visibility state for all 28 headers
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
@@ -454,21 +494,44 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {filteredMembers.map((member) => (
+              {filteredMembers.map((member) => {
+                const candidates = getImageFallbackUrls(member.imageUrl, 'card');
+                const attemptIndex = gridAttemptIndices[member.id] ?? 0;
+                const resolvedImg = attemptIndex < candidates.length ? candidates[attemptIndex] : null;
+                return (
                 <div
                   key={member.id}
                   className="group rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F6F7FC] dark:bg-[#14142E] overflow-hidden flex flex-col justify-between transition-all hover:shadow-md hover:border-[#6D5CF2]/50"
                 >
                   <button
                     type="button"
-                    onClick={() => setPreviewMember(member)}
-                    className="relative aspect-square w-full overflow-hidden bg-slate-200 dark:bg-[#232347] cursor-pointer"
+                    onClick={() => openPhotoPreview(member)}
+                    className="relative aspect-square w-full overflow-hidden bg-slate-200 dark:bg-[#232347] cursor-pointer flex items-center justify-center"
                   >
-                    <img
-                      src={member.imageUrl}
-                      alt={`${member.firstName} ${member.lastName}`}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
+                    {resolvedImg ? (
+                      <img
+                        src={resolvedImg}
+                        alt={`${member.firstName} ${member.lastName}`}
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                        decoding="async"
+                        onLoad={() => rememberWorkingImageUrl(member.imageUrl, 'card', resolvedImg)}
+                        onError={() =>
+                          setGridAttemptIndices((prev) => ({
+                            ...prev,
+                            [member.id]: (prev[member.id] ?? 0) + 1,
+                          }))
+                        }
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-1.5 px-3 text-center text-[#666A86] dark:text-[#A9ACC8]">
+                        <ImageOff className="w-6 h-6 opacity-70" />
+                        <span className="text-[11px] font-semibold">
+                          Click to inspect URL
+                        </span>
+                      </div>
+                    )}
                     <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/60 text-white text-[10px] font-bold backdrop-blur-xs">
                       View
                     </span>
@@ -494,7 +557,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -604,7 +668,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                               initials={member.avatarInitials}
                               sizeClass="w-7 h-7"
                               textClass="text-[10px] font-bold"
-                              onClick={member.imageUrl ? () => setPreviewMember(member) : undefined}
+                              onClick={
+                                member.imageUrl ? () => openPhotoPreview(member) : undefined
+                              }
                             />
                             <span>{member.firstName}</span>
                           </div>
@@ -822,14 +888,29 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* 24. IMAGE */}
                       {visibleColumns['IMAGE'] && (
                         <td className="py-3 px-3.5">
-                          <MemberAvatar
-                            src={member.imageUrl}
-                            name={`${member.firstName} ${member.lastName}`}
-                            initials={member.avatarInitials}
-                            sizeClass="w-8 h-8"
-                            textClass="text-[10px] font-bold"
-                            onClick={member.imageUrl ? () => setPreviewMember(member) : undefined}
-                          />
+                          <div className="flex items-center gap-2">
+                            <MemberAvatar
+                              src={member.imageUrl}
+                              name={`${member.firstName} ${member.lastName}`}
+                              initials={member.avatarInitials}
+                              sizeClass="w-8 h-8"
+                              textClass="text-[10px] font-bold"
+                              onClick={
+                                member.imageUrl ? () => openPhotoPreview(member) : undefined
+                              }
+                            />
+                            {member.imageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => openPhotoPreview(member)}
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline cursor-pointer"
+                                title="View image & URL"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>View</span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                       )}
 
@@ -921,57 +1002,141 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
       )}
 
       {/* Member Photo Preview Lightbox Modal */}
-      {previewMember && previewMember.imageUrl && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setPreviewMember(null)}
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
-        >
+      {previewMember && previewMember.imageUrl && (() => {
+        const previewCandidates = getImageFallbackUrls(previewMember.imageUrl, 'full');
+        const resolvedPreviewUrl =
+          previewAttemptIndex < previewCandidates.length ? previewCandidates[previewAttemptIndex] : null;
+        const externalUrl = getExternalImageOpenUrl(previewMember.imageUrl);
+        return (
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-sm w-full overflow-hidden border border-[#E9EBF5] dark:border-[#2D2D55] shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setPreviewMember(null)}
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           >
-            <div className="aspect-square w-full bg-slate-100 dark:bg-[#14142E] relative">
-              <img
-                src={previewMember.imageUrl}
-                alt={`${previewMember.firstName} ${previewMember.lastName}`}
-                className="w-full h-full object-cover"
-              />
-              <button
-                type="button"
-                onClick={() => setPreviewMember(null)}
-                aria-label="Close photo preview"
-                className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <h4 className="text-sm font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                  {previewMember.firstName} {previewMember.lastName}
-                </h4>
-                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] truncate">
-                  {previewMember.homeCellGroup || previewMember.groupName || 'General Congregation'}
-                  {previewMember.memberId ? ` · ${previewMember.memberId}` : ''}
-                </p>
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-sm w-full overflow-hidden border border-[#E9EBF5] dark:border-[#2D2D55] shadow-2xl"
+            >
+              <div className="aspect-square w-full bg-slate-100 dark:bg-[#14142E] relative flex items-center justify-center">
+                {resolvedPreviewUrl ? (
+                  <img
+                    src={resolvedPreviewUrl}
+                    alt={`${previewMember.firstName} ${previewMember.lastName}`}
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    onLoad={() =>
+                      rememberWorkingImageUrl(previewMember.imageUrl, 'full', resolvedPreviewUrl)
+                    }
+                    onError={() => setPreviewAttemptIndex((prev) => prev + 1)}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="p-6 text-center space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-200 dark:bg-[#232347] text-[#666A86] dark:text-[#A9ACC8] flex items-center justify-center mx-auto">
+                      <ImageOff className="w-6 h-6" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        Inline image preview unavailable
+                      </p>
+                      <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] leading-relaxed">
+                        {previewDiagnostic ||
+                          'This image host may require permission or block embedded previews. You can open the URL directly below.'}
+                      </p>
+                    </div>
+                    {externalUrl && (
+                      <a
+                        href={externalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold transition-colors"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Open Image URL</span>
+                      </a>
+                    )}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPreviewMember(null)}
+                  aria-label="Close photo preview"
+                  className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const target = previewMember;
-                  setPreviewMember(null);
-                  onEditMember(target);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shrink-0 cursor-pointer"
-              >
-                Edit Profile
-              </button>
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                      {previewMember.firstName} {previewMember.lastName}
+                    </h4>
+                    <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] truncate">
+                      {previewMember.homeCellGroup || previewMember.groupName || 'General Congregation'}
+                      {previewMember.memberId ? ` · ${previewMember.memberId}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = previewMember;
+                      setPreviewMember(null);
+                      onEditMember(target);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shrink-0 cursor-pointer"
+                  >
+                    Edit Profile
+                  </button>
+                </div>
+
+                {externalUrl && (
+                  <div className="pt-2.5 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] truncate">
+                      {externalUrl}
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard?.writeText(externalUrl);
+                            setCopiedUrl(true);
+                            setTimeout(() => setCopiedUrl(false), 1800);
+                          } catch {}
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 dark:bg-white/10 text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:bg-slate-200 dark:hover:bg-white/15 cursor-pointer"
+                      >
+                        {copiedUrl ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-500" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+                      <a
+                        href={externalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:opacity-90"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

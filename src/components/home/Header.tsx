@@ -5,6 +5,7 @@
 import React from 'react';
 import { Moon, Search, Sun } from 'lucide-react';
 import type { Church, NavSectionKey } from '../../types/churchHome';
+import { resolveDisplayImageUrl } from '../../utils/imageUrl';
 
 export interface HeaderProps {
   church: Church;
@@ -50,10 +51,12 @@ export const Header: React.FC<HeaderProps> = ({
           href="#home-top"
           className="group flex min-w-0 items-center gap-3 rounded-lg py-0.5 text-left"
         >
-          {church.logoUrl ? (
+          {resolveDisplayImageUrl(church.logoUrl, 'thumb') ? (
             <img
-              src={church.logoUrl}
+              src={resolveDisplayImageUrl(church.logoUrl, 'thumb')!}
               alt={`${church.name} logo`}
+              referrerPolicy="no-referrer"
+              decoding="async"
               className="h-9 w-9 shrink-0 rounded-lg object-cover ring-1 ring-white/20"
             />
           ) : (

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration: 20261115000000_licenses_key_sync_compatibility.sql
+-- Migration: 20261115000001_licenses_key_sync_compatibility.sql
 -- Purpose:
 --   Resolves SQL ERROR 23502: null value in column "key" of relation "licenses"
 --   when legacy master_rls columns (key, tier, tenant_id, issued_date, expires_date)
@@ -176,7 +176,7 @@ begin
 end;
 $$;
 
--- 5. Idempotently seed primary anchor organization license (safe against conflict on either key or license_key)
+-- 5. Idempotently seed primary anchor organization license only if the anchor org still exists
 insert into public.licenses (
   organization_id,
   license_key,
@@ -200,8 +200,12 @@ select
   'annual',
   1200.00,
   'Primary anchor sanctuary license'
-where not exists (
-  select 1 from public.licenses
-  where organization_id = 'e0000000-0000-0000-0000-000000000001'
-     or license_key = 'EKKLE-PIWC-KWADASO-ENT-2026'
-);
+where exists (
+  select 1 from public.organizations
+  where id = 'e0000000-0000-0000-0000-000000000001'
+)
+  and not exists (
+    select 1 from public.licenses
+    where organization_id = 'e0000000-0000-0000-0000-000000000001'
+       or license_key = 'EKKLE-PIWC-KWADASO-ENT-2026'
+  );

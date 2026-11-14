@@ -82,8 +82,15 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     String(raw.avatarInitials ?? raw.avatar_initials ?? '').trim() ||
     `${firstName[0] || 'M'}${lastName[0] || ''}`.toUpperCase() ||
     'MB';
-  const rawImg = raw.imageUrl ?? raw.image_url ?? raw.photo_url ?? raw.photoUrl ?? raw.avatar;
-  const imageUrl = typeof rawImg === 'string' && rawImg.trim().length > 0 ? rawImg.trim() : undefined;
+  const rawImg = [
+    raw.imageUrl,
+    raw.image_url,
+    raw.photo_url,
+    raw.photoUrl,
+    raw.avatar,
+    raw.image,
+  ].find((val) => typeof val === 'string' && val.trim().length > 0);
+  const imageUrl = typeof rawImg === 'string' ? rawImg.trim() : undefined;
 
   return {
     ...(raw as Person),

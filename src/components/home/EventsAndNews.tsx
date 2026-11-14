@@ -4,6 +4,7 @@
 import React from 'react';
 import { ArrowRight, Calendar, MapPin } from 'lucide-react';
 import type { ChurchEvent, NewsPost } from '../../types/churchHome';
+import { resolveDisplayImageUrl } from '../../utils/imageUrl';
 
 export interface EventsAndNewsProps {
   events: ChurchEvent[];
@@ -106,10 +107,13 @@ export const EventsAndNews: React.FC<EventsAndNewsProps> = ({
                       'linear-gradient(135deg, var(--deep) 0%, #244C3F 70%, var(--brand) 145%)',
                   }}
                 >
-                  {featuredEvent.imageUrl && (
+                  {resolveDisplayImageUrl(featuredEvent.imageUrl, 'card') && (
                     <img
-                      src={featuredEvent.imageUrl}
+                      src={resolveDisplayImageUrl(featuredEvent.imageUrl, 'card')!}
                       alt={featuredEvent.title}
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                     />
                   )}

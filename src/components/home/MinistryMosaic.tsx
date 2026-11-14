@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { Ministry } from '../../types/churchHome';
+import { resolveDisplayImageUrl } from '../../utils/imageUrl';
 
 export interface MinistryMosaicProps {
   ministries: Ministry[];
@@ -95,10 +96,13 @@ export const MinistryMosaic: React.FC<MinistryMosaicProps> = ({
                 }}
               >
                 {/* Uploaded photo when provided by the church */}
-                {ministry.imageUrl && (
+                {resolveDisplayImageUrl(ministry.imageUrl, 'card') && (
                   <img
-                    src={ministry.imageUrl}
+                    src={resolveDisplayImageUrl(ministry.imageUrl, 'card')!}
                     alt={ministry.name}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    decoding="async"
                     className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                   />
                 )}

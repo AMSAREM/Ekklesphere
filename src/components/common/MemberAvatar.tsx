@@ -1,4 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  getImageFallbackUrls,
+  rememberWorkingImageUrl,
+  type ImageSizeHint,
+} from '../../utils/imageUrl';
 
 interface MemberAvatarProps {
   src?: string | null;
@@ -10,6 +15,8 @@ interface MemberAvatarProps {
   borderClass?: string;
   onClick?: () => void;
   title?: string;
+  sizeHint?: ImageSizeHint;
+  onImageStatusChange?: (status: 'idle' | 'loaded' | 'failed') => void;
 }
 
 export const MemberAvatar: React.FC<MemberAvatarProps> = ({
@@ -22,17 +29,40 @@ export const MemberAvatar: React.FC<MemberAvatarProps> = ({
   borderClass = 'border border-[#E3E5F2] dark:border-[#2D2D55]',
   onClick,
   title,
+  sizeHint = 'thumb',
+  onImageStatusChange,
 }) => {
-  const [hasError, setHasError] = useState(false);
+  const candidates = useMemo(() => getImageFallbackUrls(src, sizeHint), [src, sizeHint]);
+  const [attemptIndex, setAttemptIndex] = useState(0);
 
   useEffect(() => {
-    setHasError(false);
-  }, [src]);
+    setAttemptIndex(0);
+    if (candidates.length === 0) {
+      onImageStatusChange?.('idle');
+    }
+  }, [src, sizeHint, candidates.length]);
 
-  const cleanSrc = typeof src === 'string' && src.trim().length > 0 && !hasError ? src.trim() : null;
+  const resolvedSrc = attemptIndex < candidates.length ? candidates[attemptIndex] : null;
   const displayInitials = (initials || 'MB').slice(0, 2).toUpperCase();
 
-  if (cleanSrc) {
+  const handleImageLoad = () => {
+    if (resolvedSrc) {
+      rememberWorkingImageUrl(src, sizeHint, resolvedSrc);
+    }
+    onImageStatusChange?.('loaded');
+  };
+
+  const handleImageError = () => {
+    setAttemptIndex((prev) => {
+      const next = prev + 1;
+      if (next >= candidates.length) {
+        onImageStatusChange?.('failed');
+      }
+      return next;
+    });
+  };
+
+  if (resolvedSrc) {
     return onClick ? (
       <button
         type="button"
@@ -41,19 +71,40 @@ export const MemberAvatar: React.FC<MemberAvatarProps> = ({
         className={`${sizeClass} rounded-full overflow-hidden shrink-0 ${borderClass} cursor-pointer hover:ring-2 hover:ring-[#6D5CF2] transition-all focus-visible:outline-2 focus-visible:outline-[#6D5CF2]`}
       >
         <img
-          src={cleanSrc}
+          src={resolvedSrc}
           alt={name || 'Member photo'}
-          onError={() => setHasError(true)}
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          decoding="async"
+          onLoad={handleImageLoad}
+          onError={handleImageError}
           className="w-full h-full object-cover"
         />
       </button>
     ) : (
       <img
-        src={cleanSrc}
+        src={resolvedSrc}
         alt={name || 'Member photo'}
-        onError={() => setHasError(true)}
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        decoding="async"
+        onLoad={handleImageLoad}
+        onError={handleImageError}
         className={`${sizeClass} rounded-full object-cover shrink-0 ${borderClass}`}
       />
+    );
+  }
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={title || (name ? `View ${name}'s image URL` : 'View image URL')}
+        className={`${sizeClass} rounded-full ${bgClass} ${textClass} ${borderClass} flex items-center justify-center shrink-0 select-none cursor-pointer hover:ring-2 hover:ring-[#6D5CF2] transition-all focus-visible:outline-2 focus-visible:outline-[#6D5CF2]`}
+      >
+        {displayInitials}
+      </button>
     );
   }
 

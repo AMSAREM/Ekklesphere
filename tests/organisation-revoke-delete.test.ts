@@ -46,18 +46,30 @@ describe('Organisation Revoke, Permanent Deletion & Migration SQL Safety', () =>
     expect(sql).toContain('drop constraint if exists');
   });
 
-  it('ensures no SchoolSphere migrations or unsupported psql backslash directives exist in supabase/migrations', () => {
+  it('ensures no SchoolSphere migrations, unsupported psql directives, or duplicate migration version prefixes exist in supabase/migrations', () => {
     const migrationsDir = path.resolve(process.cwd(), 'supabase/migrations');
-    const files = fs.readdirSync(migrationsDir);
+    const files = fs.readdirSync(migrationsDir).sort();
 
     expect(files).not.toContain('20261030000004_schoolsphere_master_rls.sql');
     expect(files).toContain('20261030000004_ekklesphere_master_rls.sql');
+
+    const seenVersions = new Map<string, string>();
 
     for (const file of files) {
       expect(file.toLowerCase()).not.toContain('schoolsphere');
       expect(file.toLowerCase()).not.toContain('school_id');
 
       if (!file.endsWith('.sql')) continue;
+
+      const versionMatch = file.match(/^(\d+)_/);
+      expect(versionMatch, `Expected numeric version prefix on ${file}`).not.toBeNull();
+      const version = versionMatch![1];
+      expect(
+        seenVersions.has(version),
+        `Duplicate Supabase migration version ${version}: ${seenVersions.get(version)} vs ${file}`
+      ).toBe(false);
+      seenVersions.set(version, file);
+
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
       expect(sql).not.toMatch(/schoolsphere|school_id/i);
       expect(sql).not.toMatch(/^\s*\\(?:ir|i|include|set|echo|connect|c)\b/im);

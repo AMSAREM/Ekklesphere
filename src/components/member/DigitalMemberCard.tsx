@@ -12,6 +12,8 @@ import {
   QrCode,
 } from 'lucide-react';
 import { Person } from '../../types/ekklesphere';
+import { getImageFallbackUrls, rememberWorkingImageUrl } from '../../utils/imageUrl';
+import { compressImageFile } from '../../utils/imageCompression';
 
 /**
  * Generates a clean, deterministic Member ID string when a member record
@@ -95,7 +97,8 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
   onOpenScanner,
   onNotify,
 }) => {
-  const [imageError, setImageError] = useState(false);
+  const photoCandidates = React.useMemo(() => getImageFallbackUrls(photoUrl, 'thumb'), [photoUrl]);
+  const [imageAttemptIndex, setImageAttemptIndex] = useState(0);
   const [copied, setCopied] = useState(false);
   const [isPassModalOpen, setIsPassModalOpen] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -103,9 +106,9 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const exportQrCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Reset image error whenever photoUrl changes
+  // Reset fallback index whenever photoUrl changes
   useEffect(() => {
-    setImageError(false);
+    setImageAttemptIndex(0);
   }, [photoUrl]);
 
   // Close pass modal on Escape key
@@ -120,7 +123,8 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPassModalOpen]);
 
-  const validPhotoUrl = photoUrl && photoUrl.trim().length > 0 && !imageError ? photoUrl.trim() : null;
+  const validPhotoUrl =
+    imageAttemptIndex < photoCandidates.length ? photoCandidates[imageAttemptIndex] : null;
 
   const handleCopyMemberId = async () => {
     try {
@@ -135,7 +139,7 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
     }
   };
 
-  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !onUpdatePhoto) return;
 
@@ -145,43 +149,22 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
     }
 
     setIsUploadingPhoto(true);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = async () => {
-        try {
-          // Resize to a crisp 256x256 square avatar so storage stays fast and compact
-          const canvas = document.createElement('canvas');
-          const targetSize = 256;
-          canvas.width = targetSize;
-          canvas.height = targetSize;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            const minSide = Math.min(img.width, img.height);
-            const sx = (img.width - minSide) / 2;
-            const sy = (img.height - minSide) / 2;
-            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
-            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.86);
-            await onUpdatePhoto(compressedDataUrl);
-            setImageError(false);
-            onNotify?.('Member card photo updated.');
-          }
-        } finally {
-          setIsUploadingPhoto(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
-        }
-      };
-      img.onerror = () => {
-        setIsUploadingPhoto(false);
-        onNotify?.('Unable to process selected image.');
-      };
-      img.src = String(reader.result);
-    };
-    reader.onerror = () => {
+    try {
+      const compressedDataUrl = await compressImageFile(file, {
+        maxDimension: 256,
+        maxDataUrlBytes: 28000,
+        initialQuality: 0.82,
+        square: true,
+      });
+      await onUpdatePhoto(compressedDataUrl);
+      setImageAttemptIndex(0);
+      onNotify?.('Member card photo updated.');
+    } catch {
+      onNotify?.('Unable to process selected image.');
+    } finally {
       setIsUploadingPhoto(false);
-      onNotify?.('Unable to read image file.');
-    };
-    reader.readAsDataURL(file);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const handleDownloadCard = () => {
@@ -277,7 +260,9 @@ export const DigitalMemberCard: React.FC<DigitalMemberCardProps> = ({
             src={validPhotoUrl}
             alt={`${fullName} profile photo`}
             referrerPolicy="no-referrer"
-            onError={() => setImageError(true)}
+            decoding="async"
+            onLoad={() => rememberWorkingImageUrl(photoUrl, 'thumb', validPhotoUrl)}
+            onError={() => setImageAttemptIndex((prev) => prev + 1)}
             className={`${dimensions} object-cover border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-100 dark:bg-[#25254B]`}
           />
         ) : (

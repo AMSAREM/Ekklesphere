@@ -32,6 +32,7 @@ import { requireActiveLicense } from './src/server/licenseMiddleware.ts';
 import { consoleRouter } from './src/server/consoleRouter.ts';
 import { churchWallStore } from './src/server/churchWallStore.ts';
 import type { ImportDuplicateMode } from './src/shared/memberImportValidation.ts';
+import { MediaProxyError, proxyExternalImage } from './src/server/mediaProxy.ts';
 
 dotenv.config();
 
@@ -3456,6 +3457,65 @@ app.post(
     }
   }
 );
+
+// =========================================================================
+// SSRF-GUARDED EXTERNAL MEDIA PROXY (MEMBER / EVENT IMAGES IN IFRAME)
+// =========================================================================
+
+const mediaProxyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `media:${getClientIpKey(req)}`,
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: { error: 'rate_limit_exceeded', message: 'Too many image proxy requests. Please wait a moment.' },
+});
+
+app.get('/api/media/proxy', mediaProxyLimiter, async (req: Request, res: Response) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  const parsedWidth = Number(req.query.w);
+  const parsedQuality = Number(req.query.q);
+  const width = Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : undefined;
+  const quality = Number.isFinite(parsedQuality) && parsedQuality > 0 ? parsedQuality : undefined;
+  const acceptHeader = typeof req.headers.accept === 'string' ? req.headers.accept : undefined;
+
+  try {
+    const { buffer, contentType, etag } = await proxyExternalImage(rawUrl, {
+      width,
+      quality,
+      acceptHeader,
+    });
+    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+    res.setHeader('ETag', etag);
+    res.setHeader('Vary', 'Accept');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch.trim() === etag) {
+      return res.status(304).end();
+    }
+
+    res.setHeader('Content-Type', contentType);
+    return res.status(200).send(buffer);
+  } catch (err: any) {
+    if (err instanceof MediaProxyError) {
+      return res.status(err.status).json({
+        error: err.code,
+        message: err.message,
+      });
+    }
+    return res.status(502).json({
+      error: 'media_proxy_failed',
+      message: 'Could not retrieve the external image URL.',
+    });
+  }
+});
 
 // =========================================================================
 // SERVER HEALTH & STATUS (NO COORDINATES OR PII EXPOSED)

@@ -14,8 +14,11 @@ import {
   AlertCircle,
   Camera,
   Upload,
+  ExternalLink,
 } from 'lucide-react';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { getExternalImageOpenUrl, probeImageProxyDiagnostic } from '../../utils/imageUrl';
+import { compressImageFile } from '../../utils/imageCompression';
 
 interface AddMemberModalProps {
   isOpen: boolean;
@@ -162,8 +165,13 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [savingMode, setSavingMode] = useState<'close' | 'another' | null>(null);
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
+  const [photoDiagnostic, setPhotoDiagnostic] = useState<string | null>(null);
 
-  const handlePhotoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    setPhotoDiagnostic(null);
+  }, [imageUrl]);
+
+  const handlePhotoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
@@ -173,39 +181,20 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
 
     setIsProcessingPhoto(true);
     setSubmitError(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const targetSize = 256;
-          canvas.width = targetSize;
-          canvas.height = targetSize;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            const minSide = Math.min(img.width, img.height);
-            const sx = (img.width - minSide) / 2;
-            const sy = (img.height - minSide) / 2;
-            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
-            setImageUrl(canvas.toDataURL('image/jpeg', 0.86));
-          }
-        } finally {
-          setIsProcessingPhoto(false);
-          e.target.value = '';
-        }
-      };
-      img.onerror = () => {
-        setIsProcessingPhoto(false);
-        setSubmitError('Unable to decode selected image file.');
-      };
-      img.src = String(reader.result);
-    };
-    reader.onerror = () => {
+    try {
+      const compressedDataUrl = await compressImageFile(file, {
+        maxDimension: 256,
+        maxDataUrlBytes: 28000,
+        initialQuality: 0.82,
+        square: true,
+      });
+      setImageUrl(compressedDataUrl);
+    } catch {
+      setSubmitError('Unable to decode selected image file.');
+    } finally {
       setIsProcessingPhoto(false);
-      setSubmitError('Unable to read selected image file.');
-    };
-    reader.readAsDataURL(file);
+      e.target.value = '';
+    }
   };
 
   const resetFormFields = (source?: Person | null) => {
@@ -938,6 +927,17 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     initials={`${firstName[0] || 'M'}${lastName[0] || 'B'}`.toUpperCase()}
                     sizeClass="w-14 h-14"
                     textClass="text-base font-bold"
+                    onImageStatusChange={(imgStatus) => {
+                      if (imgStatus === 'loaded' || imgStatus === 'idle') {
+                        setPhotoDiagnostic(null);
+                      } else if (imgStatus === 'failed' && imageUrl.trim()) {
+                        probeImageProxyDiagnostic(imageUrl).then((msg) => {
+                          setPhotoDiagnostic(
+                            msg || 'Could not load a preview from this URL. Check that the link points directly to a public image.'
+                          );
+                        });
+                      }
+                    }}
                   />
                   <div className="flex-1 min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -971,14 +971,38 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                         </span>
                       )}
                     </div>
-                    <input
-                      type="text"
-                      value={imageUrl.startsWith('data:image/') ? 'Uploaded portrait image attached' : imageUrl}
-                      readOnly={imageUrl.startsWith('data:image/')}
-                      onChange={(e) => setImageUrl(e.target.value)}
-                      placeholder="https://.../photo.jpg"
-                      className="w-full px-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={imageUrl.startsWith('data:image/') ? 'Uploaded portrait image attached' : imageUrl}
+                        readOnly={imageUrl.startsWith('data:image/')}
+                        onChange={(e) => setImageUrl(e.target.value)}
+                        placeholder="https://.../photo.jpg (or Google Drive / Dropbox link)"
+                        className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      {(() => {
+                        const openHref = getExternalImageOpenUrl(imageUrl);
+                        if (!openHref) return null;
+                        return (
+                          <a
+                            href={openHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#9D90FF] text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 shrink-0"
+                            title="Open image URL in a new tab"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Open</span>
+                          </a>
+                        );
+                      })()}
+                    </div>
+                    {photoDiagnostic && (
+                      <p className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl px-2.5 py-1.5 flex items-start gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>{photoDiagnostic}</span>
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
