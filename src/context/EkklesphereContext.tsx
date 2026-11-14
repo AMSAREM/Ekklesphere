@@ -38,6 +38,7 @@ import {
   type MemberImportValidationSummary,
   type ValidatedImportRow,
 } from '../shared/memberImportValidation';
+import { computeServiceBinaryStatus } from '../utils/serviceStatus';
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -165,8 +166,8 @@ interface EkklesphereContextType {
   toggleSidebar: () => void;
   isMobileNavOpen: boolean;
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  adminSubTab: 'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings';
-  setAdminSubTab: (tab: 'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
+  adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings';
+  setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isAddServiceOpen: boolean;
@@ -197,6 +198,18 @@ interface EkklesphereContextType {
     expectedAttendance?: number;
     dwellMinutes?: number;
   }) => Promise<void>;
+  updateService: (
+    serviceId: string,
+    updates: {
+      name?: string;
+      date?: string;
+      startsAt?: string;
+      endsAt?: string;
+      expectedAttendance?: number;
+      dwellMinutes?: number;
+      status?: 'live' | 'closed';
+    }
+  ) => Promise<void>;
   deleteService: (serviceId: string) => Promise<void>;
 
   // People & Members
@@ -274,8 +287,21 @@ interface EkklesphereContextType {
   telemetrySummary: LiveTelemetrySummary;
 
   // Check-in Actions
-  checkInPerson: (personId: string, method: CheckinMethod, confidence?: number, note?: string) => boolean;
-  removeCheckIn: (personId: string) => Promise<void>;
+  checkInPerson: (
+    personId: string,
+    method: CheckinMethod,
+    confidence?: number,
+    note?: string,
+    serviceIdOverride?: string
+  ) => boolean;
+  checkInPersonAsync: (
+    personId: string,
+    method: CheckinMethod,
+    confidence?: number,
+    note?: string,
+    serviceIdOverride?: string
+  ) => Promise<boolean>;
+  removeCheckIn: (personId: string, serviceIdOverride?: string) => Promise<void>;
 
   // Usher PWA Offline simulation
   isUsherOnline: boolean;
@@ -462,7 +488,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return false;
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
-  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAddServiceOpen, setIsAddServiceOpen] = useState<boolean>(false);
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState<boolean>(false);
@@ -1628,13 +1654,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
-  const currentService = services.find((s) => s.id === activeServiceId) || services[0] || LIVE_DEFAULT_SERVICE;
+  const currentService = React.useMemo(
+    () => services.find((s) => s.id === activeServiceId) || services[0] || LIVE_DEFAULT_SERVICE,
+    [services, activeServiceId]
+  );
 
   // Real-time attendance metrics scoped to the active service (zero synthetic baseline)
-  const activeServiceAttendanceRecords = attendanceRecords.filter(
-    (r) =>
-      r.serviceInstanceId === currentService.id ||
-      (!r.serviceInstanceId && services.length <= 1)
+  const activeServiceAttendanceRecords = React.useMemo(
+    () =>
+      attendanceRecords.filter(
+        (r) =>
+          r.serviceInstanceId === currentService.id ||
+          (!r.serviceInstanceId && services.length <= 1)
+      ),
+    [attendanceRecords, currentService.id, services.length]
   );
   const totalCheckedInCount = activeServiceAttendanceRecords.length;
   const expectedAttendance =
@@ -1645,33 +1678,40 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       : 0;
 
   const totalMembersCount = members.length;
-  const autoCheckinOptedInCount = members.filter((m) => m.autoCheckinOptedIn).length;
+  const autoCheckinOptedInCount = React.useMemo(
+    () => members.filter((m) => m.autoCheckinOptedIn).length,
+    [members]
+  );
   const optInPercentage =
     totalMembersCount > 0 ? Math.round((autoCheckinOptedInCount / totalMembersCount) * 100) : 0;
 
-  // Check-in action (handles offline queue vs instant online server sync)
-  const checkInPerson = (
+  // Check-in action (handles offline queue vs instant online server sync with Supabase verification + rollback)
+  const executeCheckIn = (
     personId: string,
     method: CheckinMethod,
     confidence: number = 90,
-    note?: string
-  ): boolean => {
+    note?: string,
+    serviceIdOverride?: string
+  ): { started: boolean; promise: Promise<boolean> } => {
+    const targetServiceId = serviceIdOverride || activeServiceId;
+    const targetService = services.find((s) => s.id === targetServiceId) || currentService;
     const existing = attendanceRecords.find(
-      (r) => r.personId === personId && r.serviceInstanceId === activeServiceId
+      (r) => r.personId === personId && r.serviceInstanceId === targetServiceId
     );
     if (existing) {
-      return false; // Already checked in for this service
+      return { started: false, promise: Promise.resolve(false) };
     }
 
     const person = members.find((m) => m.id === personId);
     const personFullName = person ? `${person.firstName} ${person.lastName}`.trim() : currentUser?.name || 'Member';
     const now = new Date();
     let isLate = false;
-    if (!currentService.date || currentService.date === formatLocalDateIso(now)) {
-      const [sh, sm] = (currentService.startsAt || '').split(':').map(Number);
+    if (!targetService.date || targetService.date === formatLocalDateIso(now)) {
+      const [sh, sm] = (targetService.startsAt || '').split(':').map(Number);
+      const allowance = Math.max(1, Number(targetService.dwellMinutes ?? 15) || 15);
       if (Number.isFinite(sh) && Number.isFinite(sm)) {
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
-        const graceDeadlineMinutes = sh * 60 + sm + 15;
+        const graceDeadlineMinutes = sh * 60 + sm + allowance;
         if (currentMinutes > graceDeadlineMinutes) {
           isLate = true;
         }
@@ -1683,7 +1723,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       tenantId: 'tenant-live',
       personId,
       personName: personFullName,
-      serviceInstanceId: activeServiceId,
+      serviceInstanceId: targetServiceId,
       campusId: '00000000-0000-0000-0000-000000000001',
       method,
       confidence,
@@ -1694,51 +1734,113 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       waitingToSync: !isUsherOnline,
     };
 
+    const auditEntry = {
+      id: `log-${Date.now()}`,
+      actor: method === 'usher' ? 'Usher Desk' : `${person?.firstName || personFullName} Device`,
+      action: 'Attendance Recorded',
+      entityType: 'AttendanceRecord' as const,
+      timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      details: note || `Method: ${method}, Confidence: ${confidence}%`,
+    };
+
     setAttendanceRecords((prev) => [newRecord, ...prev]);
 
     if (!isUsherOnline) {
       setPendingSyncCount((c) => c + 1);
+      setAuditLogs((prev) => [auditEntry, ...prev]);
       showToast(`${person?.firstName || 'Member'} saved locally. Will sync when online.`);
-    } else {
-      fetch('/api/live-checkins', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          ...newRecord,
-          personName: personFullName,
-          recordedBy: currentUser?.name,
-        }),
-      }).catch((err) => console.warn('Could not sync check-in to server:', err));
-      showToast(`${person?.firstName || personFullName} checked in (${method})`);
-
-      // Trigger automatic Arrival Web Push Notification (Brief Section 3.3 & 6.2)
-      if (systemSettings.enablePushNotifications && memberConsents.push) {
-        pushNotificationService
-          .notifyArrivalCheckin(personFullName, currentService.name, method)
-          .catch((err) => console.warn('[Push] Arrival push notification skipped:', err));
-      }
+      return { started: true, promise: Promise.resolve(true) };
     }
 
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        actor: method === 'usher' ? 'Usher Desk' : `${person?.firstName || personFullName} Device`,
-        action: 'Attendance Recorded',
-        entityType: 'AttendanceRecord',
-        timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        details: note || `Method: ${method}, Confidence: ${confidence}%`,
-      },
-      ...prev,
-    ]);
+    const syncPromise = (async (): Promise<boolean> => {
+      try {
+        const res = await fetch('/api/live-checkins', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            ...newRecord,
+            personName: personFullName,
+            recordedBy: currentUser?.name,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setAttendanceRecords((prev) => prev.filter((r) => r.id !== newRecord.id));
+          showToast(data?.message || `Could not save check-in to database (HTTP ${res.status}).`);
+          return false;
+        }
 
-    return true;
+        const resolvedRecord = data?.record;
+        const resolvedServiceId = resolvedRecord?.serviceInstanceId || targetServiceId;
+        if (resolvedRecord && (resolvedServiceId !== targetServiceId || resolvedRecord.id !== newRecord.id)) {
+          setAttendanceRecords((prev) =>
+            prev.map((r) =>
+              r.id === newRecord.id
+                ? {
+                    ...r,
+                    id: resolvedRecord.id || r.id,
+                    serviceInstanceId: resolvedServiceId,
+                    waitingToSync: false,
+                  }
+                : r
+            )
+          );
+          if (targetServiceId === LIVE_DEFAULT_SERVICE.id && resolvedServiceId !== LIVE_DEFAULT_SERVICE.id) {
+            void refreshServices();
+          }
+        }
+
+        setAuditLogs((prev) => [auditEntry, ...prev]);
+        showToast(`${person?.firstName || personFullName} checked in (${method})`);
+
+        // Trigger automatic Arrival Web Push Notification (Brief Section 3.3 & 6.2)
+        if (systemSettings.enablePushNotifications && memberConsents.push) {
+          pushNotificationService
+            .notifyArrivalCheckin(personFullName, targetService.name, method)
+            .catch((err) => console.warn('[Push] Arrival push notification skipped:', err));
+        }
+
+        return true;
+      } catch (err) {
+        console.warn('Could not sync check-in to server:', err);
+        setAttendanceRecords((prev) => prev.filter((r) => r.id !== newRecord.id));
+        showToast('Network error saving attendance check-in to database.');
+        return false;
+      }
+    })();
+
+    return { started: true, promise: syncPromise };
   };
 
-  const removeCheckIn = async (personId: string): Promise<void> => {
+  const checkInPerson = (
+    personId: string,
+    method: CheckinMethod,
+    confidence: number = 90,
+    note?: string,
+    serviceIdOverride?: string
+  ): boolean => {
+    const { started, promise } = executeCheckIn(personId, method, confidence, note, serviceIdOverride);
+    void promise;
+    return started;
+  };
+
+  const checkInPersonAsync = async (
+    personId: string,
+    method: CheckinMethod,
+    confidence: number = 90,
+    note?: string,
+    serviceIdOverride?: string
+  ): Promise<boolean> => {
+    const { promise } = executeCheckIn(personId, method, confidence, note, serviceIdOverride);
+    return promise;
+  };
+
+  const removeCheckIn = async (personId: string, serviceIdOverride?: string): Promise<void> => {
+    const targetServiceId = serviceIdOverride || activeServiceId;
     const person = members.find((m) => m.id === personId);
     try {
       const res = await fetch(
-        `/api/live-checkins/${encodeURIComponent(personId)}?serviceId=${encodeURIComponent(activeServiceId)}`,
+        `/api/live-checkins/${encodeURIComponent(personId)}?serviceId=${encodeURIComponent(targetServiceId)}`,
         {
           method: 'DELETE',
           headers: getAuthHeaders(),
@@ -1752,7 +1854,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
       setAttendanceRecords((prev) =>
         prev.filter(
-          (r) => !(r.personId === personId && (!r.serviceInstanceId || r.serviceInstanceId === activeServiceId))
+          (r) => !(r.personId === personId && (!r.serviceInstanceId || r.serviceInstanceId === targetServiceId))
         )
       );
       showToast(`Check-in removed from database for ${person?.firstName || 'Member'}`);
@@ -2188,6 +2290,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const mergedPayload = existing ? { ...existing, ...updates } : updates;
 
     let updatedPerson: Person | null = null;
+    let serverErrorMessage: string | null = null;
     try {
       const canUseAdminEndpoint =
         currentUser?.role === 'admin' ||
@@ -2206,10 +2309,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (res.ok) {
           const rawUpdated = await res.json().catch(() => null);
           if (rawUpdated) updatedPerson = normalizePersonRecord(rawUpdated);
+        } else {
+          const errBody = await res.json().catch(() => ({}));
+          serverErrorMessage = errBody?.message || `Could not save member update (HTTP ${res.status})`;
         }
       }
 
-      if (!updatedPerson) {
+      if (!updatedPerson && !serverErrorMessage) {
         const selfRes = await fetch('/api/members/me/profile', {
           method: 'PATCH',
           headers: getAuthHeaders(),
@@ -2222,10 +2328,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (selfRes.ok) {
           const rawSelfUpdated = await selfRes.json().catch(() => null);
           if (rawSelfUpdated) updatedPerson = normalizePersonRecord(rawSelfUpdated);
+        } else {
+          const errBody = await selfRes.json().catch(() => ({}));
+          serverErrorMessage = errBody?.message || `Could not save profile update (HTTP ${selfRes.status})`;
         }
       }
     } catch {
-      // fallback
+      // network offline fallback allowed below
+    }
+
+    if (serverErrorMessage && !updatedPerson) {
+      showToast(serverErrorMessage);
+      throw new Error(serverErrorMessage);
     }
 
     if (!updatedPerson) {
@@ -2421,18 +2535,44 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (serverData?.premiseSettings) {
         const ps = serverData.premiseSettings;
         setSystemSettings((prev) => {
+          const nextChurchName = ps.churchName || prev.churchName;
+          const nextCampusName = ps.campusName || prev.campusName;
+          const nextCampusAddress = ps.campusAddress ?? prev.campusAddress;
+          const nextLat = typeof ps.lat === 'number' ? ps.lat : null;
+          const nextLng = typeof ps.lng === 'number' ? ps.lng : null;
+          const nextAcc = typeof ps.accuracyM === 'number' ? ps.accuracyM : null;
+          const nextUpdatedAt = ps.updatedAt || null;
+          const nextInner = ps.innerGeofenceMeters ?? prev.innerGeofenceMeters;
+          const nextOuter = ps.outerGeofenceMeters ?? prev.outerGeofenceMeters;
+          const nextDwell = ps.dwellTimeMinutes ?? prev.dwellTimeMinutes;
+
+          if (
+            prev.churchName === nextChurchName &&
+            prev.campusName === nextCampusName &&
+            prev.campusAddress === nextCampusAddress &&
+            prev.campusLatitude === nextLat &&
+            prev.campusLongitude === nextLng &&
+            prev.campusLocationAccuracyM === nextAcc &&
+            prev.campusLocationUpdatedAt === nextUpdatedAt &&
+            prev.innerGeofenceMeters === nextInner &&
+            prev.outerGeofenceMeters === nextOuter &&
+            prev.dwellTimeMinutes === nextDwell
+          ) {
+            return prev;
+          }
+
           const next: SystemSettings = {
             ...prev,
-            churchName: ps.churchName || prev.churchName,
-            campusName: ps.campusName || prev.campusName,
-            campusAddress: ps.campusAddress ?? prev.campusAddress,
-            campusLatitude: typeof ps.lat === 'number' ? ps.lat : null,
-            campusLongitude: typeof ps.lng === 'number' ? ps.lng : null,
-            campusLocationAccuracyM: typeof ps.accuracyM === 'number' ? ps.accuracyM : null,
-            campusLocationUpdatedAt: ps.updatedAt || null,
-            innerGeofenceMeters: ps.innerGeofenceMeters ?? prev.innerGeofenceMeters,
-            outerGeofenceMeters: ps.outerGeofenceMeters ?? prev.outerGeofenceMeters,
-            dwellTimeMinutes: ps.dwellTimeMinutes ?? prev.dwellTimeMinutes,
+            churchName: nextChurchName,
+            campusName: nextCampusName,
+            campusAddress: nextCampusAddress,
+            campusLatitude: nextLat,
+            campusLongitude: nextLng,
+            campusLocationAccuracyM: nextAcc,
+            campusLocationUpdatedAt: nextUpdatedAt,
+            innerGeofenceMeters: nextInner,
+            outerGeofenceMeters: nextOuter,
+            dwellTimeMinutes: nextDwell,
           };
           try {
             localStorage.setItem('ekklesphere_system_settings', JSON.stringify(next));
@@ -2467,12 +2607,44 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const remainingOffline = offlineQueued.filter(
             (r) => !serverKeys.has(`${r.serviceInstanceId || ''}::${r.personId}`)
           );
-          return [...remainingOffline, ...serverData.liveCheckins];
+          const combined: AttendanceRecord[] = [...remainingOffline, ...serverData.liveCheckins];
+
+          if (
+            combined.length === prev.length &&
+            combined.every(
+              (item, idx) =>
+                item.id === prev[idx]?.id &&
+                item.personId === prev[idx]?.personId &&
+                item.serviceInstanceId === prev[idx]?.serviceInstanceId &&
+                item.checkedInIso === prev[idx]?.checkedInIso &&
+                item.method === prev[idx]?.method &&
+                Boolean(item.waitingToSync) === Boolean(prev[idx]?.waitingToSync)
+            )
+          ) {
+            return prev;
+          }
+          return combined;
         });
       }
 
       if (serverData?.telemetrySummary) {
-        setTelemetrySummary(serverData.telemetrySummary);
+        const nextSum = serverData.telemetrySummary;
+        setTelemetrySummary((prev) => {
+          if (
+            prev.totalSignals === nextSum.totalSignals &&
+            prev.accepted === nextSum.accepted &&
+            prev.flagged === nextSum.flagged &&
+            prev.rejected === nextSum.rejected &&
+            prev.mockAttempts === nextSum.mockAttempts &&
+            prev.openShifts === nextSum.openShifts &&
+            prev.avgDwellMinutes === nextSum.avgDwellMinutes &&
+            (prev.recentSignals?.length || 0) === (nextSum.recentSignals?.length || 0) &&
+            prev.recentSignals?.[0]?.id === nextSum.recentSignals?.[0]?.id
+          ) {
+            return prev;
+          }
+          return nextSum;
+        });
       }
     } catch {
       // ignore transient network errors
@@ -2519,14 +2691,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (match) expectedCount = Number(match[1]) || 0;
     }
 
+    const allowanceMinutes = Math.max(
+      0,
+      Number(ev.dwell_min ?? ev.dwellMinutes ?? ev.allowance_minutes ?? 0) || 0
+    );
+    const startTimeIso = typeof rawStart === 'string' && rawStart.includes('T') ? rawStart : undefined;
+    const endTimeIso = typeof rawEnd === 'string' && rawEnd.includes('T') ? rawEnd : undefined;
+
+    const binaryStatus = computeServiceBinaryStatus({
+      date: dateStr,
+      startsAt: startStr,
+      endsAt: endStr,
+      startTimeIso,
+      endTimeIso,
+      allowanceMinutes,
+      rawStatus: ev.status,
+    });
     const mappedStatus: ServiceInstance['status'] =
-      ev.status === 'closed' || ev.status === 'completed'
-        ? 'closed'
-        : ev.status === 'cancelled'
-        ? 'cancelled'
-        : ev.status === 'scheduled' || ev.status === 'draft'
-        ? 'scheduled'
-        : 'open';
+      binaryStatus === 'live' ? 'open' : 'closed';
 
     return {
       id: ev.id,
@@ -2536,6 +2718,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       date: dateStr,
       startsAt: startStr,
       endsAt: endStr,
+      startTimeIso,
+      endTimeIso,
+      dwellMinutes: allowanceMinutes,
       status: mappedStatus,
       expectedAttendance: expectedCount,
     };
@@ -2651,8 +2836,21 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       throw new Error(serverErrorMsg);
     }
 
+    const allowanceMinutes = Math.max(
+      0,
+      Number(params.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5) || 0
+    );
+
     if (!created) {
       const newId = `svc-${Date.now()}`;
+      const fallbackBinary = computeServiceBinaryStatus({
+        date: serviceDate,
+        startsAt: startClock,
+        endsAt: endClock,
+        startTimeIso: localStart.toISOString(),
+        endTimeIso: localEnd.toISOString(),
+        allowanceMinutes,
+      });
       created = {
         id: newId,
         serviceId: newId,
@@ -2661,7 +2859,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         date: serviceDate,
         startsAt: startClock,
         endsAt: endClock,
-        status: serviceDate > formatLocalDateIso() ? 'scheduled' : 'open',
+        startTimeIso: localStart.toISOString(),
+        endTimeIso: localEnd.toISOString(),
+        dwellMinutes: allowanceMinutes,
+        status: fallbackBinary === 'live' ? 'open' : 'closed',
         expectedAttendance: params.expectedAttendance ?? 0,
       };
     }
@@ -2676,9 +2877,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         date: created.date,
         startsAt: created.startsAt,
         endsAt: created.endsAt,
+        startTimeIso: created.startTimeIso || localStart.toISOString(),
+        endTimeIso: created.endTimeIso || localEnd.toISOString(),
         status: created.status,
         expectedAttendance: created.expectedAttendance,
-        dwellMinutes: params.dwellMinutes ?? 5,
+        dwellMinutes: allowanceMinutes,
         createdAt: new Date().toISOString(),
       }, { merge: true }).catch(() => {});
     } catch {}
@@ -2702,23 +2905,200 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
+  const updateService = async (
+    serviceId: string,
+    updates: {
+      name?: string;
+      date?: string;
+      startsAt?: string;
+      endsAt?: string;
+      expectedAttendance?: number;
+      dwellMinutes?: number;
+      status?: 'live' | 'closed';
+    }
+  ): Promise<void> => {
+    const existing = services.find((s) => s.id === serviceId);
+    const serviceDate =
+      updates.date && /^\d{4}-\d{2}-\d{2}$/.test(updates.date.trim())
+        ? updates.date.trim()
+        : existing?.date || formatLocalDateIso();
+    const startClock = updates.startsAt || existing?.startsAt || '08:00';
+    const endClock = updates.endsAt || existing?.endsAt || '10:30';
+    const allowanceMinutes = Math.max(
+      0,
+      Number(updates.dwellMinutes ?? existing?.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5) || 0
+    );
+
+    const [yyyy, mm, dd] = serviceDate.split('-').map(Number);
+    const [sh, sm] = startClock.split(':').map((v) => Number(v) || 0);
+    const [eh, em] = endClock.split(':').map((v) => Number(v) || 0);
+    const localStart = new Date(yyyy, mm - 1, dd, sh, sm, 0, 0);
+    let localEnd = new Date(yyyy, mm - 1, dd, eh, em, 0, 0);
+    if (localEnd.getTime() <= localStart.getTime()) {
+      localEnd = new Date(localEnd.getTime() + 24 * 60 * 60 * 1000);
+    }
+
+    const payload: Record<string, unknown> = {
+      name: updates.name?.trim() || existing?.name || 'Worship Service',
+      date: serviceDate,
+      startsAt: startClock,
+      endsAt: endClock,
+      startTimeIso: localStart.toISOString(),
+      endTimeIso: localEnd.toISOString(),
+      dwellMinutes: allowanceMinutes,
+      allowanceMinutes,
+      expectedAttendance:
+        typeof updates.expectedAttendance === 'number'
+          ? updates.expectedAttendance
+          : existing?.expectedAttendance ?? 0,
+    };
+    if (updates.status) {
+      payload.status = updates.status === 'closed' ? 'closed' : 'active';
+    }
+
+    const isPlaceholderId =
+      serviceId === LIVE_DEFAULT_SERVICE.id ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId);
+
+    let mappedUpdated: ServiceInstance | null = null;
+    try {
+      let res: Response;
+      if (isPlaceholderId) {
+        // Materialize local placeholder service directly in Supabase `events`
+        res = await fetch('/api/events', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        });
+      } else {
+        res = await fetch(`/api/events/${encodeURIComponent(serviceId)}`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 404 && !existing?.id?.includes('-')) {
+          res = await fetch('/api/events', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(payload),
+          });
+        }
+      }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        mappedUpdated = mapDbEventToService(data);
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody?.message || `Failed to update service (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      if (err?.message && !/failed to fetch|network/i.test(err.message)) {
+        throw err;
+      }
+    }
+
+    if (!mappedUpdated) {
+      const binaryStatus = computeServiceBinaryStatus({
+        date: serviceDate,
+        startsAt: startClock,
+        endsAt: endClock,
+        startTimeIso: localStart.toISOString(),
+        endTimeIso: localEnd.toISOString(),
+        allowanceMinutes,
+        rawStatus: updates.status === 'closed' ? 'closed' : 'active',
+      });
+      mappedUpdated = {
+        ...(existing || {
+          id: serviceId,
+          serviceId,
+          campusId: '00000000-0000-0000-0000-000000000001',
+        }),
+        name: String(payload.name),
+        date: serviceDate,
+        startsAt: startClock,
+        endsAt: endClock,
+        startTimeIso: localStart.toISOString(),
+        endTimeIso: localEnd.toISOString(),
+        dwellMinutes: allowanceMinutes,
+        status: binaryStatus === 'live' ? 'open' : 'closed',
+        expectedAttendance: Number(payload.expectedAttendance) || 0,
+      };
+    }
+
+    try {
+      setDoc(
+        doc(db, 'events', mappedUpdated.id),
+        {
+          id: mappedUpdated.id,
+          name: mappedUpdated.name,
+          date: mappedUpdated.date,
+          startsAt: mappedUpdated.startsAt,
+          endsAt: mappedUpdated.endsAt,
+          startTimeIso: mappedUpdated.startTimeIso,
+          endTimeIso: mappedUpdated.endTimeIso,
+          dwellMinutes: allowanceMinutes,
+          status: mappedUpdated.status,
+          expectedAttendance: mappedUpdated.expectedAttendance,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch {}
+
+    setServices((prev) => {
+      const hasOriginal = prev.some((s) => s.id === serviceId);
+      const updated = hasOriginal
+        ? prev.map((s) => (s.id === serviceId ? mappedUpdated! : s))
+        : [...prev.filter((s) => s.id !== LIVE_DEFAULT_SERVICE.id), mappedUpdated!];
+      try {
+        localStorage.setItem('ekklesphere_services', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    if (mappedUpdated.id !== serviceId) {
+      setAttendanceRecords((prev) =>
+        prev.map((r) =>
+          r.serviceInstanceId === serviceId ? { ...r, serviceInstanceId: mappedUpdated!.id } : r
+        )
+      );
+      setActiveServiceId((curr) => {
+        const nextId = curr === serviceId ? mappedUpdated!.id : curr;
+        try {
+          localStorage.setItem('ekklesphere_active_service_id', nextId);
+        } catch {}
+        return nextId;
+      });
+    }
+
+    showToast(
+      `Updated "${mappedUpdated.name}" (${mappedUpdated.status === 'open' ? 'Live' : 'Closed'})`
+    );
+  };
+
   const deleteService = async (serviceId: string): Promise<void> => {
     const svcToDelete = services.find((s) => s.id === serviceId);
-    try {
-      const res = await fetch(`/api/events/${encodeURIComponent(serviceId)}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        showToast(errBody?.message || 'Could not delete scheduled service from database.');
-        await refreshServices();
+    const isPlaceholderId =
+      serviceId === LIVE_DEFAULT_SERVICE.id ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId);
+
+    if (!isPlaceholderId) {
+      try {
+        const res = await fetch(`/api/events/${encodeURIComponent(serviceId)}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          showToast(errBody?.message || 'Could not delete scheduled service from database.');
+          await refreshServices();
+          return;
+        }
+      } catch (err) {
+        console.error('Error deleting service:', err);
+        showToast('Network error deleting service from database.');
         return;
       }
-    } catch (err) {
-      console.error('Error deleting service:', err);
-      showToast('Network error deleting service from database.');
-      return;
     }
 
     try {
@@ -3581,140 +3961,197 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(`Proximity reset. Person is outside ${systemSettings.campusName} (>${systemSettings.outerGeofenceMeters}m).`);
   };
 
+  const contextValue = React.useMemo<EkklesphereContextType>(
+    () => ({
+      currentUser,
+      setCurrentUser,
+      login,
+      loginWithCredentials,
+      signInWithGoogle,
+      isGoogleAuthLoading,
+      googleAuthError,
+      clearGoogleAuthError,
+      registerMember,
+      registerOrganisation,
+      logout,
+      changePassword,
+      switchUserRole,
+      pushPermissionStatus,
+      isPushSubscribed,
+      pushSubscribersCount,
+      requestPushPermission,
+      sendTestPushNotification,
+      activePortal,
+      setActivePortal,
+      isSidebarCollapsed,
+      setIsSidebarCollapsed,
+      toggleSidebar,
+      isMobileNavOpen,
+      setIsMobileNavOpen,
+      adminSubTab,
+      setAdminSubTab,
+      searchQuery,
+      setSearchQuery,
+      isAddServiceOpen,
+      setIsAddServiceOpen,
+      isFollowupModalOpen,
+      setIsFollowupModalOpen,
+      isHelpModalOpen,
+      setIsHelpModalOpen,
+      isSettingsModalOpen,
+      setIsSettingsModalOpen,
+      isChangePasswordModalOpen,
+      setIsChangePasswordModalOpen,
+      theme,
+      setTheme,
+      toggleTheme,
+      activeServiceId,
+      setActiveServiceId,
+      services,
+      currentService,
+      refreshServices,
+      addService,
+      updateService,
+      deleteService,
+      members,
+      visitorsCount,
+      refreshMembers,
+      addVisitor,
+      addMember,
+      validateMemberImportRemote,
+      batchImportMembers,
+      updateMember,
+      deleteMember,
+      updateMemberConsent,
+      systemSettings,
+      systemSettingsStorageBackend,
+      isSyncingSystemSettings,
+      refreshSystemSettings,
+      updateSystemSettings,
+      resetSystemSettings,
+      sendTestSmsGateway,
+      setChurchPremiseLocation,
+      clearChurchPremiseLocation,
+      refreshLivePremise,
+      churchGroups,
+      refreshChurchGroups,
+      addChurchGroup,
+      updateChurchGroup,
+      deleteChurchGroup,
+      toggleChurchGroupStatus,
+      getGroupMembers,
+      attendanceRecords,
+      totalCheckedInCount,
+      expectedAttendance,
+      attendancePercentage,
+      autoCheckinOptedInCount,
+      totalMembersCount,
+      optInPercentage,
+      telemetrySummary,
+      checkInPerson,
+      checkInPersonAsync,
+      removeCheckIn,
+      isUsherOnline,
+      setIsUsherOnline,
+      pendingSyncCount,
+      syncUsherCheckins,
+      proximityStage,
+      dwellTimerSeconds,
+      isBeaconDetected,
+      setIsBeaconDetected,
+      advanceProximityStage,
+      resetProximity,
+      triggerBeaconScan,
+      triggerDwellComplete,
+      followupTasks,
+      resolveFollowupTask,
+      addFollowupTask,
+      memberConsents,
+      memberRsvps,
+      toggleRsvp,
+      donations,
+      submitDonation,
+      churchWallPosts,
+      refreshChurchWallPosts,
+      addChurchWallPost,
+      toggleChurchWallAmen,
+      auditLogs,
+      refreshAuditLogs,
+      toastMessage,
+      showToast,
+      viewMode,
+      setViewMode,
+      tenants,
+      addTenant,
+      updateTenant,
+      toggleTenantStatus,
+      deleteTenant,
+      impersonateTenant,
+      licenses,
+      renewLicense,
+      updateLicense,
+      issueLicense,
+      landingConfig,
+      updateLandingConfig,
+      resetLandingConfig,
+    }),
+    // Recompute value object only when data/UI state slices actually change
+    [
+      currentUser,
+      isGoogleAuthLoading,
+      googleAuthError,
+      pushPermissionStatus,
+      isPushSubscribed,
+      pushSubscribersCount,
+      activePortal,
+      isSidebarCollapsed,
+      isMobileNavOpen,
+      adminSubTab,
+      searchQuery,
+      isAddServiceOpen,
+      isFollowupModalOpen,
+      isHelpModalOpen,
+      isSettingsModalOpen,
+      isChangePasswordModalOpen,
+      theme,
+      activeServiceId,
+      services,
+      currentService,
+      members,
+      visitorsCount,
+      systemSettings,
+      systemSettingsStorageBackend,
+      isSyncingSystemSettings,
+      churchGroups,
+      attendanceRecords,
+      totalCheckedInCount,
+      expectedAttendance,
+      attendancePercentage,
+      autoCheckinOptedInCount,
+      totalMembersCount,
+      optInPercentage,
+      telemetrySummary,
+      isUsherOnline,
+      pendingSyncCount,
+      proximityStage,
+      dwellTimerSeconds,
+      isBeaconDetected,
+      followupTasks,
+      memberConsents,
+      memberRsvps,
+      donations,
+      churchWallPosts,
+      auditLogs,
+      toastMessage,
+      viewMode,
+      tenants,
+      licenses,
+      landingConfig,
+    ]
+  );
+
   return (
-    <EkklesphereContext.Provider
-      value={{
-        currentUser,
-        setCurrentUser,
-        login,
-        loginWithCredentials,
-        signInWithGoogle,
-        isGoogleAuthLoading,
-        googleAuthError,
-        clearGoogleAuthError,
-        registerMember,
-        registerOrganisation,
-        logout,
-        changePassword,
-        switchUserRole,
-        pushPermissionStatus,
-        isPushSubscribed,
-        pushSubscribersCount,
-        requestPushPermission,
-        sendTestPushNotification,
-        activePortal,
-        setActivePortal,
-        isSidebarCollapsed,
-        setIsSidebarCollapsed,
-        toggleSidebar,
-        isMobileNavOpen,
-        setIsMobileNavOpen,
-        adminSubTab,
-        setAdminSubTab,
-        searchQuery,
-        setSearchQuery,
-        isAddServiceOpen,
-        setIsAddServiceOpen,
-        isFollowupModalOpen,
-        setIsFollowupModalOpen,
-        isHelpModalOpen,
-        setIsHelpModalOpen,
-        isSettingsModalOpen,
-        setIsSettingsModalOpen,
-        isChangePasswordModalOpen,
-        setIsChangePasswordModalOpen,
-        theme,
-        setTheme,
-        toggleTheme,
-        activeServiceId,
-        setActiveServiceId,
-        services,
-        currentService,
-        refreshServices,
-        addService,
-        deleteService,
-        members,
-        visitorsCount,
-        refreshMembers,
-        addVisitor,
-        addMember,
-        validateMemberImportRemote,
-        batchImportMembers,
-        updateMember,
-        deleteMember,
-        updateMemberConsent,
-        systemSettings,
-        systemSettingsStorageBackend,
-        isSyncingSystemSettings,
-        refreshSystemSettings,
-        updateSystemSettings,
-        resetSystemSettings,
-        sendTestSmsGateway,
-        setChurchPremiseLocation,
-        clearChurchPremiseLocation,
-        refreshLivePremise,
-        churchGroups,
-        refreshChurchGroups,
-        addChurchGroup,
-        updateChurchGroup,
-        deleteChurchGroup,
-        toggleChurchGroupStatus,
-        getGroupMembers,
-        attendanceRecords,
-        totalCheckedInCount,
-        expectedAttendance,
-        attendancePercentage,
-        autoCheckinOptedInCount,
-        totalMembersCount,
-        optInPercentage,
-        telemetrySummary,
-        checkInPerson,
-        removeCheckIn,
-        isUsherOnline,
-        setIsUsherOnline,
-        pendingSyncCount,
-        syncUsherCheckins,
-        proximityStage,
-        dwellTimerSeconds,
-        isBeaconDetected,
-        setIsBeaconDetected,
-        advanceProximityStage,
-        resetProximity,
-        triggerBeaconScan,
-        triggerDwellComplete,
-        followupTasks,
-        resolveFollowupTask,
-        addFollowupTask,
-        memberConsents,
-        memberRsvps,
-        toggleRsvp,
-        donations,
-        submitDonation,
-        churchWallPosts,
-        refreshChurchWallPosts,
-        addChurchWallPost,
-        toggleChurchWallAmen,
-        auditLogs,
-        refreshAuditLogs,
-        toastMessage,
-        showToast,
-        viewMode,
-        setViewMode,
-        tenants,
-        addTenant,
-        updateTenant,
-        toggleTenantStatus,
-        deleteTenant,
-        impersonateTenant,
-        licenses,
-        renewLicense,
-        updateLicense,
-        issueLicense,
-        landingConfig,
-        updateLandingConfig,
-        resetLandingConfig,
-      }}
-    >
+    <EkklesphereContext.Provider value={contextValue}>
       {children}
     </EkklesphereContext.Provider>
   );

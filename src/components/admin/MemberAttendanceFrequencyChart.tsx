@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { AttendanceRecord, CheckinMethod, Person } from '../../types/ekklesphere';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 export type FrequencyPeriod = '4w' | '8w' | '12w' | '24w';
 
@@ -153,11 +154,23 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
     return list;
   }, [weeksCount]);
 
+  // Pre-index attendance records by personId once so cohorts & dropdown lookups run in O(R) instead of O(M*W*R)
+  const recordsByPersonId = useMemo(() => {
+    const map = new Map<string, AttendanceRecord[]>();
+    for (const rec of attendanceRecords) {
+      if (!rec.personId) continue;
+      const list = map.get(rec.personId);
+      if (list) list.push(rec);
+      else map.set(rec.personId, [rec]);
+    }
+    return map;
+  }, [attendanceRecords]);
+
   // Build individual attendance data per week for selected member
   const memberWeekData = useMemo<MemberWeekSlot[]>(() => {
     if (!activeMember) return [];
 
-    const memberRecords = attendanceRecords.filter((r) => r.personId === activeMember.id);
+    const memberRecords = recordsByPersonId.get(activeMember.id) || [];
 
     return weekRanges.map((range, idx) => {
       const startIso = formatLocalIso(range.start);
@@ -219,7 +232,7 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
         fillColor,
       };
     });
-  }, [activeMember, attendanceRecords, weekRanges, services, isDark]);
+  }, [activeMember, recordsByPersonId, weekRanges, services, isDark]);
 
   // Aggregate metrics for selected member
   const memberStats = useMemo(() => {
@@ -290,7 +303,7 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
     const totalWeeks = weekRanges.length;
 
     for (const m of members) {
-      const memberRecs = attendanceRecords.filter((r) => r.personId === m.id);
+      const memberRecs = recordsByPersonId.get(m.id) || [];
       let attendedCount = 0;
 
       for (const range of weekRanges) {
@@ -347,11 +360,11 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
         fillColor: '#EF5A6F', // Rose Coral
       },
     ];
-  }, [members, attendanceRecords, weekRanges]);
+  }, [members, recordsByPersonId, weekRanges]);
 
   return (
     <section
-      className={`bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] transition-colors ${className}`}
+      className={`bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] transition-colors ${className}`}
       aria-label="Member Attendance Frequency Visualization"
     >
       {/* Header Row: Title, View Switcher & Period Controls */}
@@ -436,11 +449,18 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] text-left text-xs transition-all hover:border-[#6D5CF2] cursor-pointer"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-7 h-7 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-xs flex items-center justify-center shrink-0">
-                    {activeMember
-                      ? `${activeMember.firstName[0] || 'M'}${activeMember.lastName[0] || ''}`
-                      : 'M'}
-                  </div>
+                  <MemberAvatar
+                    src={activeMember?.imageUrl}
+                    name={
+                      activeMember
+                        ? `${activeMember.firstName} ${activeMember.lastName}`
+                        : 'Select Member'
+                    }
+                    initials={activeMember?.avatarInitials}
+                    sizeClass="w-7 h-7"
+                    textClass="text-xs font-bold"
+                    bgClass="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]"
+                  />
                   <div className="min-w-0">
                     <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block truncate">
                       {activeMember
@@ -473,7 +493,7 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
                   <div className="flex-1 overflow-y-auto space-y-1 pr-1">
                     {filteredMemberList.map((m) => {
                       const isSelected = m.id === selectedMemberId;
-                      const hasRecords = attendanceRecords.some((r) => r.personId === m.id);
+                      const hasRecords = (recordsByPersonId.get(m.id)?.length || 0) > 0;
                       return (
                         <button
                           key={m.id}
@@ -483,22 +503,31 @@ export const MemberAttendanceFrequencyChart: React.FC<MemberAttendanceFrequencyC
                             setIsMemberDropdownOpen(false);
                             setMemberSearchQuery('');
                           }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs transition-colors cursor-pointer ${
+                          className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs transition-colors cursor-pointer ${
                             isSelected
                               ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold'
                               : 'hover:bg-slate-50 dark:hover:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA]'
                           }`}
                         >
-                          <div className="truncate">
-                            <span className="block truncate font-semibold">
-                              {m.firstName} {m.lastName}
-                            </span>
-                            <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] font-mono">
-                              {m.phoneE164 || m.groupName || 'Member'}
-                            </span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <MemberAvatar
+                              src={m.imageUrl}
+                              name={`${m.firstName} ${m.lastName}`}
+                              initials={m.avatarInitials}
+                              sizeClass="w-6 h-6"
+                              textClass="text-[10px] font-bold"
+                            />
+                            <div className="min-w-0 truncate">
+                              <span className="block truncate font-semibold">
+                                {m.firstName} {m.lastName}
+                              </span>
+                              <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] font-mono">
+                                {m.phoneE164 || m.groupName || 'Member'}
+                              </span>
+                            </div>
                           </div>
                           {hasRecords && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                            <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">
                               Active
                             </span>
                           )}

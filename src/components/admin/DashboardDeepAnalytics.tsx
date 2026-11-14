@@ -21,6 +21,11 @@ import {
   Settings,
   Plus,
   UserPlus,
+  History,
+  Edit3,
+  Power,
+  Trash2,
+  ClipboardList,
 } from 'lucide-react';
 import { DashboardAnalyticsResult } from '../../utils/dashboardAnalytics';
 import { ChurchGroupCategory } from '../../types/ekklesphere';
@@ -38,6 +43,11 @@ interface DashboardDeepAnalyticsProps {
   onOpenSettings: () => void;
   onAddMember: () => void;
   onAddService: () => void;
+  onOpenServiceHistory?: () => void;
+  onOpenServiceRegister?: (serviceId: string) => void;
+  onToggleServiceStatus?: (serviceId: string, nextStatus: 'live' | 'closed') => void;
+  onEditService?: (serviceId: string) => void;
+  onDeleteService?: (serviceId: string) => void;
 }
 
 const CATEGORY_LABELS: Record<ChurchGroupCategory, string> = {
@@ -46,14 +56,20 @@ const CATEGORY_LABELS: Record<ChurchGroupCategory, string> = {
   cell_group: 'Cell Group',
 };
 
-const STATUS_LABELS: Record<string, { label: string; colorClass: string }> = {
-  open: { label: 'Live', colorClass: 'text-emerald-600 dark:text-emerald-400' },
-  scheduled: { label: 'Scheduled', colorClass: 'text-[#6D5CF2] dark:text-[#8C7DFF]' },
-  closed: { label: 'Completed', colorClass: 'text-[#666A86] dark:text-[#A9ACC8]' },
-  cancelled: { label: 'Cancelled', colorClass: 'text-rose-600 dark:text-rose-400' },
+const BINARY_STATUS_LABELS: Record<'live' | 'closed', { label: string; colorClass: string; dotClass: string }> = {
+  live: {
+    label: 'Live',
+    colorClass: 'text-emerald-600 dark:text-emerald-400',
+    dotClass: 'bg-emerald-500',
+  },
+  closed: {
+    label: 'Closed',
+    colorClass: 'text-[#666A86] dark:text-[#A9ACC8]',
+    dotClass: 'bg-slate-400 dark:bg-slate-500',
+  },
 };
 
-export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
+export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = React.memo(({
   analytics,
   theme,
   activeLens,
@@ -64,10 +80,16 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
   onOpenSettings,
   onAddMember,
   onAddService,
+  onOpenServiceHistory,
+  onOpenServiceRegister,
+  onToggleServiceStatus,
+  onEditService,
+  onDeleteService,
 }) => {
   const [filterQuery, setFilterQuery] = useState('');
   const [groupCategoryFilter, setGroupCategoryFilter] = useState<'all' | ChurchGroupCategory>('all');
   const [deptSortKey, setDeptSortKey] = useState<'members' | 'turnout'>('members');
+  const [confirmDeleteSvcId, setConfirmDeleteSvcId] = useState<string | null>(null);
 
   const queryLower = filterQuery.trim().toLowerCase();
 
@@ -789,14 +811,26 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onAddService}
-              className="px-3 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-xs font-semibold hover:opacity-90 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Schedule Service / Event</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {onOpenServiceHistory && (
+                <button
+                  type="button"
+                  onClick={onOpenServiceHistory}
+                  className="px-3 py-1.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] text-xs font-semibold hover:border-[#6D5CF2]/50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <History className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  <span>Full Service History</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onAddService}
+                className="px-3 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-xs font-semibold hover:opacity-90 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Schedule Service / Event</span>
+              </button>
+            </div>
           </div>
 
           {filteredServices.length === 0 ? (
@@ -811,18 +845,20 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
                 <thead className="bg-[#F6F7FC] dark:bg-[#14142E] border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
                   <tr>
                     <th className="py-2.5 px-3.5 font-semibold">Service / Event</th>
-                    <th className="py-2.5 px-3 font-semibold">Date &amp; Window</th>
+                    <th className="py-2.5 px-3 font-semibold">Window &amp; Allowance</th>
                     <th className="py-2.5 px-3 font-semibold">Status</th>
                     <th className="py-2.5 px-3 font-semibold text-right">Checked In</th>
                     <th className="py-2.5 px-3 font-semibold text-right">Expected</th>
-                    <th className="py-2.5 px-3 font-semibold min-w-[120px]">Target Fill</th>
+                    <th className="py-2.5 px-3 font-semibold min-w-[110px]">Target Fill</th>
                     <th className="py-2.5 px-3 font-semibold text-right">On-Time</th>
-                    <th className="py-2.5 px-3.5 font-semibold text-right">Auto %</th>
+                    <th className="py-2.5 px-3.5 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
                   {filteredServices.map((svc) => {
-                    const statusInfo = STATUS_LABELS[svc.status] || STATUS_LABELS.scheduled;
+                    const binaryKey = svc.binaryStatus === 'live' ? 'live' : 'closed';
+                    const statusInfo = BINARY_STATUS_LABELS[binaryKey];
+                    const isConfirmingDelete = confirmDeleteSvcId === svc.id;
                     return (
                       <tr
                         key={svc.id}
@@ -843,10 +879,14 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
                         </td>
                         <td className="py-2.5 px-3 text-[#666A86] dark:text-[#A9ACC8] whitespace-nowrap">
                           {svc.date ? `${svc.date} · ` : ''}
-                          {svc.startsAt}–{svc.endsAt}
+                          {svc.startsAt}–{svc.endsAt}{' '}
+                          <span className="font-mono text-[11px]">(+{svc.dwellMinutes}m)</span>
                         </td>
-                        <td className={`py-2.5 px-3 font-semibold ${statusInfo.colorClass}`}>
-                          {statusInfo.label}
+                        <td className={`py-2.5 px-3 font-semibold whitespace-nowrap ${statusInfo.colorClass}`}>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
+                            <span>{statusInfo.label}</span>
+                          </span>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
                           {svc.checkedInCount}
@@ -870,8 +910,86 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
                         <td className="py-2.5 px-3 text-right font-mono text-[#666A86] dark:text-[#A9ACC8]">
                           {svc.onTimePct}%
                         </td>
-                        <td className="py-2.5 px-3.5 text-right font-mono text-[#666A86] dark:text-[#A9ACC8]">
-                          {svc.autoPct}%
+                        <td
+                          className="py-2.5 px-3.5 text-right whitespace-nowrap"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="inline-flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenServiceRegister
+                                  ? onOpenServiceRegister(svc.id)
+                                  : onSelectService(svc.id)
+                              }
+                              title="Open Service Register"
+                              aria-label={`Open register for ${svc.name}`}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 text-[11px] font-semibold cursor-pointer"
+                            >
+                              <ClipboardList className="w-3 h-3 text-[#6D5CF2]" />
+                              <span>Register</span>
+                            </button>
+
+                            {onToggleServiceStatus && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onToggleServiceStatus(
+                                    svc.id,
+                                    binaryKey === 'live' ? 'closed' : 'live'
+                                  )
+                                }
+                                title={binaryKey === 'live' ? 'Close service' : 'Reopen service'}
+                                aria-label={
+                                  binaryKey === 'live' ? `Close ${svc.name}` : `Reopen ${svc.name}`
+                                }
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                                  binaryKey === 'live'
+                                    ? 'border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300'
+                                    : 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                                }`}
+                              >
+                                <Power className="w-3 h-3" />
+                                <span>{binaryKey === 'live' ? 'Close' : 'Reopen'}</span>
+                              </button>
+                            )}
+
+                            {onEditService && (
+                              <button
+                                type="button"
+                                onClick={() => onEditService(svc.id)}
+                                title="Edit time window and allowance"
+                                aria-label={`Edit ${svc.name}`}
+                                className="p-1.5 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] cursor-pointer"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                            )}
+
+                            {onDeleteService &&
+                              (isConfirmingDelete ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setConfirmDeleteSvcId(null);
+                                    onDeleteService(svc.id);
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteSvcId(svc.id)}
+                                  title="Delete service"
+                                  aria-label={`Delete ${svc.name}`}
+                                  className="p-1.5 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-600 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              ))}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -884,4 +1002,4 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = ({
       )}
     </section>
   );
-};
+});

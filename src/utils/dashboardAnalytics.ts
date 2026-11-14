@@ -14,6 +14,7 @@ import {
   ServiceInstance,
   SystemSettings,
 } from '../types/ekklesphere';
+import { computeServiceBinaryStatus, BinaryServiceStatus } from './serviceStatus';
 
 export interface DepartmentAnalyticRow {
   name: string;
@@ -66,7 +67,11 @@ export interface ServiceComparisonRow {
   date?: string;
   startsAt: string;
   endsAt: string;
+  startTimeIso?: string;
+  endTimeIso?: string;
+  dwellMinutes: number;
   status: ServiceInstance['status'];
+  binaryStatus: BinaryServiceStatus;
   isActive: boolean;
   checkedInCount: number;
   expectedAttendance: number;
@@ -82,7 +87,9 @@ export interface DashboardAnalyticsResult {
     date?: string;
     startsAt: string;
     endsAt: string;
+    dwellMinutes: number;
     status: ServiceInstance['status'];
+    binaryStatus: BinaryServiceStatus;
     attendanceCount: number;
     expectedAttendance: number;
     turnoutPct: number;
@@ -493,6 +500,17 @@ export function computeDashboardAnalytics(
     const expected = Math.max(svc.expectedAttendance || 0, totalMembers > 0 ? totalMembers : 0);
     const onTime = records.filter((r) => !r.late).length;
     const auto = records.filter((r) => r.method === 'geofence' || r.method === 'beacon').length;
+    const allowanceMinutes = svc.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5;
+    const binaryStatus = computeServiceBinaryStatus({
+      date: svc.date,
+      startsAt: svc.startsAt,
+      endsAt: svc.endsAt,
+      startTimeIso: svc.startTimeIso,
+      endTimeIso: svc.endTimeIso,
+      allowanceMinutes,
+      rawStatus: svc.status,
+      nowMs: now.getTime(),
+    });
 
     return {
       id: svc.id,
@@ -500,7 +518,11 @@ export function computeDashboardAnalytics(
       date: svc.date,
       startsAt: svc.startsAt,
       endsAt: svc.endsAt,
-      status: svc.status,
+      startTimeIso: svc.startTimeIso,
+      endTimeIso: svc.endTimeIso,
+      dwellMinutes: allowanceMinutes,
+      status: binaryStatus === 'live' ? 'open' : 'closed',
+      binaryStatus,
       isActive: svc.id === currentService.id,
       checkedInCount,
       expectedAttendance: expected,
@@ -531,6 +553,18 @@ export function computeDashboardAnalytics(
   const manualCheckinCount = Math.max(0, totalMembers - autoCheckinCount);
   const manualCheckinPct = totalMembers > 0 ? Math.max(0, 100 - autoCheckinPct) : 0;
 
+  const activeAllowanceMinutes = currentService.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5;
+  const activeBinaryStatus = computeServiceBinaryStatus({
+    date: currentService.date,
+    startsAt: currentService.startsAt,
+    endsAt: currentService.endsAt,
+    startTimeIso: currentService.startTimeIso,
+    endTimeIso: currentService.endTimeIso,
+    allowanceMinutes: activeAllowanceMinutes,
+    rawStatus: currentService.status,
+    nowMs: now.getTime(),
+  });
+
   return {
     activeService: {
       id: currentService.id,
@@ -538,7 +572,9 @@ export function computeDashboardAnalytics(
       date: currentService.date,
       startsAt: currentService.startsAt,
       endsAt: currentService.endsAt,
-      status: currentService.status,
+      dwellMinutes: activeAllowanceMinutes,
+      status: activeBinaryStatus === 'live' ? 'open' : 'closed',
+      binaryStatus: activeBinaryStatus,
       attendanceCount,
       expectedAttendance,
       turnoutPct,

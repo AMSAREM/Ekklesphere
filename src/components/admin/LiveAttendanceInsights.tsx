@@ -12,6 +12,7 @@ import {
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { AttendanceRecord, CheckinMethod, Person } from '../../types/ekklesphere';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
+import { MemberAvatar } from '../common/MemberAvatar';
 
 interface LiveAttendanceInsightsProps {
   onOpenAddMember?: () => void;
@@ -1257,12 +1258,23 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                       className="hover:bg-[#F6F7FC]/70 dark:hover:bg-white/5 transition-colors"
                     >
                       <td className="py-3 px-4 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {displayName}
-                        {person?.status === 'visitor' && (
-                          <span className="ml-2 text-[11px] font-normal text-[#6D5CF2] dark:text-[#8C7DFF]">
-                            · Visitor
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <MemberAvatar
+                            src={person?.imageUrl}
+                            name={displayName}
+                            initials={person?.avatarInitials}
+                            sizeClass="w-8 h-8"
+                            textClass="text-[11px] font-bold"
+                          />
+                          <div className="min-w-0">
+                            <span className="truncate block">{displayName}</span>
+                            {person?.status === 'visitor' && (
+                              <span className="text-[11px] font-normal text-[#6D5CF2] dark:text-[#8C7DFF]">
+                                Visitor
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-[#666A86] dark:text-[#A9ACC8]">
                         {person?.groupName || 'General'}
@@ -1338,7 +1350,16 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                       className="hover:bg-[#F6F7FC]/70 dark:hover:bg-white/5 transition-colors"
                     >
                       <td className="py-3 px-4 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {m.firstName} {m.lastName}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <MemberAvatar
+                            src={m.imageUrl}
+                            name={`${m.firstName} ${m.lastName}`}
+                            initials={m.avatarInitials}
+                            sizeClass="w-8 h-8"
+                            textClass="text-[11px] font-bold"
+                          />
+                          <span className="truncate">{m.firstName} {m.lastName}</span>
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-[#666A86] dark:text-[#A9ACC8]">
                         {m.groupName || 'General'}

@@ -17,6 +17,7 @@ import {
   type ChurchRole,
 } from '../../lib/auth.ts';
 import { churchWallStore } from './churchWallStore.ts';
+import { resolveServiceWindow, type BinaryServiceStatus } from '../utils/serviceStatus.ts';
 import type {
   BillingCycle,
   ChurchGroup,
@@ -4513,16 +4514,21 @@ class PlatformStore {
     return this.sitesByOrg.get(orgId) || [];
   }
 
-  public async getLiveCheckins(organizationId: string, serviceId?: string | null): Promise<LiveCheckinItem[]> {
+  public async getLiveCheckins(
+    organizationId: string,
+    serviceId?: string | null,
+    maxRows: number = 500
+  ): Promise<LiveCheckinItem[]> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
+    const safeLimit = Math.min(5000, Math.max(1, Number(maxRows) || 500));
     if (this.supabase) {
       let query = this.supabase
         .from('attendance')
         .select('*')
         .eq('organization_id', orgId)
         .order('checked_in_at', { ascending: false })
-        .limit(500);
+        .limit(safeLimit);
       if (serviceId && UUID_REGEX.test(serviceId)) {
         query = query.eq('event_id', serviceId);
       }
@@ -4579,31 +4585,83 @@ class PlatformStore {
     };
 
     if (this.supabase) {
-      if (UUID_REGEX.test(fullRecord.serviceInstanceId) && UUID_REGEX.test(fullRecord.personId)) {
-        const mappedDbMethod =
-          fullRecord.method === 'posted_qr'
-            ? 'qr_scan'
-            : fullRecord.method === 'email_link'
-            ? 'web_link'
-            : fullRecord.method;
-
-        const { error } = await this.supabase.from('attendance').upsert(
-          {
-            organization_id: orgId,
-            event_id: fullRecord.serviceInstanceId,
-            member_id: fullRecord.personId,
-            checked_in_at: fullRecord.checkedInIso,
-            method: mappedDbMethod,
-            status: 'accepted',
-            confidence_score: Math.min(100, Math.max(0, Math.round(fullRecord.confidence))),
-            distance_m: fullRecord.distanceM ?? null,
-            notes: fullRecord.note || null,
-          },
-          { onConflict: 'organization_id,event_id,member_id' }
-        );
-        if (error) {
-          throw new Error(`Failed to record live check-in in Supabase: ${error.message}`);
+      let resolvedEventId = fullRecord.serviceInstanceId;
+      if (!UUID_REGEX.test(resolvedEventId)) {
+        const { data: existingEvents } = await this.supabase
+          .from('events')
+          .select('id')
+          .eq('organization_id', orgId)
+          .order('start_time', { ascending: false })
+          .limit(1);
+        if (existingEvents && existingEvents.length > 0 && existingEvents[0]?.id) {
+          resolvedEventId = String(existingEvents[0].id);
+        } else {
+          const now = new Date();
+          const end = new Date(now.getTime() + 150 * 60_000);
+          const { data: createdEv, error: createEvErr } = await this.supabase
+            .from('events')
+            .insert({
+              organization_id: orgId,
+              name: 'Sunday Worship Service',
+              start_time: now.toISOString(),
+              end_time: end.toISOString(),
+              dwell_min: 15,
+              status: 'active',
+            })
+            .select('id')
+            .single();
+          if (createEvErr || !createdEv?.id) {
+            throw new Error(
+              `Failed to resolve service event in Supabase: ${createEvErr?.message || 'missing event'}`
+            );
+          }
+          resolvedEventId = String(createdEv.id);
         }
+        fullRecord.serviceInstanceId = resolvedEventId;
+      }
+
+      if (!UUID_REGEX.test(fullRecord.personId)) {
+        const { data: matchedMember } = await this.supabase
+          .from('members')
+          .select('id')
+          .eq('organization_id', orgId)
+          .or(`email.eq.${fullRecord.personId},phone.eq.${fullRecord.personId}`)
+          .limit(1)
+          .maybeSingle();
+        if (matchedMember?.id) {
+          fullRecord.personId = String(matchedMember.id);
+        } else {
+          const invalidErr: any = new Error('Selected member record does not have a valid database ID.');
+          invalidErr.status = 400;
+          invalidErr.code = 'INVALID_MEMBER_ID';
+          throw invalidErr;
+        }
+      }
+
+      const mappedDbMethod =
+        fullRecord.method === 'posted_qr'
+          ? 'qr_scan'
+          : fullRecord.method === 'email_link'
+          ? 'web_link'
+          : fullRecord.method;
+
+      const attendancePayload = {
+        organization_id: orgId,
+        event_id: resolvedEventId,
+        member_id: fullRecord.personId,
+        checked_in_at: fullRecord.checkedInIso,
+        method: mappedDbMethod,
+        status: 'accepted',
+        confidence_score: Math.min(100, Math.max(0, Math.round(fullRecord.confidence))),
+        distance_m: fullRecord.distanceM ?? null,
+        notes: fullRecord.note || null,
+      };
+
+      const { error } = await this.supabase
+        .from('attendance')
+        .upsert(attendancePayload, { onConflict: 'organization_id,event_id,member_id' });
+      if (error) {
+        throw new Error(`Failed to record live check-in in Supabase: ${error.message}`);
       }
       return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
     }
@@ -5078,6 +5136,22 @@ class PlatformStore {
           .single();
         data = retry.data;
         error = retry.error;
+
+        if (
+          error &&
+          /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+            error.message || ''
+          )
+        ) {
+          const { photo_url: _dropPhoto, ...minimalInsert } = baseInsert;
+          const retryMinimal = await this.supabase
+            .from('members')
+            .insert(minimalInsert)
+            .select('*')
+            .single();
+          data = retryMinimal.data;
+          error = retryMinimal.error;
+        }
       }
 
       if (error || !data) {
@@ -5467,6 +5541,24 @@ class PlatformStore {
           .maybeSingle();
         data = retry.data;
         error = retry.error;
+
+        if (
+          error &&
+          /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+            error.message || ''
+          )
+        ) {
+          const { photo_url: _dropPhoto, ...minimalPatch } = fallbackPatch;
+          const retryMinimal = await this.supabase
+            .from('members')
+            .update(minimalPatch)
+            .eq('organization_id', orgId)
+            .eq('id', memberId)
+            .select('*')
+            .maybeSingle();
+          data = retryMinimal.data;
+          error = retryMinimal.error;
+        }
       }
 
       if (error) {
@@ -5772,6 +5864,13 @@ class PlatformStore {
   ): Promise<Record<string, any>> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
+    const mapStatusForDb = (raw?: string): 'active' | 'completed' | 'cancelled' => {
+      const normalized = String(raw || '').trim().toLowerCase();
+      if (normalized === 'cancelled') return 'cancelled';
+      if (normalized === 'closed' || normalized === 'completed') return 'completed';
+      return 'active';
+    };
+
     if (this.supabase) {
       const { data, error } = await this.supabase
         .from('events')
@@ -5784,8 +5883,8 @@ class PlatformStore {
               : null,
           start_time: eventData.startTimeIso,
           end_time: eventData.endTimeIso,
-          dwell_min: eventData.dwellMin,
-          status: eventData.status,
+          dwell_min: Math.max(0, Math.round(Number(eventData.dwellMin) || 0)),
+          status: mapStatusForDb(eventData.status),
         })
         .select('*')
         .single();
@@ -5820,6 +5919,118 @@ class PlatformStore {
     list.push(created);
     this.eventsByOrg.set(orgId, list);
     return created;
+  }
+
+  public async updateEvent(
+    organizationId: string,
+    eventId: string,
+    updates: {
+      name?: string;
+      date?: string;
+      startTimeIso?: string;
+      endTimeIso?: string;
+      dwellMin?: number;
+      status?: string;
+      expectedAttendance?: number;
+    }
+  ): Promise<Record<string, any>> {
+    this.assertDatabaseAvailable();
+    const orgId = organizationId.toLowerCase();
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(eventId)) {
+        const notFound: any = new Error('Service event not found.');
+        notFound.code = 'EVENT_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+
+      const patch: Record<string, unknown> = {};
+      if (typeof updates.name === 'string' && updates.name.trim()) {
+        patch.name = updates.name.trim();
+      }
+      if (typeof updates.startTimeIso === 'string' && updates.startTimeIso.trim()) {
+        patch.start_time = updates.startTimeIso.trim();
+      }
+      if (typeof updates.endTimeIso === 'string' && updates.endTimeIso.trim()) {
+        patch.end_time = updates.endTimeIso.trim();
+      }
+      if (typeof updates.dwellMin === 'number' && Number.isFinite(updates.dwellMin)) {
+        patch.dwell_min = Math.max(0, Math.round(updates.dwellMin));
+      }
+      if (typeof updates.status === 'string' && updates.status.trim()) {
+        const st = updates.status.trim().toLowerCase();
+        patch.status =
+          st === 'cancelled'
+            ? 'cancelled'
+            : st === 'closed' || st === 'completed'
+            ? 'completed'
+            : 'active';
+      }
+      if (typeof updates.expectedAttendance === 'number' && Number.isFinite(updates.expectedAttendance)) {
+        const cleanExpected = Math.max(0, Math.round(updates.expectedAttendance));
+        patch.description = cleanExpected > 0 ? `Expected attendance: ${cleanExpected}` : null;
+      }
+
+      const { data, error } = await this.supabase
+        .from('events')
+        .update(patch)
+        .eq('organization_id', orgId)
+        .eq('id', eventId)
+        .select('*')
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to update service event in Supabase: ${error.message}`);
+      }
+      if (!data) {
+        const notFound: any = new Error('Service event not found in database.');
+        notFound.code = 'EVENT_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+      return {
+        ...data,
+        ...(updates.date ? { date: updates.date } : {}),
+        ...(typeof updates.expectedAttendance === 'number'
+          ? { expected_attendance: Math.max(0, Math.round(updates.expectedAttendance)) }
+          : {}),
+      };
+    }
+
+    const list = this.eventsByOrg.get(orgId) || [];
+    const idx = list.findIndex((ev) => ev.id === eventId);
+    if (idx < 0) {
+      const notFound: any = new Error('Service event not found.');
+      notFound.code = 'EVENT_NOT_FOUND';
+      notFound.status = 404;
+      throw notFound;
+    }
+
+    const current = list[idx];
+    const next = {
+      ...current,
+      ...(typeof updates.name === 'string' && updates.name.trim() ? { name: updates.name.trim() } : {}),
+      ...(updates.date ? { date: updates.date } : {}),
+      ...(updates.startTimeIso
+        ? { start_time: updates.startTimeIso, starts_at: updates.startTimeIso }
+        : {}),
+      ...(updates.endTimeIso
+        ? { end_time: updates.endTimeIso, ends_at: updates.endTimeIso }
+        : {}),
+      ...(typeof updates.dwellMin === 'number' && Number.isFinite(updates.dwellMin)
+        ? { dwell_min: Math.max(0, Math.round(updates.dwellMin)) }
+        : {}),
+      ...(typeof updates.status === 'string' && updates.status.trim()
+        ? { status: updates.status.trim() }
+        : {}),
+      ...(typeof updates.expectedAttendance === 'number' && Number.isFinite(updates.expectedAttendance)
+        ? { expected_attendance: Math.max(0, Math.round(updates.expectedAttendance)) }
+        : {}),
+    };
+    list[idx] = next;
+    this.eventsByOrg.set(orgId, list);
+    return next;
   }
 
   public async deleteEvent(organizationId: string, eventId: string): Promise<void> {
@@ -5884,6 +6095,332 @@ class PlatformStore {
       orgId,
       checkins.filter((c) => c.serviceInstanceId !== eventId)
     );
+  }
+
+  public async getServiceHistory(organizationId: string): Promise<{
+    summary: {
+      totalServices: number;
+      liveServices: number;
+      closedServices: number;
+      completedServices: number;
+      upcomingServices: number;
+      totalHistoricalCheckins: number;
+      uniqueAttendees: number;
+      averageAttendancePerService: number;
+      peakServiceId: string | null;
+      peakServiceName: string | null;
+      peakServiceCount: number;
+    };
+    services: Array<{
+      id: string;
+      name: string;
+      date: string;
+      startsAt: string;
+      endsAt: string;
+      startTimeIso?: string;
+      endTimeIso?: string;
+      allowanceMinutes: number;
+      closesAtIso?: string | null;
+      status: BinaryServiceStatus;
+      rawStatus: string;
+      expectedAttendance: number;
+      totalCheckedIn: number;
+      fillRatePct: number;
+      onTimeCount: number;
+      lateCount: number;
+      onTimePct: number;
+      autoProximityCount: number;
+      assistedDoorCount: number;
+      autoPct: number;
+      avgConfidence: number;
+      methodBreakdown: Record<string, number>;
+      attendees: Array<{
+        id: string;
+        personId: string;
+        name: string;
+        imageUrl?: string;
+        initials: string;
+        groupName: string;
+        department: string;
+        status: string;
+        method: string;
+        checkedInAt: string;
+        checkedInIso: string;
+        late: boolean;
+        confidence: number;
+        distanceM: number | null;
+      }>;
+    }>;
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = organizationId.toLowerCase();
+    const [eventsList, allCheckins, membersList] = await Promise.all([
+      this.getEvents(orgId),
+      this.getLiveCheckins(orgId, null, 2500),
+      this.getMembers(orgId),
+    ]);
+
+    const memberMap = new Map<string, Record<string, any>>();
+    for (const m of membersList) {
+      if (m && m.id) {
+        memberMap.set(String(m.id), m);
+      }
+    }
+
+    const checkinsByService = new Map<string, LiveCheckinItem[]>();
+    const uniquePeople = new Set<string>();
+    for (const rec of allCheckins) {
+      const svcKey = rec.serviceInstanceId || 'unassigned';
+      const existingList = checkinsByService.get(svcKey) || [];
+      // Deduplicate by person within the same service
+      if (!existingList.some((r) => r.personId === rec.personId)) {
+        existingList.push(rec);
+        checkinsByService.set(svcKey, existingList);
+      }
+      if (rec.personId) {
+        uniquePeople.add(rec.personId);
+      }
+    }
+
+    const formatTimeShort = (raw: unknown, fallback: string): string => {
+      if (typeof raw !== 'string' || !raw.trim()) return fallback;
+      const trimmed = raw.trim();
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+        const [h, m] = trimmed.split(':');
+        return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+      }
+      const parsed = new Date(trimmed);
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
+      }
+      return fallback;
+    };
+
+    const todayIso = new Date().toISOString().split('T')[0];
+    const nowMs = Date.now();
+    const seenServiceIds = new Set<string>();
+
+    const buildEntry = (ev: Record<string, any>) => {
+      const id = String(ev.id);
+      seenServiceIds.add(id);
+
+      const startRaw = ev.start_time || ev.starts_at || null;
+      const endRaw = ev.end_time || ev.ends_at || null;
+      let dateStr = typeof ev.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.date) ? ev.date : '';
+      if (!dateStr && typeof startRaw === 'string' && startRaw.includes('T')) {
+        dateStr = startRaw.split('T')[0];
+      }
+      if (!dateStr) {
+        dateStr = todayIso;
+      }
+
+      const startsAt = formatTimeShort(startRaw, '08:00');
+      const endsAt = formatTimeShort(endRaw, '10:30');
+
+      let expectedAttendance = Number(ev.expected_attendance) || 0;
+      if (!expectedAttendance && typeof ev.description === 'string') {
+        const match = ev.description.match(/Expected attendance:\s*(\d+)/i);
+        if (match) expectedAttendance = Number(match[1]) || 0;
+      }
+      if (!expectedAttendance && membersList.length > 0) {
+        expectedAttendance = membersList.length;
+      }
+
+      const rawStatus = String(ev.status || 'active').toLowerCase();
+      const allowanceMinutes = Math.max(
+        0,
+        Number(ev.dwell_min ?? ev.dwellMinutes ?? ev.allowance_minutes ?? 0) || 0
+      );
+      const startTimeIso = typeof startRaw === 'string' && startRaw.includes('T') ? startRaw : undefined;
+      const endTimeIso = typeof endRaw === 'string' && endRaw.includes('T') ? endRaw : undefined;
+      const resolvedWindow = resolveServiceWindow({
+        date: dateStr,
+        startsAt,
+        endsAt,
+        startTimeIso,
+        endTimeIso,
+        allowanceMinutes,
+        rawStatus,
+        nowMs,
+      });
+      const computedStatus: BinaryServiceStatus = resolvedWindow.status;
+
+      const serviceRecs = checkinsByService.get(id) || [];
+      const [sh, sm] = startsAt.split(':').map((n) => Number(n) || 0);
+      const graceMins = sh * 60 + sm + (allowanceMinutes > 0 ? allowanceMinutes : 15);
+
+      const methodBreakdown: Record<string, number> = {
+        geofence: 0,
+        beacon: 0,
+        usher: 0,
+        posted_qr: 0,
+        manual: 0,
+        email_link: 0,
+      };
+      let onTimeCount = 0;
+      let lateCount = 0;
+      let autoProximityCount = 0;
+      let confidenceSum = 0;
+
+      const attendees = serviceRecs.map((rec) => {
+        const person = memberMap.get(rec.personId);
+        const first = person?.firstName || '';
+        const last = person?.lastName || '';
+        const resolvedName =
+          `${first} ${last}`.trim() || rec.personName || 'Registered Member';
+        const initials =
+          person?.avatarInitials ||
+          resolvedName
+            .split(' ')
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((p) => p[0]?.toUpperCase() || '')
+            .join('') ||
+          'M';
+
+        let isLate = Boolean(rec.late);
+        if (!isLate && rec.checkedInIso) {
+          const dt = new Date(rec.checkedInIso);
+          if (!Number.isNaN(dt.getTime())) {
+            const recDate = dt.toISOString().split('T')[0];
+            if (recDate === dateStr) {
+              const recMins = dt.getHours() * 60 + dt.getMinutes();
+              if (recMins > graceMins) isLate = true;
+            }
+          }
+        }
+
+        if (isLate) lateCount += 1;
+        else onTimeCount += 1;
+
+        const methodKey = rec.method || 'manual';
+        methodBreakdown[methodKey] = (methodBreakdown[methodKey] || 0) + 1;
+        if (methodKey === 'geofence' || methodKey === 'beacon') {
+          autoProximityCount += 1;
+        }
+        const conf = typeof rec.confidence === 'number' ? rec.confidence : 95;
+        confidenceSum += conf;
+
+        return {
+          id: rec.id,
+          personId: rec.personId,
+          name: resolvedName,
+          imageUrl: person?.imageUrl || undefined,
+          initials,
+          groupName: person?.homeCellGroup || person?.groupName || 'General Congregation',
+          department: person?.department || 'General',
+          status: person?.status || 'member',
+          method: methodKey,
+          checkedInAt: rec.checkedInAt,
+          checkedInIso: rec.checkedInIso,
+          late: isLate,
+          confidence: conf,
+          distanceM: rec.distanceM ?? null,
+        };
+      });
+
+      const totalCheckedIn = attendees.length;
+      const assistedDoorCount = Math.max(0, totalCheckedIn - autoProximityCount);
+      const fillRatePct =
+        expectedAttendance > 0
+          ? Math.min(100, Math.round((totalCheckedIn / expectedAttendance) * 100))
+          : 0;
+      const onTimePct = totalCheckedIn > 0 ? Math.round((onTimeCount / totalCheckedIn) * 100) : 0;
+      const autoPct =
+        totalCheckedIn > 0 ? Math.round((autoProximityCount / totalCheckedIn) * 100) : 0;
+      const avgConfidence = totalCheckedIn > 0 ? Math.round(confidenceSum / totalCheckedIn) : 0;
+
+      return {
+        id,
+        name: String(ev.name || 'Worship Service'),
+        date: dateStr,
+        startsAt,
+        endsAt,
+        startTimeIso,
+        endTimeIso,
+        allowanceMinutes,
+        closesAtIso: resolvedWindow.closesAtIso,
+        status: computedStatus,
+        rawStatus,
+        expectedAttendance,
+        totalCheckedIn,
+        fillRatePct,
+        onTimeCount,
+        lateCount,
+        onTimePct,
+        autoProximityCount,
+        assistedDoorCount,
+        autoPct,
+        avgConfidence,
+        methodBreakdown,
+        attendees,
+      };
+    };
+
+    const entries = eventsList.map(buildEntry);
+
+    // Include any historical attendance logs tied to service IDs not present in events table
+    for (const [svcId, recs] of checkinsByService.entries()) {
+      if (seenServiceIds.has(svcId)) continue;
+      const earliestIso = recs[recs.length - 1]?.checkedInIso || new Date().toISOString();
+      const dateStr = earliestIso.split('T')[0] || todayIso;
+      entries.push(
+        buildEntry({
+          id: svcId,
+          name: svcId === 'svc-sun-1' ? 'Sunday Worship Service' : `Recorded Service (${dateStr})`,
+          date: dateStr,
+          starts_at: '08:00',
+          ends_at: '10:30',
+          status: dateStr < todayIso ? 'closed' : 'active',
+        })
+      );
+    }
+
+    entries.sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return b.startsAt.localeCompare(a.startsAt);
+    });
+
+    let liveServices = 0;
+    let closedServices = 0;
+    let totalHistoricalCheckins = 0;
+    let peakServiceId: string | null = null;
+    let peakServiceName: string | null = null;
+    let peakServiceCount = 0;
+
+    for (const entry of entries) {
+      if (entry.status === 'live') liveServices += 1;
+      else closedServices += 1;
+
+      totalHistoricalCheckins += entry.totalCheckedIn;
+      if (entry.totalCheckedIn > peakServiceCount) {
+        peakServiceCount = entry.totalCheckedIn;
+        peakServiceId = entry.id;
+        peakServiceName = entry.name;
+      }
+    }
+
+    const averageAttendancePerService =
+      entries.length > 0
+        ? Math.round((totalHistoricalCheckins / entries.length) * 10) / 10
+        : 0;
+
+    return {
+      summary: {
+        totalServices: entries.length,
+        liveServices,
+        closedServices,
+        completedServices: closedServices,
+        upcomingServices: 0,
+        totalHistoricalCheckins,
+        uniqueAttendees: uniquePeople.size,
+        averageAttendancePerService,
+        peakServiceId,
+        peakServiceName,
+        peakServiceCount,
+      },
+      services: entries,
+    };
   }
 
   public async upsertPushSubscription(

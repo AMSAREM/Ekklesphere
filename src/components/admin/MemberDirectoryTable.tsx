@@ -46,6 +46,7 @@ interface MemberDirectoryTableProps {
   checkedInIds: Set<string>;
   initialDepartmentFilter?: string | null;
   initialGroupFilter?: string | null;
+  initialDisplayMode?: 'table' | 'photos';
 }
 
 export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
@@ -58,6 +59,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   checkedInIds,
   initialDepartmentFilter,
   initialGroupFilter,
+  initialDisplayMode,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
@@ -77,7 +79,14 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
       setSelectedGroupFilter(initialGroupFilter || 'all');
     }
   }, [initialGroupFilter]);
-  const [displayMode, setDisplayMode] = useState<'table' | 'photos'>('table');
+
+  const [displayMode, setDisplayMode] = useState<'table' | 'photos'>(initialDisplayMode || 'table');
+
+  useEffect(() => {
+    if (initialDisplayMode) {
+      setDisplayMode(initialDisplayMode);
+    }
+  }, [initialDisplayMode]);
   const [photosOnlyFilter, setPhotosOnlyFilter] = useState(false);
   const [previewMember, setPreviewMember] = useState<Person | null>(null);
   const [previewAttemptIndex, setPreviewAttemptIndex] = useState(0);

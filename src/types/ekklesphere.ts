@@ -202,6 +202,9 @@ export interface ServiceInstance {
   date?: string; // YYYY-MM-DD
   startsAt: string;
   endsAt: string;
+  startTimeIso?: string;
+  endTimeIso?: string;
+  dwellMinutes?: number;
   status: 'scheduled' | 'open' | 'closed' | 'cancelled';
   expectedAttendance: number;
 }

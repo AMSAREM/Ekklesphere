@@ -364,7 +364,7 @@ export const WeeklyAttendanceTrendChart: React.FC<WeeklyAttendanceTrendChartProp
   return (
     <section
       aria-label="30-Day Weekly Attendance Trend"
-      className="lg:col-span-4 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between"
+      className="lg:col-span-4 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between"
     >
       <div>
         {/* Header & Segmented Mode Switcher */}

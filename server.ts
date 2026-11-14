@@ -1765,17 +1765,24 @@ app.get(
   requireAuthRole('usher', 'admin', 'pastor', 'member', 'group_leader', 'super_admin', 'creator'),
   requireActiveLicense,
   async (req: Request, res: Response) => {
-    const checkins = await platformStore.getLiveCheckins(req.organizationId!);
-    if (req.user?.role === 'member') {
-      const own = checkins.filter(
-        (c) =>
-          c.personId === req.user?.id ||
-          c.personId === req.user?.email ||
-          (req.user?.name && c.personName === req.user.name)
-      );
-      return res.status(200).json(own);
+    try {
+      const checkins = await platformStore.getLiveCheckins(req.organizationId!);
+      if (req.user?.role === 'member') {
+        const own = checkins.filter(
+          (c) =>
+            c.personId === req.user?.id ||
+            c.personId === req.user?.email ||
+            (req.user?.name && c.personName === req.user.name)
+        );
+        return res.status(200).json(own);
+      }
+      return res.status(200).json(checkins);
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'live_checkins_fetch_failed',
+        message: err?.message || 'Failed to load live attendance check-ins from database.',
+      });
     }
-    return res.status(200).json(checkins);
   }
 );
 
@@ -1799,32 +1806,39 @@ app.post(
       }
     }
 
-    const nowIso = new Date().toISOString();
-    const targetServiceInstanceId = body.serviceInstanceId || 'svc-sun-1';
-    const result = await platformStore.recordLiveCheckin(req.organizationId!, {
-      id: body.id || `rec-${body.personId}-${Date.now()}`,
-      personId: body.personId,
-      personName: body.personName,
-      serviceInstanceId: targetServiceInstanceId,
-      campusId: req.campus_id || PRIMARY_CAMPUS_SITE_ID,
-      method: body.method || 'manual',
-      confidence: typeof body.confidence === 'number' ? body.confidence : 95,
-      checkedInAt:
-        body.checkedInAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      checkedInIso: body.checkedInIso || nowIso,
-      late: Boolean(body.late),
-      recordedBy: body.recordedBy || req.user?.name || req.user?.role,
-      note: body.note,
-      distanceM: body.distanceM ?? null,
-      lat: body.lat ?? null,
-      lng: body.lng ?? null,
-    });
+    try {
+      const nowIso = new Date().toISOString();
+      const targetServiceInstanceId = body.serviceInstanceId || 'svc-sun-1';
+      const result = await platformStore.recordLiveCheckin(req.organizationId!, {
+        id: body.id || `rec-${body.personId}-${Date.now()}`,
+        personId: body.personId,
+        personName: body.personName,
+        serviceInstanceId: targetServiceInstanceId,
+        campusId: req.campus_id || PRIMARY_CAMPUS_SITE_ID,
+        method: body.method || 'manual',
+        confidence: typeof body.confidence === 'number' ? body.confidence : 95,
+        checkedInAt:
+          body.checkedInAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        checkedInIso: body.checkedInIso || nowIso,
+        late: Boolean(body.late),
+        recordedBy: body.recordedBy || req.user?.name || req.user?.role,
+        note: body.note,
+        distanceM: body.distanceM ?? null,
+        lat: body.lat ?? null,
+        lng: body.lng ?? null,
+      });
 
-    return res.status(200).json({
-      success: true,
-      record: result.record,
-      liveCheckins: result.liveCheckins,
-    });
+      return res.status(200).json({
+        success: true,
+        record: result.record,
+        liveCheckins: result.liveCheckins,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'live_checkin_failed',
+        message: err?.message || 'Failed to save attendance check-in to database.',
+      });
+    }
   }
 );
 
@@ -1838,8 +1852,15 @@ app.delete(
       typeof req.query.serviceId === 'string' && req.query.serviceId.trim()
         ? req.query.serviceId.trim()
         : null;
-    const liveCheckins = await platformStore.deleteLiveCheckin(req.organizationId!, personId, serviceId);
-    return res.status(200).json({ success: true, liveCheckins });
+    try {
+      const liveCheckins = await platformStore.deleteLiveCheckin(req.organizationId!, personId, serviceId);
+      return res.status(200).json({ success: true, liveCheckins });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'live_checkin_delete_failed',
+        message: err?.message || 'Failed to remove attendance check-in from database.',
+      });
+    }
   }
 );
 
@@ -2406,6 +2427,11 @@ function normalizeEventRow(row: Record<string, any>): Record<string, any> {
       ? row.expected_attendance
       : parseExpectedAttendanceFromDescription(row.description);
 
+  const allowanceMinutes = Math.max(
+    0,
+    Number(row.dwell_min ?? row.dwellMinutes ?? row.allowance_minutes ?? 0) || 0
+  );
+
   return {
     ...row,
     date: dateStr,
@@ -2413,6 +2439,8 @@ function normalizeEventRow(row: Record<string, any>): Record<string, any> {
     end_time: endRaw,
     starts_at: startRaw,
     ends_at: endRaw,
+    dwell_min: allowanceMinutes,
+    allowance_minutes: allowanceMinutes,
     expected_attendance: expected,
   };
 }
@@ -2457,8 +2485,9 @@ app.post(
       typeof req.body?.startsAt === 'string' && req.body.startsAt.trim() ? req.body.startsAt.trim() : '08:00';
     const rawEndsAt =
       typeof req.body?.endsAt === 'string' && req.body.endsAt.trim() ? req.body.endsAt.trim() : '10:30';
-    const dwellMin = Number.isFinite(Number(req.body?.dwellMinutes))
-      ? Math.max(1, Number(req.body.dwellMinutes))
+    const rawAllowance = req.body?.allowanceMinutes ?? req.body?.dwellMinutes ?? req.body?.dwellMin;
+    const dwellMin = Number.isFinite(Number(rawAllowance))
+      ? Math.max(0, Math.round(Number(rawAllowance)))
       : 5;
     const expectedAttendance = Number.isFinite(Number(req.body?.expectedAttendance))
       ? Math.max(0, Number(req.body.expectedAttendance))
@@ -2484,7 +2513,10 @@ app.post(
       endDateObj = new Date(endDateObj.getTime() + 24 * 60 * 60 * 1000);
     }
 
-    const dbStatus = rawDate > todayIso ? 'scheduled' : 'active';
+    const reqStatus = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : '';
+    const dbStatus = reqStatus === 'closed' || reqStatus === 'cancelled' || reqStatus === 'completed'
+      ? 'closed'
+      : 'active';
 
     try {
       const created = await platformStore.createEvent(req.organizationId!, {
@@ -2506,6 +2538,85 @@ app.post(
   }
 );
 
+const handleUpdateEvent = async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const updates: {
+    name?: string;
+    date?: string;
+    startTimeIso?: string;
+    endTimeIso?: string;
+    dwellMin?: number;
+    status?: string;
+    expectedAttendance?: number;
+  } = {};
+
+  if (typeof body.name === 'string' && body.name.trim()) {
+    updates.name = body.name.trim();
+  }
+  const cleanDate =
+    typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date.trim())
+      ? body.date.trim()
+      : undefined;
+  if (cleanDate) updates.date = cleanDate;
+
+  const fallbackDate = cleanDate || new Date().toISOString().split('T')[0];
+
+  if (typeof body.startTimeIso === 'string' && !Number.isNaN(new Date(body.startTimeIso).getTime())) {
+    updates.startTimeIso = new Date(body.startTimeIso).toISOString();
+  } else if (typeof body.startsAt === 'string' && body.startsAt.trim()) {
+    updates.startTimeIso = buildIsoTimestamp(fallbackDate, body.startsAt.trim()).toISOString();
+  }
+
+  if (typeof body.endTimeIso === 'string' && !Number.isNaN(new Date(body.endTimeIso).getTime())) {
+    updates.endTimeIso = new Date(body.endTimeIso).toISOString();
+  } else if (typeof body.endsAt === 'string' && body.endsAt.trim()) {
+    const endObj = buildIsoTimestamp(fallbackDate, body.endsAt.trim());
+    if (updates.startTimeIso && endObj.getTime() <= Date.parse(updates.startTimeIso)) {
+      endObj.setTime(endObj.getTime() + 24 * 60 * 60 * 1000);
+    }
+    updates.endTimeIso = endObj.toISOString();
+  }
+
+  const rawAllowance = body.allowanceMinutes ?? body.dwellMinutes ?? body.dwellMin;
+  if (rawAllowance !== undefined && Number.isFinite(Number(rawAllowance))) {
+    updates.dwellMin = Math.max(0, Math.round(Number(rawAllowance)));
+  }
+
+  if (body.expectedAttendance !== undefined && Number.isFinite(Number(body.expectedAttendance))) {
+    updates.expectedAttendance = Math.max(0, Math.round(Number(body.expectedAttendance)));
+  }
+
+  if (typeof body.status === 'string' && body.status.trim()) {
+    const st = body.status.trim().toLowerCase();
+    updates.status =
+      st === 'closed' || st === 'completed' || st === 'cancelled' ? 'closed' : 'active';
+  }
+
+  try {
+    const updated = await platformStore.updateEvent(req.organizationId!, req.params.id, updates);
+    return res.status(200).json(normalizeEventRow(updated));
+  } catch (err: any) {
+    return res.status(err?.status || 500).json({
+      error: err?.code || 'event_update_failed',
+      message: err?.message || 'Failed to update scheduled service.',
+    });
+  }
+};
+
+app.patch(
+  ['/api/v1/events/:id', '/api/events/:id'],
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  handleUpdateEvent
+);
+
+app.put(
+  ['/api/v1/events/:id', '/api/events/:id'],
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  handleUpdateEvent
+);
+
 app.delete(
   ['/api/v1/events/:id', '/api/events/:id'],
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
@@ -2518,6 +2629,31 @@ app.delete(
       return res.status(err?.status || 500).json({
         error: err?.code || 'event_delete_failed',
         message: err?.message || 'Failed to delete scheduled service.',
+      });
+    }
+  }
+);
+
+app.get(
+  [
+    '/api/v1/services/history',
+    '/api/services/history',
+    '/api/attendance/service-history',
+    '/attendance/service-history',
+  ],
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const history = await platformStore.getServiceHistory(req.organizationId!);
+      return res.status(200).json({
+        ...history,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: 'service_history_failed',
+        message: err?.message || 'Could not load service history.',
       });
     }
   }
