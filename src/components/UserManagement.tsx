@@ -19,7 +19,7 @@ export interface ManagedUser {
 }
 
 export const UserManagement: React.FC = () => {
-  const { currentUser, showToast } = useEkklesphere();
+  const { currentUser, isSessionVerified, handleUnauthorizedSession, showToast } = useEkklesphere();
   const [selectedRole, setSelectedRole] = useState<ChurchRole>('pastor');
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
@@ -51,10 +51,11 @@ export const UserManagement: React.FC = () => {
   }, [currentUser?.token]);
 
   const fetchStaff = useCallback(async () => {
-    if (!canManageUsers) return;
+    if (!isSessionVerified || !currentUser?.token || !canManageUsers) return;
     setLoading(true);
     try {
       const res = await fetch('/api/staff', { headers: getStaffHeaders() });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (Array.isArray(data?.staff)) {
@@ -66,7 +67,7 @@ export const UserManagement: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [canManageUsers, getStaffHeaders]);
+  }, [isSessionVerified, currentUser?.token, canManageUsers, getStaffHeaders]);
 
   useEffect(() => {
     fetchStaff();

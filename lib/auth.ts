@@ -1,6 +1,6 @@
 // lib/auth.ts - Ekklesphere Hardened Authentication, Supabase JWT Verification & RBAC Engine
 import type { Request, Response, NextFunction } from 'express';
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 export const PRIMARY_ORGANIZATION_ID = '';
@@ -74,7 +74,9 @@ export function assertProductionAuthConfig(env: NodeJS.ProcessEnv = process.env)
   const hasJwt = Boolean(env.JWT_SECRET && env.JWT_SECRET.trim().length >= 16);
   const hasSupabase = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
 
-  if (!hasJwt) {
+  const serviceSecret = env.SUPABASE_SERVICE_ROLE_KEY?.trim() || env.SUPABASE_SECRET_KEY?.trim();
+
+  if (!hasJwt && !serviceSecret) {
     console.warn(
       '[Ekklesphere Security] Notice: JWT_SECRET (>=16 chars) not set. Auto-generating 256-bit cryptographically secure instance secret for session tokens.'
     );
@@ -106,7 +108,8 @@ export function assertProductionAuthConfig(env: NodeJS.ProcessEnv = process.env)
 }
 
 /**
- * Returns JWT signing/verification secret from environment or secure runtime key.
+ * Returns JWT signing/verification secret from environment, or a deterministic HMAC key derived
+ * from SUPABASE_SERVICE_ROLE_KEY (consistent across serverless instances), or runtime random key.
  */
 export function getJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.JWT_SECRET?.trim();
@@ -114,11 +117,19 @@ export function getJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
     return configured;
   }
   if (configured && configured.length > 0) {
-    console.warn('[Ekklesphere Security] JWT_SECRET is less than 16 characters. Using secure runtime key.');
+    console.warn('[Ekklesphere Security] JWT_SECRET is less than 16 characters. Using derived server key.');
   }
 
   if (env.STRICT_PROD_AUTH === 'true' && env.NODE_ENV === 'production') {
     throw new Error('CRITICAL: JWT_SECRET environment variable is required in production when STRICT_PROD_AUTH=true.');
+  }
+
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim() || env.SUPABASE_SECRET_KEY?.trim();
+  if (serviceRoleKey) {
+    const scopeUrl = env.SUPABASE_URL?.trim() || env.VITE_SUPABASE_URL?.trim() || 'supabase';
+    return createHmac('sha256', serviceRoleKey)
+      .update(`ekklesphere-jwt-signing-v1:${scopeUrl}`)
+      .digest('hex');
   }
 
   return RUNTIME_SECURE_SECRET;

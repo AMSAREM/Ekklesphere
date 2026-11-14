@@ -1,8 +1,6 @@
 // public/sw.js - Ekklesphere Progressive Web App & Push Notification Service Worker
-const CACHE_NAME = 'ekklesphere-v1';
+const CACHE_NAME = 'ekklesphere-v2';
 const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
   '/icon.svg',
   '/manifest.json'
 ];

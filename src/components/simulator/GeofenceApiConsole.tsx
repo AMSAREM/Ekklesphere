@@ -84,6 +84,8 @@ export const GeofenceApiConsole: React.FC = () => {
     setChurchPremiseLocation,
     clearChurchPremiseLocation,
     currentUser,
+    isSessionVerified,
+    handleUnauthorizedSession,
     currentService,
     checkInPerson,
     removeCheckIn,
@@ -167,6 +169,7 @@ export const GeofenceApiConsole: React.FC = () => {
 
   // Fetch status, events, shifts, and sites
   const fetchData = async () => {
+    if (!isSessionVerified || !currentUser?.token) return;
     const authHeaders = getConsoleAuthHeaders(false);
     try {
       const [resHealth, resEvents, resShifts, resSites] = await Promise.all([
@@ -175,6 +178,14 @@ export const GeofenceApiConsole: React.FC = () => {
         fetch('/api/attendance/shifts', { headers: authHeaders }).catch(() => null),
         fetch('/api/attendance/sites', { headers: authHeaders }).catch(() => null),
       ]);
+
+      if (
+        (resEvents && handleUnauthorizedSession(resEvents.status)) ||
+        (resShifts && handleUnauthorizedSession(resShifts.status)) ||
+        (resSites && handleUnauthorizedSession(resSites.status))
+      ) {
+        return;
+      }
 
       if (resHealth?.ok) {
         setServerStatus(await resHealth.json());
@@ -198,10 +209,11 @@ export const GeofenceApiConsole: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!isSessionVerified || !currentUser?.token) return;
     fetchData();
     const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
-  }, [currentUser?.token, currentUser?.organization_id]);
+  }, [isSessionVerified, currentUser?.token, currentUser?.organization_id]);
 
   // Cleanup watch on unmount
   useEffect(() => {

@@ -63,6 +63,8 @@ interface SystemSettingsPanelProps {
 export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClose, isModal }) => {
   const {
     currentUser,
+    isSessionVerified,
+    handleUnauthorizedSession,
     systemSettings,
     systemSettingsStorageBackend,
     isSyncingSystemSettings,
@@ -104,18 +106,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [upgradeReference, setUpgradeReference] = useState('');
 
   const loadBillingDetails = useCallback(async () => {
-    const token =
-      currentUser?.token ||
-      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
-    if (!token || !isSettingsAdmin) return;
+    if (!isSessionVerified || !currentUser?.token || !isSettingsAdmin) return;
     setIsLoadingBilling(true);
     try {
       const res = await fetch('/api/organisation/plans', {
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${currentUser.token}`,
         },
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (!res.ok) return;
       const data = await res.json();
       if (Array.isArray(data?.plans)) setBillingPlans(data.plans);
@@ -129,7 +129,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     } finally {
       setIsLoadingBilling(false);
     }
-  }, [currentUser?.token, isSettingsAdmin]);
+  }, [isSessionVerified, currentUser?.token, isSettingsAdmin]);
 
   useEffect(() => {
     loadBillingDetails();

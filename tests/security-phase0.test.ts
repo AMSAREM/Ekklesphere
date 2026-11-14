@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
-import { signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
+import { getJwtSecret, signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
 import { platformStore } from '../src/server/platformStore';
 
 describe('Phase 0 Security Remediation Suite', () => {
@@ -238,6 +238,53 @@ describe('Phase 0 Security Remediation Suite', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('rejected');
       expect(res.body.flag_reasons).toContain('mock_location');
+    });
+  });
+
+  // =========================================================================
+  // SERVERLESS JWT SECRET DETERMINISM
+  // =========================================================================
+  describe('Serverless JWT Secret Derivation & Strict Production Guard', () => {
+    it('derives the exact same 64-char hex secret from SUPABASE_SERVICE_ROLE_KEY when JWT_SECRET is unset', () => {
+      const envA = {
+        SUPABASE_URL: 'https://proj.supabase.co',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-secret-alpha',
+      } as NodeJS.ProcessEnv;
+
+      const envB = {
+        SUPABASE_URL: 'https://proj.supabase.co',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-secret-beta',
+      } as NodeJS.ProcessEnv;
+
+      const first = getJwtSecret(envA);
+      const second = getJwtSecret(envA);
+      const different = getJwtSecret(envB);
+
+      expect(first).toMatch(/^[a-f0-9]{64}$/);
+      expect(first).toBe(second);
+      expect(first).not.toBe(different);
+    });
+
+    it('prefers configured JWT_SECRET (>=16 chars) over derived Supabase key', () => {
+      const explicitSecret = 'explicit-production-jwt-secret-12345';
+      const secret = getJwtSecret({
+        JWT_SECRET: explicitSecret,
+        SUPABASE_URL: 'https://proj.supabase.co',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-secret-alpha',
+      } as NodeJS.ProcessEnv);
+
+      expect(secret).toBe(explicitSecret);
+    });
+
+    it('fails closed in production when STRICT_PROD_AUTH=true and JWT_SECRET is missing', () => {
+      expect(() =>
+        getJwtSecret({
+          NODE_ENV: 'production',
+          STRICT_PROD_AUTH: 'true',
+          SUPABASE_URL: 'https://proj.supabase.co',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-secret-alpha',
+        } as NodeJS.ProcessEnv)
+      ).toThrow(/JWT_SECRET/);
     });
   });
 });

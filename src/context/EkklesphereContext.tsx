@@ -121,6 +121,9 @@ interface EkklesphereContextType {
 
   // Authentication & Unified Role System
   currentUser: AuthUser | null;
+  isSessionVerified: boolean;
+  isVerifyingSession: boolean;
+  handleUnauthorizedSession: (status: number) => boolean;
   setCurrentUser: (user: AuthUser | null) => void;
   login: (user: AuthUser) => void;
   loginWithCredentials: (identifier: string, password: string) => Promise<AuthActionResult>;
@@ -428,27 +431,55 @@ const DEMO_USER_EMAILS = new Set([
 
 const EkklesphereContext = createContext<EkklesphereContextType | undefined>(undefined);
 
+const getUsableLocalToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('ekklesphere_token')?.trim();
+    if (!raw) return null;
+    const parts = raw.split('.');
+    if (parts.length !== 3 || !parts[1]) {
+      localStorage.removeItem('ekklesphere_token');
+      localStorage.removeItem('ekklesphere_user');
+      return null;
+    }
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { exp?: number };
+    if (typeof payload?.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+      localStorage.removeItem('ekklesphere_token');
+      localStorage.removeItem('ekklesphere_user');
+      return null;
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+};
+
 export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
+      const usableToken = getUsableLocalToken();
       const saved = localStorage.getItem('ekklesphere_user');
-      if (saved) {
+      if (usableToken && saved) {
         const parsed: AuthUser = JSON.parse(saved);
         if (
           parsed &&
           !DEMO_USER_IDS.has(parsed.id) &&
           !DEMO_USER_EMAILS.has((parsed.email || '').toLowerCase())
         ) {
-          return parsed;
+          return { ...parsed, token: parsed.token || usableToken };
         }
-        localStorage.removeItem('ekklesphere_user');
       }
+      localStorage.removeItem('ekklesphere_user');
     } catch {
       // ignore invalid storage
     }
     return null;
   });
 
+  const [isSessionVerified, setIsSessionVerified] = useState<boolean>(false);
+  const [isVerifyingSession, setIsVerifyingSession] = useState<boolean>(() => Boolean(getUsableLocalToken()));
   const [activePortalState, setActivePortalState] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
 
   // Role-enforced portal switcher: prevents unauthorized role traversal
@@ -585,6 +616,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
+  };
+
+  const handleUnauthorizedSession = (status: number): boolean => {
+    if (status !== 401) return false;
+    setIsSessionVerified(false);
+    setIsVerifyingSession(false);
+    setCurrentUser(null);
+    try {
+      localStorage.removeItem('ekklesphere_token');
+      localStorage.removeItem('ekklesphere_user');
+    } catch {}
+    return true;
   };
 
   // Multi-Tenant Platform Management (loaded strictly from server/Supabase API)
@@ -873,6 +916,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       verifiedRole: user.verifiedRole || user.role,
     };
     setCurrentUser(verifiedUser);
+    setIsVerifyingSession(false);
+    setIsSessionVerified(Boolean(verifiedUser.token));
     if (verifiedUser.role === 'creator' || verifiedUser.role === 'super_admin' || verifiedUser.is_creator) {
       setViewMode('creator', verifiedUser);
     } else {
@@ -952,6 +997,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         headers: { Authorization: `Bearer ${existingToken}` },
       }).catch(() => {});
     }
+    setIsSessionVerified(false);
+    setIsVerifyingSession(false);
     setCurrentUser(null);
     setGoogleAuthError(null);
     setIsChangePasswordModalOpen(false);
@@ -1367,9 +1414,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     let active = true;
 
     // 1. Validate stored JWT against backend (/api/auth/me) so expired or tampered tokens fail closed
-    const storedToken =
-      typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null;
+    const storedToken = getUsableLocalToken();
     if (storedToken) {
+      setIsVerifyingSession(true);
       fetch('/api/auth/me', {
         headers: { Authorization: `Bearer ${storedToken}` },
       })
@@ -1378,6 +1425,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           if (!res.ok) {
             localStorage.removeItem('ekklesphere_token');
             localStorage.removeItem('ekklesphere_user');
+            setIsSessionVerified(false);
             setCurrentUser(null);
             return;
           }
@@ -1397,6 +1445,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
               storedToken
             );
             setCurrentUser(hydrated);
+            setIsSessionVerified(true);
             localStorage.setItem('ekklesphere_user', JSON.stringify(hydrated));
             if (data.memberProfile?.id) {
               const normalizedProfile = normalizePersonRecord(data.memberProfile);
@@ -1409,9 +1458,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
             }
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          if (active) {
+            setIsVerifyingSession(false);
+          }
+        });
     } else {
       // Zero-trust rule: never retain cached user/organisation state without a verifiable Bearer token
+      setIsSessionVerified(false);
+      setIsVerifyingSession(false);
       try {
         localStorage.removeItem('ekklesphere_user');
         localStorage.removeItem('ekklesphere_system_settings');
@@ -1528,6 +1584,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setPushPermissionStatus(pushNotificationService.getPermissionStatus());
     }
 
+    if (!isSessionVerified) return;
+
     const token =
       currentUser?.token ||
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
@@ -1541,14 +1599,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     fetch('/api/notifications/subscriptions', {
       headers: getAuthHeaders(),
     })
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (handleUnauthorizedSession(res.status)) return null;
+        return res.ok ? res.json() : null;
+      })
       .then((data) => {
         if (data && typeof data.subscribersCount === 'number') {
           setPushSubscribersCount(data.subscribersCount);
         }
       })
       .catch(() => {});
-  }, [currentUser?.id, currentUser?.organization_id, currentUser?.role, currentUser?.token]);
+  }, [isSessionVerified, currentUser?.id, currentUser?.organization_id, currentUser?.role, currentUser?.token]);
 
   const requestPushPermission = async (): Promise<boolean> => {
     if (!pushNotificationService.isSupported()) {
@@ -1873,6 +1934,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     try {
       const res = await fetch('/api/members', { headers: getAuthHeaders() });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -2427,6 +2489,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const res = await fetch('/api/system-settings', {
         headers: getAuthHeaders(),
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (!res.ok) return;
       const data = await res.json();
       if (data?.storageBackend) {
@@ -2459,6 +2522,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const res = await fetch('/api/church-groups', {
         headers: getAuthHeaders(),
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (!res.ok) return;
       const data = await res.json();
       if (Array.isArray(data?.groups)) {
@@ -2485,6 +2549,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const res = await fetch('/api/system-settings/audit-logs', {
         headers: getAuthHeaders(),
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (!res.ok) return;
       const data = await res.json();
       if (Array.isArray(data?.auditLogs)) {
@@ -2522,6 +2587,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const res = await fetch('/api/campus-premise', {
           headers: getAuthHeaders(),
         });
+        if (handleUnauthorizedSession(res.status)) return;
         if (res.ok) {
           serverData = await res.json();
           serverPremiseUnavailableErrors = 0;
@@ -2734,6 +2800,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     try {
       const res = await fetch('/api/events', { headers: getAuthHeaders() });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -3126,6 +3193,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (!token) return;
     try {
       const res = await fetch('/api/donations', { headers: getAuthHeaders() });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (Array.isArray(data?.donations)) {
@@ -3152,6 +3220,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (!token || !isStaff) return;
     try {
       const res = await fetch('/api/followup-tasks', { headers: getAuthHeaders() });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (Array.isArray(data?.tasks)) {
@@ -3173,6 +3242,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         fetch('/api/consents/me', { headers: getAuthHeaders() }).catch(() => null),
         fetch('/api/rsvps/me', { headers: getAuthHeaders() }).catch(() => null),
       ]);
+      if ((cRes && handleUnauthorizedSession(cRes.status)) || (rRes && handleUnauthorizedSession(rRes.status))) {
+        return;
+      }
       if (cRes?.ok) {
         const cData = await cRes.json().catch(() => ({}));
         if (cData?.consents) {
@@ -3191,6 +3263,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   useEffect(() => {
+    if (!isSessionVerified || !currentUser?.token) {
+      return;
+    }
     refreshSystemSettings();
     refreshChurchGroups();
     refreshAuditLogs();
@@ -3202,7 +3277,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     refreshMemberConsentsAndRsvps();
     const interval = setInterval(refreshLivePremise, 4000);
     return () => clearInterval(interval);
-  }, [currentUser?.id, currentUser?.organization_id, currentUser?.token]);
+  }, [isSessionVerified, currentUser?.id, currentUser?.organization_id, currentUser?.token]);
 
   const setChurchPremiseLocation = async (params: {
     lat: number;
@@ -3748,6 +3823,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const res = await fetch('/api/church-wall', {
         headers: getAuthHeaders(),
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data?.posts)) {
@@ -3761,10 +3837,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   useEffect(() => {
-    if (currentUser?.token) {
+    if (isSessionVerified && currentUser?.token) {
       refreshChurchWallPosts();
     }
-  }, [currentUser?.id, currentUser?.organization_id]);
+  }, [isSessionVerified, currentUser?.id, currentUser?.organization_id, currentUser?.token]);
 
   const addChurchWallPost = async (input: {
     message: string;
@@ -3964,6 +4040,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const contextValue = React.useMemo<EkklesphereContextType>(
     () => ({
       currentUser,
+      isSessionVerified,
+      isVerifyingSession,
+      handleUnauthorizedSession,
       setCurrentUser,
       login,
       loginWithCredentials,
@@ -4098,6 +4177,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // Recompute value object only when data/UI state slices actually change
     [
       currentUser,
+      isSessionVerified,
+      isVerifyingSession,
       isGoogleAuthLoading,
       googleAuthError,
       pushPermissionStatus,

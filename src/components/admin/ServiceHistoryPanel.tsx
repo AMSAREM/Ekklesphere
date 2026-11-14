@@ -152,6 +152,8 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
 }) => {
   const {
     currentUser,
+    isSessionVerified,
+    handleUnauthorizedSession,
     services,
     attendanceRecords,
     members,
@@ -200,10 +202,7 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
   }, [confirmDeleteId]);
 
   const fetchHistory = useCallback(async () => {
-    const token =
-      currentUser?.token ||
-      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
-    if (!token) {
+    if (!isSessionVerified || !currentUser?.token) {
       setIsLoading(false);
       return;
     }
@@ -213,9 +212,10 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
       const res = await fetch('/api/services/history', {
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${currentUser.token}`,
         },
       });
+      if (handleUnauthorizedSession(res.status)) return;
       if (res.ok) {
         const data = (await res.json()) as ServiceHistoryResponse;
         if (data && Array.isArray(data.services)) {
@@ -233,7 +233,7 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [currentUser?.token]);
+  }, [isSessionVerified, currentUser?.token]);
 
   useEffect(() => {
     fetchHistory();

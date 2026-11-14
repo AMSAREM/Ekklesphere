@@ -264,7 +264,16 @@ const DEFAULT_ALERTS: ConsoleAlert[] = [];
 const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [];
 
 export const CreatorsPanel: React.FC = () => {
-  const { currentUser, login, setViewMode, showToast, logout, deleteTenant } = useEkklesphere();
+  const {
+    currentUser,
+    isSessionVerified,
+    handleUnauthorizedSession,
+    login,
+    setViewMode,
+    showToast,
+    logout,
+    deleteTenant,
+  } = useEkklesphere();
 
   // Authentication Guard: strictly allows verified creator and super_admin claims (zero env/client bypass)
   const isAuthorized =
@@ -615,29 +624,12 @@ export const CreatorsPanel: React.FC = () => {
     }
   };
 
-  // Ensure a valid Creator Console token is available
+  // Ensure a valid Creator Console token is available (never call /api/auth/token without credentials)
   const ensureConsoleToken = useCallback(async (): Promise<string | null> => {
-    let token =
+    const token =
       currentUser?.token ||
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
-
-    if (token) return token;
-
-    try {
-      const res = await fetch('/api/auth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.token) {
-          localStorage.setItem('ekklesphere_token', data.token);
-          return data.token;
-        }
-      }
-    } catch {}
-
-    return null;
+    return token || null;
   }, [currentUser]);
 
   // Auth header helper
@@ -652,6 +644,7 @@ export const CreatorsPanel: React.FC = () => {
   const safeFetchJson = async (url: string, headers: HeadersInit) => {
     try {
       const r = await fetch(url, { headers });
+      if (handleUnauthorizedSession(r.status)) return null;
       if (!r.ok) return null;
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('application/json')) return null;
@@ -664,6 +657,11 @@ export const CreatorsPanel: React.FC = () => {
   // Fetch all console data from server
   const loadConsoleData = useCallback(
     async (isRefresh = false) => {
+      if (!isSessionVerified || !isAuthorized || !currentUser?.token) {
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       setApiError(null);
@@ -758,7 +756,7 @@ export const CreatorsPanel: React.FC = () => {
         setRefreshing(false);
       }
     },
-    [getConsoleHeaders, usageDays, auditLimit]
+    [isSessionVerified, isAuthorized, currentUser?.token, getConsoleHeaders, usageDays, auditLimit]
   );
 
   useEffect(() => {

@@ -115,6 +115,8 @@ export const WeeklyAttendanceTrendChart: React.FC<WeeklyAttendanceTrendChartProp
     members,
     expectedAttendance,
     currentUser,
+    isSessionVerified,
+    handleUnauthorizedSession,
     showToast,
   } = useEkklesphere();
 
@@ -125,18 +127,18 @@ export const WeeklyAttendanceTrendChart: React.FC<WeeklyAttendanceTrendChartProp
 
   useEffect(() => {
     let cancelled = false;
-    const token =
-      currentUser?.token ||
-      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
-    if (!token) return;
+    if (!isSessionVerified || !currentUser?.token) return;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${currentUser.token}`,
     };
 
     fetch('/api/attendance/weekly-trend', { headers })
-      .then((res) => (res.ok ? (res.json() as Promise<ThirtyDayAttendanceTrendResponse>) : null))
+      .then((res) => {
+        if (handleUnauthorizedSession(res.status)) return null;
+        return res.ok ? (res.json() as Promise<ThirtyDayAttendanceTrendResponse>) : null;
+      })
       .then((data) => {
         if (!cancelled && data && Array.isArray(data.historicalRecords)) {
           setServerHistoricalRecords(data.historicalRecords);
@@ -148,8 +150,10 @@ export const WeeklyAttendanceTrendChart: React.FC<WeeklyAttendanceTrendChartProp
       cancelled = true;
     };
   }, [
+    isSessionVerified,
     attendanceRecords.length,
     services.length,
+    currentUser?.token,
     currentUser?.role,
     currentUser?.id,
     currentUser?.email,

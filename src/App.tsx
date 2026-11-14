@@ -16,6 +16,7 @@ import { KeyRound } from 'lucide-react';
 const EkklesphereMain: React.FC = () => {
   const {
     currentUser,
+    isVerifyingSession,
     toastMessage,
     viewMode,
     isChangePasswordModalOpen,
@@ -24,6 +25,19 @@ const EkklesphereMain: React.FC = () => {
 
   // If Creator Console view is active - only verified creator login can access
   if (viewMode === 'creator') {
+    if (isVerifyingSession) {
+      return (
+        <div className="min-h-screen w-full flex items-center justify-center bg-[#F8F9FD] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA]">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 rounded-full border-2 border-[#6D5CF2] border-t-transparent animate-spin" />
+            <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+              Verifying session...
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     const isCreatorAllowed =
       Boolean(currentUser) &&
       (currentUser?.role === 'super_admin' ||
@@ -81,6 +95,19 @@ const EkklesphereMain: React.FC = () => {
   }
 
   // Standard Church Application Portals View (viewMode === 'app')
+  if (isVerifyingSession) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#F8F9FD] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-[#6D5CF2] border-t-transparent animate-spin" />
+          <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+            Verifying session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F8F9FD] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
       {/* Help Modal */}
