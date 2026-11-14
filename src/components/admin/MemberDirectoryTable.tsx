@@ -44,6 +44,8 @@ interface MemberDirectoryTableProps {
   onOpenImportModal: () => void;
   onCheckinMember: (id: string) => void;
   checkedInIds: Set<string>;
+  initialDepartmentFilter?: string | null;
+  initialGroupFilter?: string | null;
 }
 
 export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
@@ -54,11 +56,27 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   onOpenImportModal,
   onCheckinMember,
   checkedInIds,
+  initialDepartmentFilter,
+  initialGroupFilter,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
-  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>('all');
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
+  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>(
+    initialDepartmentFilter || 'all'
+  );
   const [viewPreset, setViewPreset] = useState<'all' | 'essential' | 'church' | 'spiritual'>('all');
+
+  useEffect(() => {
+    if (initialDepartmentFilter !== undefined) {
+      setSelectedDepartmentFilter(initialDepartmentFilter || 'all');
+    }
+  }, [initialDepartmentFilter]);
+
+  useEffect(() => {
+    if (initialGroupFilter !== undefined) {
+      setSelectedGroupFilter(initialGroupFilter || 'all');
+    }
+  }, [initialGroupFilter]);
   const [displayMode, setDisplayMode] = useState<'table' | 'photos'>('table');
   const [photosOnlyFilter, setPhotosOnlyFilter] = useState(false);
   const [previewMember, setPreviewMember] = useState<Person | null>(null);
@@ -191,18 +209,30 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         return false;
       }
 
-      // Cell Group filter
+      // Cell Group / Ministry filter
       if (selectedGroupFilter !== 'all') {
-        const grp = m.homeCellGroup || m.groupName || '';
-        if (!grp.toLowerCase().includes(selectedGroupFilter.toLowerCase())) {
+        const needle = selectedGroupFilter.trim().toLowerCase();
+        const homeCell = (m.homeCellGroup || '').trim().toLowerCase();
+        const grp = (m.groupName || '').trim().toLowerCase();
+        const dept = (m.department || '').trim().toLowerCase();
+        if (
+          !homeCell.includes(needle) &&
+          !grp.includes(needle) &&
+          !dept.includes(needle)
+        ) {
           return false;
         }
       }
 
       // Department filter
       if (selectedDepartmentFilter !== 'all') {
-        const dept = m.department || '';
-        if (!dept.toLowerCase().includes(selectedDepartmentFilter.toLowerCase())) {
+        const dept = (m.department || '').trim().toLowerCase();
+        const needle = selectedDepartmentFilter.trim().toLowerCase();
+        if (needle === 'general congregation') {
+          if (dept && dept !== 'general congregation' && dept !== 'general') {
+            return false;
+          }
+        } else if (!dept.includes(needle)) {
           return false;
         }
       }
@@ -417,8 +447,24 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
             </button>
           )}
 
+          {/* Department Filter */}
+          <select
+            aria-label="Filter by department"
+            value={selectedDepartmentFilter}
+            onChange={(e) => setSelectedDepartmentFilter(e.target.value)}
+            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
+          >
+            <option value="all">All Departments</option>
+            {departments.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+
           {/* Group Filter */}
           <select
+            aria-label="Filter by cell group or ministry"
             value={selectedGroupFilter}
             onChange={(e) => setSelectedGroupFilter(e.target.value)}
             className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"

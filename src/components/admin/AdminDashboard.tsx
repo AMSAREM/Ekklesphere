@@ -36,6 +36,9 @@ import {
   QrCode,
   Smartphone,
   Upload,
+  Building2,
+  HeartHandshake,
+  ArrowUpRight,
 } from 'lucide-react';
 import { ProximitySimulator } from '../simulator/ProximitySimulator';
 import { AddMemberModal } from './AddMemberModal';
@@ -45,6 +48,8 @@ import { ImportMembersModal } from './ImportMembersModal';
 import { LiveAttendanceInsights } from './LiveAttendanceInsights';
 import { WeeklyAttendanceTrendChart } from './WeeklyAttendanceTrendChart';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
+import { DashboardDeepAnalytics, AnalyticsLens } from './DashboardDeepAnalytics';
+import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
 import { Person } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
 
@@ -88,6 +93,7 @@ export const AdminDashboard: React.FC = () => {
     autoCheckinOptedInCount,
     auditLogs,
     churchGroups,
+    donations,
     addService,
     deleteService,
   } = useEkklesphere();
@@ -97,6 +103,10 @@ export const AdminDashboard: React.FC = () => {
   const [activeModule, setActiveModule] = useState<'dashboard' | 'attendance' | 'members' | 'services' | 'followup' | 'messages' | 'settings'>('dashboard');
   const [insightsInitialTab, setInsightsInitialTab] = useState<'checked_in' | 'unarrived' | 'at_risk'>('checked_in');
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [analyticsLens, setAnalyticsLens] = useState<AnalyticsLens>('all');
+  const analyticsSectionRef = useRef<HTMLDivElement>(null);
+  const [directoryDeptFilter, setDirectoryDeptFilter] = useState<string | null>(null);
+  const [directoryGroupFilter, setDirectoryGroupFilter] = useState<string | null>(null);
 
   // Sync activeTab with adminSubTab from header
   useEffect(() => {
@@ -114,24 +124,33 @@ export const AdminDashboard: React.FC = () => {
     }
   }, [adminSubTab]);
 
-  const checkedInMemberIds = React.useMemo(
+  const dashboardAnalytics = React.useMemo(
     () =>
-      new Set(
-        attendanceRecords
-          .filter(
-            (r) =>
-              r.serviceInstanceId === currentService.id ||
-              (!r.serviceInstanceId && services.length <= 1)
-          )
-          .map((r) => r.personId)
-      ),
-    [attendanceRecords, currentService.id, services.length]
+      computeDashboardAnalytics({
+        members,
+        attendanceRecords,
+        services,
+        currentService,
+        churchGroups,
+        followupTasks,
+        donations,
+        systemSettings,
+      }),
+    [
+      members,
+      attendanceRecords,
+      services,
+      currentService,
+      churchGroups,
+      followupTasks,
+      donations,
+      systemSettings,
+    ]
   );
 
-  const openFollowupCount = followupTasks.filter((t) => t.status === 'open').length;
+  const checkedInMemberIds = dashboardAnalytics.activeService.checkedInPersonIds;
+  const openFollowupCount = dashboardAnalytics.membership.openFollowupCount;
 
-  // Search filter
-  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<Person | null>(null);
 
@@ -230,69 +249,52 @@ export const AdminDashboard: React.FC = () => {
     return `${fmt(first)} - ${fmt(last)}`;
   }, [weekDays]);
 
-  const manualCheckinCount = Math.max(0, members.length - autoCheckinOptedInCount);
-  const manualCheckinPercentage = members.length > 0 ? Math.max(0, 100 - optInPercentage) : 0;
+  const manualCheckinCount = dashboardAnalytics.membership.manualCheckinCount;
+  const manualCheckinPercentage = dashboardAnalytics.membership.manualCheckinPct;
   const isPremiseConfigured =
     systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null;
   const openTasks = followupTasks.filter((t) => t.status === 'open');
   const primaryOpenTask = openTasks[0] || null;
 
-  const liveInsightsPreview = React.useMemo(() => {
-    const scoped = attendanceRecords.filter(
-      (r) =>
-        r.serviceInstanceId === currentService.id ||
-        (!r.serviceInstanceId && services.length <= 1)
-    );
-    const attendanceCount = scoped.length;
-    const late = scoped.filter((r) => r.late).length;
-    const onTime = Math.max(0, attendanceCount - late);
-    const punctualityPct = attendanceCount > 0 ? Math.round((onTime / attendanceCount) * 100) : 0;
-    const autoCount = scoped.filter((r) => r.method === 'geofence' || r.method === 'beacon').length;
-    const assistedCount = Math.max(0, attendanceCount - autoCount);
-    const threshold = Math.max(1, systemSettings.absenteeThresholdServices || 2);
-    const checkedIds = new Set(scoped.map((r) => r.personId));
-    const checkedInMembersCount = members.filter((m) => checkedIds.has(m.id)).length;
-    const absenteeBaseline = members.length > 0 ? members.length : expectedAttendance;
-    const absenteeCount =
-      members.length > 0
-        ? Math.max(0, members.length - checkedInMembersCount)
-        : Math.max(0, expectedAttendance - attendanceCount);
-    const absenteePct =
-      absenteeBaseline > 0 ? Math.min(100, Math.round((absenteeCount / absenteeBaseline) * 100)) : 0;
-    const attendancePct =
-      expectedAttendance > 0
-        ? Math.min(100, Math.round((attendanceCount / expectedAttendance) * 100))
-        : 0;
-    const atRiskCount = members.filter(
-      (m) => !checkedIds.has(m.id) && (m.consecutiveAbsences || 0) >= threshold
-    ).length;
+  const liveInsightsPreview = {
+    total: dashboardAnalytics.activeService.attendanceCount,
+    attendanceCount: dashboardAnalytics.activeService.attendanceCount,
+    attendancePct: dashboardAnalytics.activeService.turnoutPct,
+    absenteeCount: dashboardAnalytics.activeService.absenteeCount,
+    absenteePct: dashboardAnalytics.activeService.absenteePct,
+    absenteeBaseline:
+      members.length > 0 ? members.length : dashboardAnalytics.activeService.expectedAttendance,
+    onTime: dashboardAnalytics.activeService.onTimeCount,
+    late: dashboardAnalytics.activeService.lateCount,
+    punctualityPct: dashboardAnalytics.activeService.punctualityPct,
+    autoCount: dashboardAnalytics.activeService.autoCount,
+    assistedCount: dashboardAnalytics.activeService.assistedCount,
+    atRiskCount: dashboardAnalytics.activeService.atRiskCount,
+  };
 
-    return {
-      total: attendanceCount,
-      attendanceCount,
-      attendancePct,
-      absenteeCount,
-      absenteePct,
-      absenteeBaseline,
-      onTime,
-      late,
-      punctualityPct,
-      autoCount,
-      assistedCount,
-      atRiskCount,
-    };
-  }, [
-    attendanceRecords,
-    currentService.id,
-    services.length,
-    systemSettings.absenteeThresholdServices,
-    members,
-    expectedAttendance,
-  ]);
+  const jumpToAnalyticsLens = (lens: AnalyticsLens) => {
+    setAnalyticsLens(lens);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        analyticsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  };
 
-  const handleQuickArrivalCheckin = () => {
+  const openFilteredDirectory = (opts: { department?: string | null; group?: string | null }) => {
+    setDirectoryDeptFilter(opts.department ?? 'all');
+    setDirectoryGroupFilter(opts.group ?? 'all');
     setActiveTab('workflows');
     setActiveModule('members');
+    setAdminSubTab('workflows');
+  };
+
+  const handleQuickArrivalCheckin = () => {
+    setDirectoryDeptFilter('all');
+    setDirectoryGroupFilter('all');
+    setActiveTab('workflows');
+    setActiveModule('members');
+    setAdminSubTab('workflows');
     showToast(
       members.length > 0
         ? 'Select a member from the live directory to check in.'
@@ -428,6 +430,8 @@ export const AdminDashboard: React.FC = () => {
         <div className="relative group w-full flex justify-center">
           <button
             onClick={() => {
+              setDirectoryDeptFilter('all');
+              setDirectoryGroupFilter('all');
               setActiveTab('workflows');
               setActiveModule('members');
               setAdminSubTab('workflows');
@@ -510,278 +514,409 @@ export const AdminDashboard: React.FC = () => {
         {/* Main Content View based on Tab */}
         {activeTab === 'dashboard' && (
         <>
-          {/* Hero Greeting Section: Responsive 2-col on mobile, 4-col on tablet, 6-col on desktop */}
-          <section className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 my-2 sm:my-4 items-stretch">
-            {/* Left Welcome Box */}
-            <div className="col-span-2 sm:col-span-2 md:col-span-4 lg:col-span-2 flex flex-col justify-center">
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-2">
-                Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Leader'}!
-                <span className="inline-flex gap-1 ml-2.5 align-middle">
-                  <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#6D5CF2] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block shadow-sm" />
-                  <span className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#59C3C3] border-2 border-[#F6F7FC] dark:border-[#14142E] inline-block -ml-2 shadow-sm" />
+          {/* 1. DOMINANT FOCAL ANCHOR: Active Service / Event Command Hero */}
+          <section
+            aria-label="Active Service and Event Command Hero"
+            className="bg-[#1D1B3A] dark:bg-[#19193A] text-white rounded-3xl border border-[#2F2D59] p-5 sm:p-6 my-2 sm:my-4"
+          >
+            {/* Top Context Bar: Greeting, Campus, Window & Active Service Switcher */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-white/10">
+              <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/80 tabular-nums">
+                <span className="font-semibold text-white">
+                  Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Leader'}
                 </span>
-                <br />
-                What are your plans for today?
-              </h1>
-              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A9ACC8] max-w-[36ch] leading-relaxed mb-3 sm:mb-4">
-                This platform takes care of proximity attendance and pastoral follow-up, so you can focus on your congregation.
-              </p>
-              
-              {/* Quick Actions */}
-              <div className="flex flex-wrap items-center gap-2">
+                <span aria-hidden="true" className="text-white/40">·</span>
+                <span className="font-semibold text-[#4FBF98]">
+                  {currentService.status === 'open'
+                    ? 'Active Service Live'
+                    : currentService.status === 'closed'
+                    ? 'Completed Service / Event'
+                    : 'Scheduled Active Event'}
+                </span>
+                {systemSettings.campusName && (
+                  <>
+                    <span aria-hidden="true" className="text-white/40">·</span>
+                    <span className="truncate max-w-[200px]">{systemSettings.campusName}</span>
+                  </>
+                )}
+                <span aria-hidden="true" className="text-white/40">·</span>
+                <span>
+                  {currentService.date
+                    ? formatServiceDate(currentService.date, true)
+                    : 'Current Schedule'}{' '}
+                  · {currentService.startsAt}–{currentService.endsAt}
+                </span>
+              </div>
+
+              {/* Service Switcher & Primary Operational Actions */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {services.length > 0 && (
+                  <select
+                    aria-label="Switch active service or event"
+                    value={activeServiceId}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      setActiveServiceId(nextId);
+                      const target = services.find((s) => s.id === nextId);
+                      if (target?.date) setSelectedDateIso(target.date);
+                    }}
+                    className="bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-xl px-3 py-1.5 text-xs font-semibold outline-none focus:ring-2 focus:ring-[#8C7DFF] cursor-pointer max-w-[220px]"
+                  >
+                    {services.map((svc) => (
+                      <option key={svc.id} value={svc.id} className="bg-[#1D1B3A] text-white">
+                        {svc.name} {svc.date ? `(${svc.date})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
                 <button
+                  type="button"
                   onClick={() => {
-                    setEditingMember(null);
-                    setIsAddMemberOpen(true);
+                    setInsightsInitialTab('checked_in');
+                    setActiveTab('insights');
+                    setActiveModule('attendance');
+                    setAdminSubTab('insights');
                   }}
-                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold shadow-sm transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  Add member
+                  <PieChart className="w-3.5 h-3.5" />
+                  <span>Live Insights</span>
                 </button>
+
                 <button
+                  type="button"
+                  onClick={handleQuickArrivalCheckin}
+                  className="inline-flex items-center gap-1.5 bg-white text-[#1D1B3A] hover:bg-white/90 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  <span>Check People In</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setIsAddServiceOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  Add service
+                  <span>Add Service</span>
                 </button>
+
                 <button
-                  onClick={() => {
-                    setActiveTab('settings');
-                    setActiveModule('settings');
-                    showToast('System & Campus Settings');
-                  }}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
-                >
-                  <Settings className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                  Settings
-                </button>
-                <button
+                  type="button"
                   onClick={() => setIsExportModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-bold hover:bg-slate-50 dark:hover:bg-white/5 transition-all shadow-xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                  title="Export Attendance CSV"
                 >
-                  <Download className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                  Export
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Export</span>
                 </button>
               </div>
             </div>
 
-            {/* Dash Tile: Add shortcut */}
-            <button
-              onClick={() => showToast('Shortcut builder: Choose any report or action to pin here.')}
-              className="col-span-1 border-2 border-dashed border-[#CBC6F7] dark:border-[#3B3B72] rounded-2xl sm:rounded-3xl p-3 sm:p-4 flex flex-col items-center justify-center gap-1.5 sm:gap-2 hover:bg-[#EFEDFF]/40 dark:hover:bg-[#2A2A55]/20 transition-colors group min-h-[110px] sm:min-h-[130px] cursor-pointer"
-              aria-label="Add shortcut tile"
-            >
-              <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center group-hover:scale-105 transition-transform">
-                <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-              </span>
-              <span className="text-[11px] sm:text-xs font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] text-center">Add shortcut</span>
-            </button>
+            {/* Dominant Active Service Title & Live Capacity Bar */}
+            <div className="pt-4 pb-2 flex flex-col md:flex-row md:items-end justify-between gap-4">
+              <div className="min-w-0">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-white/60 block mb-1">
+                  Active Service / Event Focus
+                </span>
+                <h1 className="text-2xl sm:text-3xl lg:text-[34px] font-bold tracking-tight text-white leading-tight truncate">
+                  {currentService.name}
+                </h1>
+              </div>
 
-            {/* Tile 1: Check people in */}
+              <div className="w-full md:w-72 shrink-0 tabular-nums">
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="text-white/75 font-medium">Live Attendance Target</span>
+                  <span className="font-mono font-bold text-white">
+                    {liveInsightsPreview.attendancePct}% ({liveInsightsPreview.attendanceCount}/
+                    {dashboardAnalytics.activeService.expectedAttendance})
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white/10 overflow-hidden flex">
+                  <div
+                    className="h-full bg-[#4FBF98] transition-all duration-300"
+                    style={{ width: `${liveInsightsPreview.attendancePct}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 4-Column Hairline Telemetry Strip inside Hero */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-0 sm:divide-x divide-white/10 pt-4 mt-3 border-t border-white/10 tabular-nums">
+              <button
+                type="button"
+                onClick={() => {
+                  setInsightsInitialTab('checked_in');
+                  setActiveTab('insights');
+                  setActiveModule('attendance');
+                  setAdminSubTab('insights');
+                }}
+                className="sm:pr-5 text-left group cursor-pointer"
+              >
+                <span className="text-[11px] font-semibold text-white/65 group-hover:text-white transition-colors block">
+                  Checked In Present
+                </span>
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#4FBF98] mt-1 block">
+                  {liveInsightsPreview.attendanceCount}
+                </span>
+                <span className="text-[11px] text-white/65 mt-0.5 block">
+                  {liveInsightsPreview.attendancePct}% of {dashboardAnalytics.activeService.expectedAttendance} expected
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInsightsInitialTab('unarrived');
+                  setActiveTab('insights');
+                  setActiveModule('attendance');
+                  setAdminSubTab('insights');
+                }}
+                className="sm:px-5 text-left group cursor-pointer"
+              >
+                <span className="text-[11px] font-semibold text-white/65 group-hover:text-white transition-colors block">
+                  Unarrived / Absent
+                </span>
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#FF7B8E] mt-1 block">
+                  {liveInsightsPreview.absenteeCount}
+                </span>
+                <span className="text-[11px] text-white/65 mt-0.5 block">
+                  {liveInsightsPreview.absenteePct}% of {liveInsightsPreview.absenteeBaseline} · {liveInsightsPreview.atRiskCount} repeat
+                </span>
+              </button>
+
+              <div className="sm:px-5">
+                <span className="text-[11px] font-semibold text-white/65 block">
+                  On-Time Punctuality
+                </span>
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-white mt-1 block">
+                  {liveInsightsPreview.punctualityPct}%
+                </span>
+                <span className="text-[11px] text-white/65 mt-0.5 block">
+                  {liveInsightsPreview.onTime} on-time · {liveInsightsPreview.late} late arrivals
+                </span>
+              </div>
+
+              <div className="sm:pl-5">
+                <span className="text-[11px] font-semibold text-white/65 block">
+                  Arrival Channel Split
+                </span>
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-white mt-1 block">
+                  {liveInsightsPreview.autoCount} / {liveInsightsPreview.assistedCount}
+                </span>
+                <span className="text-[11px] text-white/65 mt-0.5 block">
+                  Auto proximity / Door &amp; QR ({optInPercentage}% auto ready)
+                </span>
+              </div>
+            </div>
+          </section>
+
+          {/* 2. CONGREGATIONAL STRUCTURE & READINESS 4-COLUMN KPI STRIP */}
+          <section
+            aria-label="Membership, Departments, Ministries, and Pastoral Readiness"
+            className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 my-4 tabular-nums"
+          >
+            {/* Card 1: Membership Count */}
             <button
-              onClick={handleQuickArrivalCheckin}
-              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
+              type="button"
+              onClick={() => openFilteredDirectory({ department: 'all', group: 'all' })}
+              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
             >
-              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="10" y="12" width="38" height="36" rx="6" />
-                <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 23h38M21 8v8M37 8v8" />
-                <circle className="fill-[#6D5CF2] stroke-none" cx="48" cy="42" r="11" />
-                <path d="m43 42 4 4 7-8" stroke="#fff" strokeWidth="2.5" />
-              </svg>
-              <div>
-                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Check people in</b>
-                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block tabular-nums">
-                  {liveInsightsPreview.attendanceCount} present today
-                </small>
+              <div className="flex items-center justify-between gap-2 w-full">
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  Membership Count
+                </span>
+                <Users className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+              </div>
+              <div className="my-2">
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block leading-none">
+                  {dashboardAnalytics.membership.totalMembers}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
+                <span className="truncate">
+                  {dashboardAnalytics.membership.activeStatusCount} active ·{' '}
+                  {dashboardAnalytics.membership.visitorsCount} visitors
+                </span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
               </div>
             </button>
 
-            {/* Tile 2: Follow up */}
+            {/* Card 2: Departments */}
             <button
+              type="button"
+              onClick={() => jumpToAnalyticsLens('departments')}
+              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 w-full">
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  Departments
+                </span>
+                <Building2 className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+              </div>
+              <div className="my-2">
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block leading-none">
+                  {dashboardAnalytics.namedDepartmentsCount}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
+                <span className="truncate">
+                  {dashboardAnalytics.topDepartment
+                    ? `Top: ${dashboardAnalytics.topDepartment.name} (${dashboardAnalytics.topDepartment.totalMembers})`
+                    : 'No departments assigned'}
+                </span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
+              </div>
+            </button>
+
+            {/* Card 3: Ministries & Groups */}
+            <button
+              type="button"
+              onClick={() => jumpToAnalyticsLens('ministries')}
+              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 w-full">
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  Ministries &amp; Groups
+                </span>
+                <HeartHandshake className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+              </div>
+              <div className="my-2 flex items-baseline gap-2">
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-none">
+                  {dashboardAnalytics.groupCounts.ministries}
+                </span>
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  ministries ({dashboardAnalytics.groupCounts.total} total)
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
+                <span className="truncate">
+                  {dashboardAnalytics.groupCounts.fellowships} fellowships ·{' '}
+                  {dashboardAnalytics.groupCounts.cellGroups} cell groups
+                </span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
+              </div>
+            </button>
+
+            {/* Card 4: Pastoral Care & Campus Readiness */}
+            <button
+              type="button"
               onClick={() => setIsFollowupModalOpen(true)}
-              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
+              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
             >
-              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" cx="26" cy="20" r="9" />
-                <path className="fill-[#EFEDFF] dark:fill-[#2A2A55] stroke-[#1D1B3A] dark:stroke-[#F2F2FA]" d="M10 48c1-10 8-14 16-14s15 4 16 14z" />
-                <path className="fill-[#6D5CF2] stroke-none" d="M50 26c-6-5-12 1-6 7l6 6 6-6c6-6 0-12-6-7z" />
-              </svg>
-              <div>
-                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Follow up</b>
-                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block tabular-nums">
-                  {liveInsightsPreview.absenteeCount} absentees
-                </small>
+              <div className="flex items-center justify-between gap-2 w-full">
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  Pastoral Care &amp; GPS
+                </span>
+                <CheckSquare className="w-4 h-4 text-[#6D5CF2] shrink-0" />
               </div>
-            </button>
-
-            {/* Tile 3: Message members */}
-            <button
-              onClick={() => setIsMessageModalOpen(true)}
-              className="col-span-1 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-[0_10px_30px_rgba(60,50,140,0.08)] border border-[#E9EBF5] dark:border-[#2D2D55] text-left flex flex-col justify-between hover:shadow-md transition-shadow group min-h-[110px] sm:min-h-[130px] cursor-pointer"
-            >
-              <svg className="w-12 h-10 sm:w-[68px] sm:h-[58px] mb-1 group-hover:scale-105 transition-transform" viewBox="0 0 68 58" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" x="8" y="10" width="34" height="22" rx="8" />
-                <path className="stroke-[#1D1B3A] dark:stroke-[#F2F2FA] fill-white dark:fill-[#1D1D3D]" d="M16 32v8l8-8" />
-                <rect className="fill-[#6D5CF2] stroke-none" x="28" y="26" width="32" height="20" rx="8" />
-                <path d="M36 36h16" stroke="#fff" strokeWidth="2" />
-              </svg>
-              <div>
-                <b className="block text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight">Message members</b>
-                <small className="text-[10px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate block">Push, SMS & email</small>
+              <div className="my-2 flex items-baseline gap-2">
+                <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-none">
+                  {openFollowupCount}
+                </span>
+                <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  open follow-ups
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
+                <span className="truncate">
+                  {dashboardAnalytics.activeService.atRiskCount} repeat absentees · GPS{' '}
+                  {isPremiseConfigured ? 'Active' : 'Unset'}
+                </span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
               </div>
             </button>
           </section>
 
-          {/* Attendance Overview & 30-Day Engagement Bento Row (2 cols + 4 cols = 6-col Dashboard Grid) */}
-          <div className="grid grid-cols-1 lg:grid-cols-6 gap-4 sm:gap-5 my-4 sm:my-5 items-stretch">
-            {/* Live Service Attendance & Absentee Card */}
-            <section className="lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
-              <div>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-snug">
-                      Service Attendance
-                    </h2>
-                    <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] truncate tabular-nums">
-                      {currentService.name}
-                      {currentService.date ? ` · ${formatServiceDate(currentService.date)}` : ''} ·{' '}
-                      {currentService.startsAt}–{currentService.endsAt}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInsightsInitialTab('checked_in');
-                      setActiveTab('insights');
-                      setActiveModule('attendance');
-                      setAdminSubTab('insights');
-                    }}
-                    className="px-2.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#6D5CF2] hover:text-white text-xs font-bold transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <PieChart className="w-3.5 h-3.5" />
-                    <span>Insights</span>
-                  </button>
-                </div>
+          {/* 3. QUICK OPERATIONS ACTION BAR */}
+          <div className="flex flex-wrap items-center justify-between gap-2 my-3 px-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingMember(null);
+                  setIsAddMemberOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl px-3.5 py-2 text-xs font-bold transition-colors cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Add Member</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                <span>Import Roster</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsMessageModalOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <MessageCircle className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                <span>Broadcast Message</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('proximity')}
+                className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <Radio className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                <span>Proximity Radar</span>
+              </button>
+            </div>
+            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+              Auto readiness: {optInPercentage}% ({autoCheckinOptedInCount}/{members.length})
+            </span>
+          </div>
 
-                {/* Present vs Absent Interactive Split */}
-                <div className="grid grid-cols-2 divide-x divide-[#E9EBF5] dark:divide-[#2D2D55] my-5 tabular-nums">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInsightsInitialTab('checked_in');
-                      setActiveTab('insights');
-                      setActiveModule('attendance');
-                      setAdminSubTab('insights');
-                    }}
-                    className="pr-3 sm:pr-4 text-left group cursor-pointer"
-                  >
-                    <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] group-hover:text-[#6D5CF2] transition-colors block">
-                      Attendance Count
-                    </span>
-                    <span className="text-3xl sm:text-4xl font-bold text-[#4FBF98] leading-tight mt-1 block">
-                      {liveInsightsPreview.attendanceCount}
-                    </span>
-                    <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 block">
-                      {liveInsightsPreview.attendancePct}% present · {expectedAttendance} exp.
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInsightsInitialTab('unarrived');
-                      setActiveTab('insights');
-                      setActiveModule('attendance');
-                      setAdminSubTab('insights');
-                    }}
-                    className="pl-3 sm:pl-4 text-left group cursor-pointer"
-                  >
-                    <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] group-hover:text-[#6D5CF2] transition-colors block">
-                      Absentee Count
-                    </span>
-                    <span className="text-3xl sm:text-4xl font-bold text-[#EF5A6F] leading-tight mt-1 block">
-                      {liveInsightsPreview.absenteeCount}
-                    </span>
-                    <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 block">
-                      {members.length > 0
-                        ? `${liveInsightsPreview.absenteePct}% of ${members.length} roster`
-                        : `${liveInsightsPreview.absenteePct}% unarrived`}
-                    </span>
-                  </button>
-                </div>
-
-                {/* Live Turnout Split Bar */}
-                <div className="mb-2">
-                  <div className="h-2 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden flex">
-                    <div
-                      className="h-full bg-[#4FBF98] transition-all duration-300"
-                      style={{ width: `${liveInsightsPreview.attendancePct}%` }}
-                    />
-                    {(members.length > 0 || expectedAttendance > 0) &&
-                      liveInsightsPreview.absenteePct > 0 && (
-                        <div
-                          className="h-full bg-[#EF5A6F]/80 transition-all duration-300"
-                          style={{
-                            width: `${Math.min(
-                              100 - liveInsightsPreview.attendancePct,
-                              liveInsightsPreview.absenteePct
-                            )}%`,
-                          }}
-                        />
-                      )}
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1.5 tabular-nums">
-                    <span>
-                      {members.length} {members.length === 1 ? 'member' : 'members'} on roster
-                    </span>
-                    <span>
-                      {liveInsightsPreview.atRiskCount > 0
-                        ? `${liveInsightsPreview.atRiskCount} repeat absentees`
-                        : '0 repeat absentees'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Aligned Footer: Punctuality & Arrival Split */}
-              <div className="grid grid-cols-2 gap-3 pt-3 mt-2 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs tabular-nums">
-                <div>
-                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
-                    On-Time Rate
-                  </span>
-                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                    {liveInsightsPreview.punctualityPct}%
-                    <span className="ml-1 font-normal text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                      ({liveInsightsPreview.onTime}/{liveInsightsPreview.attendanceCount})
-                    </span>
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block">
-                    Auto / Door & QR
-                  </span>
-                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                    {liveInsightsPreview.autoCount} / {liveInsightsPreview.assistedCount}
-                  </span>
-                </div>
-              </div>
-            </section>
-
-            {/* 30-Day Weekly Attendance Trend (Recharts Bar Chart - 4 cols on desktop) */}
-            <WeeklyAttendanceTrendChart
-              onOpenInsights={() => {
-                setInsightsInitialTab('checked_in');
-                setActiveTab('insights');
-                setActiveModule('attendance');
-                setAdminSubTab('insights');
+          {/* 4. IN-DEPTH CONGREGATION & SERVICE ANALYTICS SUITE */}
+          <div ref={analyticsSectionRef} className="my-4 sm:my-5">
+            <DashboardDeepAnalytics
+              analytics={dashboardAnalytics}
+              theme={theme}
+              activeLens={analyticsLens}
+              onChangeLens={setAnalyticsLens}
+              onInspectDepartment={(dept) => openFilteredDirectory({ department: dept, group: 'all' })}
+              onInspectGroup={(grp) => openFilteredDirectory({ group: grp, department: 'all' })}
+              onSelectService={(svcId) => {
+                setActiveServiceId(svcId);
+                const target = services.find((s) => s.id === svcId);
+                if (target?.date) setSelectedDateIso(target.date);
+                showToast(`Active focus switched to ${target?.name || 'selected service'}`);
               }}
-              onQuickCheckin={handleQuickArrivalCheckin}
+              onOpenSettings={() => {
+                setActiveTab('settings');
+                setActiveModule('settings');
+                setAdminSubTab('settings');
+              }}
+              onAddMember={() => {
+                setEditingMember(null);
+                setIsAddMemberOpen(true);
+              }}
+              onAddService={() => setIsAddServiceOpen(true)}
             />
           </div>
 
-          {/* Member Attendance Frequency Visualizer (Recharts) */}
+          {/* 5. 30-DAY WEEKLY ATTENDANCE TREND */}
+          <div className="grid grid-cols-1 lg:grid-cols-6 gap-4 sm:gap-5 my-4 sm:my-5 items-stretch">
+            <div className="lg:col-span-6">
+              <WeeklyAttendanceTrendChart
+                onOpenInsights={() => {
+                  setInsightsInitialTab('checked_in');
+                  setActiveTab('insights');
+                  setActiveModule('attendance');
+                  setAdminSubTab('insights');
+                }}
+                onQuickCheckin={handleQuickArrivalCheckin}
+              />
+            </div>
+          </div>
+
+          {/* 6. MEMBER ATTENDANCE FREQUENCY VISUALIZER */}
           <div className="mb-4 sm:mb-5">
             <MemberAttendanceFrequencyChart
               onOpenFollowup={(memberId) => {
@@ -1203,86 +1338,29 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </section>
 
-            {/* 6. Metrics & Live Premise Status */}
+            {/* 6. Quick Broadcast & Live Premise Status */}
             <div className="md:col-span-1 lg:col-span-2 flex flex-col gap-4">
-              {/* Row with two Circular Progress Rings: Attendance Count & Absentee Count */}
-              <div className="grid grid-cols-2 gap-3">
-                {/* Ring 1: Attendance Count */}
+              {/* Quick Broadcast Card */}
+              <section className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 sm:p-5 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] flex-1 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      Congregation Outreach
+                    </h2>
+                    <MessageCircle className="w-4 h-4 text-[#6D5CF2]" />
+                  </div>
+                  <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] leading-relaxed mb-3">
+                    Send service reminders, follow-up notes, or department notices via Push, SMS, or email.
+                  </p>
+                </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setInsightsInitialTab('checked_in');
-                    setActiveTab('insights');
-                    setActiveModule('attendance');
-                    setAdminSubTab('insights');
-                  }}
-                  className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/40 transition-colors flex flex-col items-center text-center cursor-pointer"
+                  onClick={() => setIsMessageModalOpen(true)}
+                  className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
                 >
-                  <div className="relative w-16 h-16 mb-2">
-                    <svg className="w-16 h-16 -rotate-90" viewBox="0 0 60 60">
-                      <circle cx="30" cy="30" r="25" fill="none" className="stroke-[#EFEDFF] dark:stroke-[#2A2A55]" strokeWidth="6" />
-                      <circle
-                        cx="30"
-                        cy="30"
-                        r="25"
-                        fill="none"
-                        stroke="#4FBF98"
-                        strokeWidth="6"
-                        strokeLinecap="round"
-                        strokeDasharray={`${(157 * liveInsightsPreview.attendancePct) / 100} 157`}
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center font-bold text-xs tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      {liveInsightsPreview.attendancePct}%
-                    </span>
-                  </div>
-                  <small className="text-[10px] font-bold text-[#6D5CF2] tracking-wider uppercase">ATTENDANCE</small>
-                  <b className="text-sm text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums">
-                    {liveInsightsPreview.attendanceCount} present
-                  </b>
-                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                    of {expectedAttendance} expected
-                  </span>
+                  Compose Broadcast
                 </button>
-
-                {/* Ring 2: Absentee Count */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInsightsInitialTab('unarrived');
-                    setActiveTab('insights');
-                    setActiveModule('attendance');
-                    setAdminSubTab('insights');
-                  }}
-                  className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/40 transition-colors flex flex-col items-center text-center cursor-pointer"
-                >
-                  <div className="relative w-16 h-16 mb-2">
-                    <svg className="w-16 h-16 -rotate-90" viewBox="0 0 60 60">
-                      <circle cx="30" cy="30" r="25" fill="none" className="stroke-[#EFEDFF] dark:stroke-[#2A2A55]" strokeWidth="6" />
-                      <circle
-                        cx="30"
-                        cy="30"
-                        r="25"
-                        fill="none"
-                        stroke="#EF5A6F"
-                        strokeWidth="6"
-                        strokeLinecap="round"
-                        strokeDasharray={`${(157 * liveInsightsPreview.absenteePct) / 100} 157`}
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center font-bold text-xs tabular-nums text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      {liveInsightsPreview.absenteePct}%
-                    </span>
-                  </div>
-                  <small className="text-[10px] font-bold text-[#EF5A6F] tracking-wider uppercase">ABSENTEES</small>
-                  <b className="text-sm text-[#1D1B3A] dark:text-[#F2F2FA] tabular-nums">
-                    {liveInsightsPreview.absenteeCount} absent
-                  </b>
-                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                    of {members.length > 0 ? `${members.length} members` : `${expectedAttendance} expected`}
-                  </span>
-                </button>
-              </div>
+              </section>
 
               {/* Live Premise & Geofence Card */}
               <section className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-[0_10px_30px_rgba(60,50,140,0.07)] border border-[#E9EBF5] dark:border-[#2D2D55]">
@@ -1291,17 +1369,19 @@ export const AdminDashboard: React.FC = () => {
                     {systemSettings.campusName || 'Church Premise'}
                   </h2>
                   <span
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      isPremiseConfigured ? 'bg-[#4FBF98]' : 'bg-amber-400'
+                    className={`text-[11px] font-semibold ${
+                      isPremiseConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
                     }`}
-                  />
+                  >
+                    {isPremiseConfigured ? 'Active' : 'Unset'}
+                  </span>
                 </div>
-                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-mono block">
+                <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-mono block tabular-nums">
                   {isPremiseConfigured
                     ? `${systemSettings.campusLatitude?.toFixed(6)}, ${systemSettings.campusLongitude?.toFixed(6)}`
                     : 'GPS coordinates not pinned'}
                 </span>
-                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] my-2 leading-relaxed">
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] my-2 leading-relaxed tabular-nums">
                   Inner perimeter: {systemSettings.innerGeofenceMeters}m · Dwell rule: {systemSettings.dwellTimeMinutes} min
                 </p>
                 <div className="flex gap-2">
@@ -1362,6 +1442,8 @@ export const AdminDashboard: React.FC = () => {
               checkInPerson(id, 'usher', 95);
             }}
             checkedInIds={checkedInMemberIds}
+            initialDepartmentFilter={directoryDeptFilter}
+            initialGroupFilter={directoryGroupFilter}
           />
         </div>
       )}
