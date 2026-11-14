@@ -48,34 +48,19 @@ export const ChurchLocationMiniMap: React.FC<ChurchLocationMiniMapProps> = ({
 
   const formattedCoords = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 
-  // Detect iOS / Apple devices for native Apple Maps vs Google Maps universal links
-  const openInDeviceMaps = () => {
-    const isApple =
-      typeof navigator !== 'undefined' &&
-      /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
+  const isAppleDevice =
+    typeof navigator !== 'undefined' &&
+    /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
 
-    const queryLabel = encodeURIComponent(`${churchName} (${campusName})`);
-    const targetUrl = isApple
-      ? `https://maps.apple.com/?q=${queryLabel}&ll=${latitude},${longitude}&t=m`
-      : `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  const queryLabel = encodeURIComponent(`${churchName} (${campusName})`);
+  const mapsUrl = isAppleDevice
+    ? `https://maps.apple.com/?q=${queryLabel}&ll=${latitude},${longitude}&t=m`
+    : `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
 
-    window.open(targetUrl, '_blank', 'noopener,noreferrer');
-    if (onToast) onToast(`Opening ${churchName} in your device maps...`);
-  };
-
-  const getDirections = () => {
-    const isApple =
-      typeof navigator !== 'undefined' &&
-      /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
-
-    const originParam = livePosition ? `&origin=${livePosition.lat},${livePosition.lng}` : '';
-    const targetUrl = isApple
-      ? `https://maps.apple.com/?daddr=${latitude},${longitude}&dirflg=d&t=m`
-      : `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}${originParam}`;
-
-    window.open(targetUrl, '_blank', 'noopener,noreferrer');
-    if (onToast) onToast('Launching turn-by-turn navigation in Maps...');
-  };
+  const originParam = livePosition ? `&origin=${livePosition.lat},${livePosition.lng}` : '';
+  const directionsUrl = isAppleDevice
+    ? `https://maps.apple.com/?daddr=${latitude},${longitude}&dirflg=d&t=m`
+    : `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}${originParam}`;
 
   const copyCoordinates = async () => {
     try {
@@ -174,15 +159,17 @@ export const ChurchLocationMiniMap: React.FC<ChurchLocationMiniMapProps> = ({
               <span>{campusName || churchName}</span>
             </div>
 
-            {/* Tap to expand overlay button */}
-            <button
-              type="button"
-              onClick={openInDeviceMaps}
+            {/* Tap to expand overlay link */}
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => onToast?.(`Opening ${churchName} in your device maps...`)}
               aria-label="Open in external maps app"
               className="absolute top-2 right-2 bg-slate-900/85 hover:bg-slate-900 backdrop-blur-md text-white p-1.5 rounded-lg border border-white/20 shadow-md transition-transform hover:scale-105 cursor-pointer"
             >
               <Maximize2 className="w-3.5 h-3.5" />
-            </button>
+            </a>
           </>
         ) : (
           /* SVG Sanctuary Geofence Radar Preview */
@@ -341,23 +328,27 @@ export const ChurchLocationMiniMap: React.FC<ChurchLocationMiniMapProps> = ({
 
       {/* Device Map Integration Action Bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-        <button
-          type="button"
-          onClick={openInDeviceMaps}
+        <a
+          href={mapsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => onToast?.(`Opening ${churchName} in your device maps...`)}
           className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-white text-[#5848c2] hover:bg-slate-100 font-bold transition-all shadow-sm cursor-pointer"
         >
           <ExternalLink className="w-3.5 h-3.5" />
           <span className="truncate">Open in Maps</span>
-        </button>
+        </a>
 
-        <button
-          type="button"
-          onClick={getDirections}
+        <a
+          href={directionsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => onToast?.('Launching turn-by-turn navigation in Maps...')}
           className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white font-bold transition-all cursor-pointer"
         >
           <Navigation className="w-3.5 h-3.5" />
           <span className="truncate">Get Directions</span>
-        </button>
+        </a>
 
         <button
           type="button"

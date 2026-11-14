@@ -56,6 +56,8 @@ import {
   Shield,
   KeyRound,
   ChevronDown,
+  Ban,
+  Trash2,
 } from 'lucide-react';
 import type {
   ConsoleAlert,
@@ -149,21 +151,21 @@ const DEFAULT_PLANS_LIST: ConsolePlan[] = [
 ];
 
 const DEFAULT_SUMMARY: ConsoleDashboardSummary = {
-  organisationsByStatus: { active: 1, trial: 1, suspended: 0, archived: 0 },
-  licensesByTier: { grace_starter: 0, ministry_pro: 0, cathedral_enterprise: 1 },
-  licensesByStatus: { active: 1, trial: 0, grace_period: 0, expired: 0, revoked: 0, suspended: 0 },
+  organisationsByStatus: { active: 0, trial: 0, suspended: 0, archived: 0 },
+  licensesByTier: { grace_starter: 0, ministry_pro: 0, cathedral_enterprise: 0 },
+  licensesByStatus: { active: 0, trial: 0, grace_period: 0, expired: 0, revoked: 0, suspended: 0 },
   expiringIn7Days: [],
   expiringIn30Days: [],
-  annualRunRateUSD: 1200,
-  paymentsTotalGHS: 2400,
-  paymentsTotalUSD: 1200,
+  annualRunRateUSD: 0,
+  paymentsTotalGHS: 0,
+  paymentsTotalUSD: 0,
   checkinsTrend: Array.from({ length: 14 }).map((_, i) => {
     const d = new Date(Date.now() - (13 - i) * 86400000);
     return {
       date: d.toISOString().slice(0, 10),
-      checkins: [12, 18, 25, 42, 65, 88, 120, 14, 22, 35, 58, 92, 134, 156][i] || 0,
-      flagged: [0, 1, 0, 2, 1, 0, 3, 0, 1, 2, 1, 0, 2, 1][i] || 0,
-      mockAttempts: [0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0][i] || 0,
+      checkins: 0,
+      flagged: 0,
+      mockAttempts: 0,
     };
   }),
   topOrganisations: [],
@@ -262,7 +264,7 @@ const DEFAULT_ALERTS: ConsoleAlert[] = [];
 const DEFAULT_ANNOUNCEMENTS: PlatformAnnouncement[] = [];
 
 export const CreatorsPanel: React.FC = () => {
-  const { currentUser, login, setViewMode, showToast, logout } = useEkklesphere();
+  const { currentUser, login, setViewMode, showToast, logout, deleteTenant } = useEkklesphere();
 
   // Authentication Guard: strictly allows verified creator and super_admin claims (zero env/client bypass)
   const isAuthorized =
@@ -368,6 +370,13 @@ export const CreatorsPanel: React.FC = () => {
   const [isOrgAdminCredModalOpen, setIsOrgAdminCredModalOpen] = useState<boolean>(false);
   const [isSavingOrgAdminCred, setIsSavingOrgAdminCred] = useState<boolean>(false);
   const [loadingOrgAdminCreds, setLoadingOrgAdminCreds] = useState<boolean>(false);
+  const [orgToRevoke, setOrgToRevoke] = useState<TenantChurch | null>(null);
+  const [revokeOrgReason, setRevokeOrgReason] = useState<string>('');
+  const [isRevokingOrg, setIsRevokingOrg] = useState<boolean>(false);
+  const [orgToDelete, setOrgToDelete] = useState<TenantChurch | null>(null);
+  const [deleteOrgConfirmName, setDeleteOrgConfirmName] = useState<string>('');
+  const [deleteOrgReason, setDeleteOrgReason] = useState<string>('');
+  const [isDeletingOrg, setIsDeletingOrg] = useState<boolean>(false);
   const [orgAdminCreds, setOrgAdminCreds] = useState<
     Array<{
       id: string;
@@ -977,6 +986,107 @@ export const CreatorsPanel: React.FC = () => {
       }
     } catch {
       showToast('Network error provisioning organisation.');
+    }
+  };
+
+  // Module 2 Action: Revoke Organisation (Revokes license + suspends org + blocks logins)
+  const openRevokeOrgModal = (org: TenantChurch) => {
+    setOrgToRevoke(org);
+    setRevokeOrgReason('');
+  };
+
+  const handleRevokeOrganisation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orgToRevoke) return;
+    if (revokeOrgReason.trim().length < 3) {
+      showToast('Please provide an audit reason (min 3 characters).');
+      return;
+    }
+
+    setIsRevokingOrg(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(`/api/console/organisations/${orgToRevoke.id}/revoke`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: revokeOrgReason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.message || 'Failed to revoke organisation.');
+        return;
+      }
+
+      const targetId = orgToRevoke.id;
+      showToast(`Organisation "${orgToRevoke.name}" revoked and access suspended.`);
+      setOrgToRevoke(null);
+      setRevokeOrgReason('');
+      await loadConsoleData(true);
+      if (selectedOrgId === targetId) {
+        await loadOrgDetail(targetId);
+      }
+    } catch {
+      showToast('Network error revoking organisation.');
+    } finally {
+      setIsRevokingOrg(false);
+    }
+  };
+
+  // Module 2 Action: Permanently Delete Organisation (Purges all data & leaves nothing on server)
+  const openDeleteOrgModal = (org: TenantChurch) => {
+    setOrgToDelete(org);
+    setDeleteOrgConfirmName('');
+    setDeleteOrgReason('');
+  };
+
+  const handleDeleteOrganisation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orgToDelete) return;
+    if (deleteOrgConfirmName.trim().toLowerCase() !== orgToDelete.name.trim().toLowerCase()) {
+      showToast(`Type "${orgToDelete.name}" exactly to confirm permanent deletion.`);
+      return;
+    }
+
+    setIsDeletingOrg(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const targetId = orgToDelete.id;
+      const targetName = orgToDelete.name;
+      const res = await fetch(`/api/console/organisations/${targetId}`, {
+        method: 'DELETE',
+        headers,
+        body: JSON.stringify({
+          reason: deleteOrgReason.trim() || 'Deleted permanently via Creator Console',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.message || 'Failed to delete organisation.');
+        return;
+      }
+
+      if (selectedOrgId === targetId) {
+        setSelectedOrgId(null);
+        setSelectedOrgDetail(null);
+      }
+      if (activeSupportGrant?.organizationId === targetId) {
+        setActiveSupportGrant(null);
+      }
+      setOrganisations((prev) => prev.filter((o) => o.id !== targetId));
+      setLicenses((prev) =>
+        prev.filter((l) => (l.organizationId || l.tenantId).toLowerCase() !== targetId.toLowerCase())
+      );
+      deleteTenant(targetId);
+
+      setOrgToDelete(null);
+      setDeleteOrgConfirmName('');
+      setDeleteOrgReason('');
+      showToast(`Organisation "${targetName}" permanently deleted. Nothing remains on the server.`);
+      await loadConsoleData(true);
+    } catch {
+      showToast('Network error deleting organisation.');
+    } finally {
+      setIsDeletingOrg(false);
     }
   };
 
@@ -2382,6 +2492,24 @@ export const CreatorsPanel: React.FC = () => {
                       <DollarSign className="w-3.5 h-3.5" />
                       <span>Record Payment</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openRevokeOrgModal(selectedOrgDetail.organisation)}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-bold text-xs hover:bg-amber-500/25 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Ban className="w-3.5 h-3.5" />
+                      <span>Revoke</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openDeleteOrgModal(selectedOrgDetail.organisation)}
+                      className="px-3 py-1.5 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
                   </div>
                 </div>
 
@@ -2463,6 +2591,35 @@ export const CreatorsPanel: React.FC = () => {
                             {selectedOrgDetail.organisation.smsConfigured ? 'Active' : 'Unconfigured'}
                           </span>
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="md:col-span-2 p-5 sm:p-6 rounded-3xl bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <h4 className="font-extrabold text-sm text-rose-700 dark:text-rose-300">
+                          Governance &amp; Lifecycle Controls
+                        </h4>
+                        <p className="text-xs text-rose-700/80 dark:text-rose-200/75 max-w-2xl">
+                          Revoke suspends access, revokes licenses, and locks org logins while retaining metadata. Delete permanently purges the organisation and all associated data so nothing remains on the server.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => openRevokeOrgModal(selectedOrgDetail.organisation)}
+                          className="px-3.5 py-2 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 font-bold text-xs hover:bg-amber-500/25 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          <span>Revoke Organisation</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDeleteOrgModal(selectedOrgDetail.organisation)}
+                          className="px-3.5 py-2 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Permanently</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2923,9 +3080,35 @@ export const CreatorsPanel: React.FC = () => {
                               {org.memberCount} / {org.maxCapacity}
                             </td>
                             <td className="py-3 px-3 text-right">
-                              <span className="text-[#6D5CF2] font-bold text-xs hover:underline flex items-center justify-end gap-1">
-                                Manage <ChevronRight className="w-3.5 h-3.5" />
-                              </span>
+                              <div
+                                className="flex items-center justify-end gap-1.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => loadOrgDetail(org.id)}
+                                  className="px-2.5 py-1 rounded-lg text-[#6D5CF2] hover:bg-[#6D5CF2]/10 font-bold text-xs inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>Manage</span>
+                                  <ChevronRight className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Revoke Organisation"
+                                  onClick={() => openRevokeOrgModal(org)}
+                                  className="p-1.5 rounded-lg text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                                >
+                                  <Ban className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Delete Organisation Permanently"
+                                  onClick={() => openDeleteOrgModal(org)}
+                                  className="p-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-500/15 transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -5269,6 +5452,147 @@ export const CreatorsPanel: React.FC = () => {
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>{isSavingOrgAdminCred ? 'Saving...' : 'Save Admin Login'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REVOKE ORGANISATION CONFIRMATION */}
+      {orgToRevoke && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-amber-500/30 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                <Ban className="w-5 h-5" />
+                <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                  Revoke Organisation Access
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrgToRevoke(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+              <div className="font-bold">{orgToRevoke.name}</div>
+              <p className="text-[11px] opacity-90">
+                Revoking this organisation immediately revokes all licenses, suspends administrator and member sign-ins, terminates active support grants, and fails closed on operational routes.
+              </p>
+            </div>
+
+            <form onSubmit={handleRevokeOrganisation} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">Audit Reason (min 3 characters) *</label>
+                <textarea
+                  required
+                  minLength={3}
+                  rows={3}
+                  value={revokeOrgReason}
+                  onChange={(e) => setRevokeOrgReason(e.target.value)}
+                  placeholder="e.g. Subscription non-renewal / administrative revocation"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrgToRevoke(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRevokingOrg || revokeOrgReason.trim().length < 3}
+                  className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 text-xs font-black hover:bg-amber-400 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  <span>{isRevokingOrg ? 'Revoking...' : 'Confirm Revoke'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PERMANENTLY DELETE ORGANISATION */}
+      {orgToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-rose-500/30 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                <Trash2 className="w-5 h-5" />
+                <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                  Delete Organisation Permanently
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrgToDelete(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-800 dark:text-rose-200 space-y-1">
+              <div className="font-bold">Irreversible Server Purge: {orgToDelete.name}</div>
+              <p className="text-[11px] opacity-90">
+                This permanently deletes the organisation and all licenses, payments, members, attendance records, geofence sites, settings, and credentials. Nothing for this organisation remains saved on the server.
+              </p>
+            </div>
+
+            <form onSubmit={handleDeleteOrganisation} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">
+                  Type <span className="font-mono text-rose-600 dark:text-rose-400">{orgToDelete.name}</span> to confirm *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={deleteOrgConfirmName}
+                  onChange={(e) => setDeleteOrgConfirmName(e.target.value)}
+                  placeholder={orgToDelete.name}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold block mb-1">Reason (Optional)</label>
+                <input
+                  type="text"
+                  value={deleteOrgReason}
+                  onChange={(e) => setDeleteOrgReason(e.target.value)}
+                  placeholder="e.g. Organisation decommissioned by administrator"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrgToDelete(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    isDeletingOrg ||
+                    deleteOrgConfirmName.trim().toLowerCase() !== orgToDelete.name.trim().toLowerCase()
+                  }
+                  className="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-black hover:bg-rose-700 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isDeletingOrg ? 'Deleting...' : 'Delete Forever'}</span>
                 </button>
               </div>
             </form>

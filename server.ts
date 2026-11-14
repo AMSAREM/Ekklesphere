@@ -833,8 +833,8 @@ const EventSchema = z.object({
 const PremiseConfigSchema = z.object({
   siteId: z.string().regex(uuidRegex, 'Invalid site UUID').optional(),
   churchName: z.preprocess(
-    (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'Ekklesphere Sanctuary'),
-    z.string().max(300).default('Ekklesphere Sanctuary')
+    (val) => (typeof val === 'string' ? val.trim() : ''),
+    z.string().max(300).default('')
   ),
   campusName: z.preprocess(
     (val) => (typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'Main Campus'),
@@ -2434,37 +2434,7 @@ app.get(
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const stored = await platformStore.getEvents(req.organizationId!);
-    if (stored.length > 0) {
-      return res.json(stored.map(normalizeEventRow));
-    }
-
-    const todayIso = new Date().toISOString().split('T')[0];
-    return res.json([
-      {
-        id: 'svc-sun-1',
-        organization_id: req.organizationId,
-        name: 'Sunday First Service (English)',
-        date: todayIso,
-        start_time: `${todayIso}T07:00:00.000Z`,
-        end_time: `${todayIso}T09:00:00.000Z`,
-        starts_at: '07:00',
-        ends_at: '09:00',
-        status: 'active',
-        dwell_min: 5,
-      },
-      {
-        id: 'svc-sun-2',
-        organization_id: req.organizationId,
-        name: 'Sunday Second Service (Twi / Multilingual)',
-        date: todayIso,
-        start_time: `${todayIso}T09:30:00.000Z`,
-        end_time: `${todayIso}T11:45:00.000Z`,
-        starts_at: '09:30',
-        ends_at: '11:45',
-        status: 'scheduled',
-        dwell_min: 5,
-      },
-    ]);
+    return res.json(stored.map(normalizeEventRow));
   }
 );
 
@@ -2530,6 +2500,23 @@ app.post(
       return res.status(500).json({
         error: 'database_error',
         message: err?.message || 'Failed to save scheduled service.',
+      });
+    }
+  }
+);
+
+app.delete(
+  ['/api/v1/events/:id', '/api/events/:id'],
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      await platformStore.deleteEvent(req.organizationId!, req.params.id);
+      return res.status(200).json({ success: true });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'event_delete_failed',
+        message: err?.message || 'Failed to delete scheduled service.',
       });
     }
   }
@@ -3069,6 +3056,13 @@ app.get(['/api/health', '/api/db/status'], (_req: Request, res: Response) => {
     app: 'Ekklesphere Church Management',
     storageBackend: platformStore.storageBackend,
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.all('/api/*', (req: Request, res: Response) => {
+  return res.status(404).json({
+    error: 'not_found',
+    message: `API endpoint not found: ${req.method} ${req.path}`,
   });
 });
 

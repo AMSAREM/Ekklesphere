@@ -230,6 +230,11 @@ class ChurchWallStore {
     this.fallbackByOrg.set(organizationId, nextList);
     return updatedPost;
   }
+
+  public clearOrganizationInMemory(organizationId: string): void {
+    this.fallbackByOrg.delete(organizationId);
+    this.fallbackByOrg.delete(organizationId.toLowerCase());
+  }
 }
 
 export const churchWallStore = new ChurchWallStore();

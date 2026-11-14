@@ -166,7 +166,7 @@ export const ProximitySimulator: React.FC = () => {
       lat: liveGps.lat,
       lng: liveGps.lng,
       accuracyM: liveGps.accuracy,
-      churchName: systemSettings.churchName || 'Ekklesphere Sanctuary',
+      churchName: systemSettings.churchName || '',
       campusName: systemSettings.campusName || 'Main Campus',
       innerGeofenceMeters: innerRadiusM,
       outerGeofenceMeters: outerRadiusM,

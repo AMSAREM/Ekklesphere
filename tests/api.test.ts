@@ -422,13 +422,13 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.error).toBe('unauthorized');
     });
 
-    it('GET /api/events returns church worship services for authenticated users', async () => {
+    it('GET /api/events returns empty array when no services are scheduled (no hardcoded fallback)', async () => {
       const res = await request(app)
         .get('/api/events')
         .set('Authorization', `Bearer ${memberToken}`);
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBeGreaterThan(0);
+      expect(res.body).toHaveLength(0);
     });
 
     it('REJECTS member creating church service event with 403 Forbidden', async () => {
@@ -441,7 +441,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.error).toBe('forbidden');
     });
 
-    it('PERMITS pastor or admin creating church service events with scheduled date', async () => {
+    it('PERMITS pastor or admin creating and deleting church service events in database', async () => {
       const res = await request(app)
         .post('/api/events')
         .set('Authorization', `Bearer ${pastorToken}`)
@@ -457,6 +457,23 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.date).toBe('2026-11-13');
       expect(res.body.start_time).toContain('2026-11-13T18:30:00');
       expect(res.body.end_time).toContain('2026-11-13T21:00:00');
+
+      const delRes = await request(app)
+        .delete(`/api/events/${encodeURIComponent(res.body.id)}`)
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.success).toBe(true);
+
+      const listAfter = await request(app)
+        .get('/api/events')
+        .set('Authorization', `Bearer ${memberToken}`);
+      expect(listAfter.status).toBe(200);
+      expect(listAfter.body.some((e: any) => e.id === res.body.id)).toBe(false);
+
+      const delAgain = await request(app)
+        .delete(`/api/events/${encodeURIComponent(res.body.id)}`)
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(delAgain.status).toBe(404);
     });
 
     it('REJECTS member viewing entire church roster with 403 Forbidden', async () => {
@@ -477,7 +494,7 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it('PERMITS admin or pastor registering a new member into directory', async () => {
+    it('PERMITS admin or pastor registering and permanently deleting a member from database', async () => {
       const res = await request(app)
         .post('/api/members')
         .set('Authorization', `Bearer ${pastorToken}`)
@@ -490,6 +507,23 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.firstName).toBe('Ama');
+
+      const delRes = await request(app)
+        .delete(`/api/members/${encodeURIComponent(res.body.id)}`)
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.success).toBe(true);
+
+      const listAfter = await request(app)
+        .get('/api/members')
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(listAfter.status).toBe(200);
+      expect(listAfter.body.some((m: any) => m.id === res.body.id)).toBe(false);
+
+      const delMissing = await request(app)
+        .delete(`/api/members/${encodeURIComponent(res.body.id)}`)
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(delMissing.status).toBe(404);
     });
   });
 

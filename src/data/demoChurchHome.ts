@@ -8,7 +8,7 @@ import type { Church } from '../types/churchHome';
 export const DEMO_CHURCH_HOME: Church = {
   id: '',
   slug: '',
-  name: 'Ekklesphere Sanctuary',
+  name: 'Ekklesphere',
   shortName: 'Ekklesphere',
   tagline: 'Welcome to our church community',
   heroHeadline: 'Find a warm place to belong, worship, and grow together.',

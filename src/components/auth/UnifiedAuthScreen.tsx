@@ -209,10 +209,15 @@ export const UnifiedAuthScreen: React.FC = () => {
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-md border border-indigo-200/80 dark:border-white/15 text-xs font-semibold text-slate-800 dark:text-white shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span>Verified Identity Gateway</span>
-                <span className="text-slate-400 dark:text-white/60">·</span>
-                <span className="text-indigo-600 dark:text-emerald-300 font-bold">
-                  {systemSettings.churchName || 'Ekklesphere Sanctuary'}
-                </span>
+                {systemSettings.churchName?.trim() &&
+                  systemSettings.churchName.trim() !== 'Ekklesphere Sanctuary' && (
+                    <>
+                      <span className="text-slate-400 dark:text-white/60">·</span>
+                      <span className="text-indigo-600 dark:text-emerald-300 font-bold">
+                        {systemSettings.churchName.trim()}
+                      </span>
+                    </>
+                  )}
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 Sign In to Ekklesphere

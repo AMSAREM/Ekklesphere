@@ -366,5 +366,20 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
       );
       expect(leaked).toBeUndefined();
     });
+
+    it('never injects hardcoded placeholder organisation names when churchName is omitted', async () => {
+      const saveRes = await request(app)
+        .post('/api/campus-premise')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          lat: 5.605,
+          lng: -0.189,
+          campusName: 'North Campus',
+        });
+
+      expect(saveRes.status).toBe(200);
+      expect(saveRes.body.premiseSettings?.churchName).toBe('');
+      expect(saveRes.body.premiseSettings?.churchName).not.toBe('Ekklesphere Sanctuary');
+    });
   });
 });

@@ -15,7 +15,30 @@ alter table if exists public.account_credentials
 create index if not exists account_credentials_auth_user_idx
   on public.account_credentials (auth_user_id);
 
--- 2. Remove hardcoded seeded licenses, dependent rows & organizations
+-- 2. Drop FK constraint on audit_log.organization_id if present so deleting an
+--    organization does not trigger ON DELETE SET NULL against the append-only trigger.
+do $$
+declare
+  v_fk record;
+begin
+  if to_regclass('public.audit_log') is not null and to_regclass('public.organizations') is not null then
+    for v_fk in
+      select c.conname
+      from pg_constraint c
+      join pg_attribute a
+        on a.attrelid = c.conrelid
+       and a.attnum = any(c.conkey)
+      where c.conrelid = 'public.audit_log'::regclass
+        and c.contype = 'f'
+        and c.confrelid = 'public.organizations'::regclass
+        and a.attname = 'organization_id'
+    loop
+      execute format('alter table public.audit_log drop constraint if exists %I', v_fk.conname);
+    end loop;
+  end if;
+end $$;
+
+-- 3. Remove hardcoded seeded licenses, dependent rows & organizations
 do $$
 declare
   target_org_ids uuid[] := array[
@@ -23,6 +46,11 @@ declare
     '00000000-0000-0000-0000-000000000101'::uuid,
     '00000000-0000-0000-0000-000000000102'::uuid
   ];
+  v_table text;
+  v_has_org_id boolean;
+  v_has_tenant_id boolean;
+  v_has_lic_key boolean;
+  v_has_key boolean;
 begin
   if to_regclass('public.organizations') is not null then
     select coalesce(array_agg(distinct id), target_org_ids)
@@ -35,55 +63,88 @@ begin
     ) combined;
   end if;
 
-  if to_regclass('public.license_payments') is not null then
-    delete from public.license_payments where organization_id = any(target_org_ids);
+  if to_regclass('public.tenants') is not null then
+    select coalesce(array_agg(distinct id), target_org_ids)
+    into target_org_ids
+    from (
+      select unnest(target_org_ids) as id
+      union
+      select id from public.tenants
+      where lower(slug) in ('piwc-kwadaso', 'primary-church', 'accra-central', 'kumasi-grace')
+    ) combined;
   end if;
+
   if to_regclass('public.licenses') is not null then
-    delete from public.licenses
-    where license_key = 'EKKLE-PIWC-KWADASO-ENT-2026'
-       or key = 'EKKLE-PIWC-KWADASO-ENT-2026'
-       or organization_id = any(target_org_ids)
-       or tenant_id = any(target_org_ids);
+    select exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'licenses' and column_name = 'license_key'
+    ) into v_has_lic_key;
+
+    select exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'licenses' and column_name = 'key'
+    ) into v_has_key;
+
+    if v_has_lic_key then
+      execute 'delete from public.licenses where license_key = $1' using 'EKKLE-PIWC-KWADASO-ENT-2026';
+    end if;
+    if v_has_key then
+      execute 'delete from public.licenses where key = $1' using 'EKKLE-PIWC-KWADASO-ENT-2026';
+    end if;
   end if;
-  if to_regclass('public.account_credentials') is not null then
-    delete from public.account_credentials where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.attendance') is not null then
-    delete from public.attendance where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.attendance_events') is not null then
-    delete from public.attendance_events where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.events') is not null then
-    delete from public.events where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.sites') is not null then
-    delete from public.sites where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.members') is not null then
-    delete from public.members where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.church_groups') is not null then
-    delete from public.church_groups where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.system_settings') is not null then
-    delete from public.system_settings where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.church_public_profiles') is not null then
-    delete from public.church_public_profiles where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.service_times') is not null then
-    delete from public.service_times where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.ministries') is not null then
-    delete from public.ministries where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.church_events') is not null then
-    delete from public.church_events where organization_id = any(target_org_ids);
-  end if;
-  if to_regclass('public.news_posts') is not null then
-    delete from public.news_posts where organization_id = any(target_org_ids);
-  end if;
+
+  foreach v_table in array array[
+    'license_payments',
+    'data_requests',
+    'support_grants',
+    'licenses',
+    'account_credentials',
+    'auth_audit_events',
+    'attendance',
+    'attendance_records',
+    'attendance_events',
+    'donations',
+    'service_instances',
+    'services',
+    'events',
+    'sites',
+    'campuses',
+    'persons',
+    'members',
+    'church_groups',
+    'church_wall_posts',
+    'push_subscriptions',
+    'usage_daily',
+    'alerts',
+    'system_settings',
+    'church_public_profiles',
+    'service_times',
+    'ministries',
+    'church_events',
+    'news_posts',
+    'users'
+  ]
+  loop
+    if to_regclass('public.' || v_table) is not null then
+      select exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = v_table and column_name = 'organization_id'
+      ) into v_has_org_id;
+
+      select exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = v_table and column_name = 'tenant_id'
+      ) into v_has_tenant_id;
+
+      if v_has_org_id then
+        execute format('delete from public.%I where organization_id = any($1)', v_table) using target_org_ids;
+      end if;
+      if v_has_tenant_id then
+        execute format('delete from public.%I where tenant_id = any($1)', v_table) using target_org_ids;
+      end if;
+    end if;
+  end loop;
+
   if to_regclass('public.organizations') is not null then
     delete from public.organizations
     where id = any(target_org_ids)
@@ -95,7 +156,7 @@ begin
        or lower(slug) in ('piwc-kwadaso', 'primary-church', 'accra-central', 'kumasi-grace');
   end if;
 
-  -- 3. Remove hardcoded organization references from landing CMS config if present
+  -- 4. Remove hardcoded organization references from landing CMS config if present
   if to_regclass('public.landing_cms_config') is not null then
     update public.landing_cms_config
     set

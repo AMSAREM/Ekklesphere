@@ -120,10 +120,14 @@ export const AppHeader: React.FC = () => {
           <span className="font-bold text-sm sm:text-base tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
             Ekklesphere
           </span>
-          <span className="hidden md:inline-block text-[#C5C8DE] dark:text-[#3D3D66]">/</span>
-          <span className="hidden md:inline text-xs font-medium text-[#666A86] dark:text-[#A9ACC8] truncate max-w-[160px]">
-            {systemSettings?.campusName || 'Accra Central'}
-          </span>
+          {systemSettings?.campusName?.trim() && systemSettings.campusName.trim() !== 'Accra Central' && (
+            <>
+              <span className="hidden md:inline-block text-[#C5C8DE] dark:text-[#3D3D66]">/</span>
+              <span className="hidden md:inline text-xs font-medium text-[#666A86] dark:text-[#A9ACC8] truncate max-w-[160px]">
+                {systemSettings.campusName.trim()}
+              </span>
+            </>
+          )}
         </div>
 
         {/* Center: Minimal live attendance indicator */}
@@ -261,7 +265,7 @@ export const AppHeader: React.FC = () => {
                       <div>
                         <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Geofence Auto Check-in</p>
                         <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                          Proximity radar is active for {systemSettings?.campusName || 'Accra Central'}.
+                          Proximity radar is active for {systemSettings?.campusName || 'your campus'}.
                         </p>
                       </div>
                     </div>

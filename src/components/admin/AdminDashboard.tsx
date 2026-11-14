@@ -89,6 +89,7 @@ export const AdminDashboard: React.FC = () => {
     auditLogs,
     churchGroups,
     addService,
+    deleteService,
   } = useEkklesphere();
 
   // Active sub-navigation tabs inside Admin
@@ -196,7 +197,7 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     setBroadcastBody(
-      `Welcome to ${systemSettings.churchName || 'Ekklesphere Sanctuary'}! Service begins at ${currentService.startsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
+      `Welcome to ${systemSettings.churchName || 'church'}! Service begins at ${currentService.startsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
     );
   }, [systemSettings.churchName, currentService.startsAt]);
 
@@ -991,39 +992,61 @@ export const AdminDashboard: React.FC = () => {
 
                 {/* Live scheduled services list */}
                 <div className="space-y-2 max-h-[210px] overflow-y-auto pr-0.5">
-                  {services.map((svc) => {
-                    const isSelectedDay = svc.date === selectedDateIso;
-                    return (
-                      <button
-                        key={svc.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveServiceId(svc.id);
-                          if (svc.date) setSelectedDateIso(svc.date);
-                        }}
-                        className={`w-full text-left bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-all cursor-pointer ${
-                          svc.id === activeServiceId
-                            ? 'border-[#6D5CF2] ring-1 ring-[#6D5CF2]/30'
-                            : isSelectedDay
-                            ? 'border-[#CBC6F7] dark:border-[#3B3B72]'
-                            : 'border-[#E9EBF5] dark:border-[#2D2D55]'
-                        }`}
-                      >
-                        <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
-                          <CalendarIcon className="w-4 h-4" />
+                  {services.length === 0 ? (
+                    <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-3 border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] text-center text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                      No worship services scheduled in database yet.
+                    </div>
+                  ) : (
+                    services.map((svc) => {
+                      const isSelectedDay = svc.date === selectedDateIso;
+                      return (
+                        <div
+                          key={svc.id}
+                          className={`w-full bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-all ${
+                            svc.id === activeServiceId
+                              ? 'border-[#6D5CF2] ring-1 ring-[#6D5CF2]/30'
+                              : isSelectedDay
+                              ? 'border-[#CBC6F7] dark:border-[#3B3B72]'
+                              : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveServiceId(svc.id);
+                              if (svc.date) setSelectedDateIso(svc.date);
+                            }}
+                            className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer"
+                          >
+                            <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
+                              <CalendarIcon className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                {svc.name}
+                              </b>
+                              <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block truncate">
+                                {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
+                                {svc.startsAt} - {svc.endsAt}
+                                {systemSettings.campusName ? ` · ${systemSettings.campusName}` : ''}
+                              </span>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void deleteService(svc.id);
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors shrink-0 cursor-pointer"
+                            title="Delete service from database"
+                            aria-label={`Delete ${svc.name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                            {svc.name}
-                          </b>
-                          <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block truncate">
-                            {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
-                            {svc.startsAt} - {svc.endsAt} · {systemSettings.campusName}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
 

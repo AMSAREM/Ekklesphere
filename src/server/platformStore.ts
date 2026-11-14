@@ -16,6 +16,7 @@ import {
   type AuthUserPayload,
   type ChurchRole,
 } from '../../lib/auth.ts';
+import { churchWallStore } from './churchWallStore.ts';
 import type {
   BillingCycle,
   ChurchGroup,
@@ -360,9 +361,24 @@ function mapSupabaseRoleToChurchRole(rawRole?: string | null): ChurchRole {
   return 'member';
 }
 
+function mapCredentialRoleToChurchRole(rawRole?: string | null, isCreator?: boolean): ChurchRole {
+  const r = (rawRole || '').toLowerCase();
+  if (isCreator) {
+    if (r === 'super_admin') return 'super_admin';
+    return 'creator';
+  }
+  return mapSupabaseRoleToChurchRole(rawRole);
+}
+
 class PlatformStore {
   public readonly supabase: SupabaseClient | null;
+  private readonly supabaseUrl: string;
+  private readonly supabaseAuthKey: string;
   public readonly isTestRuntime: boolean;
+  private customSupabaseAuthVerifier:
+    | ((email: string, password: string) => Promise<{ matched: boolean; authUserId?: string }>)
+    | null = null;
+  private customSupabaseClientOverride: SupabaseClient | null = null;
 
   // Relational backing tables for Vitest & local unconfigured preview sandbox ONLY
   private orgs = new Map<string, TenantChurch>();
@@ -399,8 +415,17 @@ class PlatformStore {
       process.env.NEXT_PUBLIC_SUPABASE_URL ||
       ''
     ).trim();
-    // CRITICAL SECURITY RULE: Server uses ONLY SUPABASE_SERVICE_ROLE_KEY, never SUPABASE_ANON_KEY.
+    // CRITICAL SECURITY RULE: Server uses ONLY SUPABASE_SERVICE_ROLE_KEY, never SUPABASE_ANON_KEY for DB writes.
     const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    const anonKey = (
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      ''
+    ).trim();
+
+    this.supabaseUrl = url;
+    this.supabaseAuthKey = anonKey || serviceRoleKey;
 
     this.supabase =
       url && serviceRoleKey && !this.isTestRuntime
@@ -411,6 +436,31 @@ class PlatformStore {
 
     if (this.isTestRuntime) {
       this.seedBaselineState();
+    }
+  }
+
+  private get activeSupabase(): SupabaseClient | null {
+    return this.customSupabaseClientOverride || this.supabase;
+  }
+
+  private get canVerifyViaSupabaseAuth(): boolean {
+    return Boolean(this.customSupabaseAuthVerifier || (this.supabaseUrl && this.supabaseAuthKey));
+  }
+
+  public setSupabaseTestHooks(hooks: {
+    client?: SupabaseClient | null;
+    authVerifier?:
+      | ((email: string, password: string) => Promise<{ matched: boolean; authUserId?: string }>)
+      | null;
+  }): void {
+    if (!this.isTestRuntime) {
+      throw new Error('setSupabaseTestHooks may only be invoked inside Vitest test runtime.');
+    }
+    if ('client' in hooks) {
+      this.customSupabaseClientOverride = hooks.client ?? null;
+    }
+    if ('authVerifier' in hooks) {
+      this.customSupabaseAuthVerifier = hooks.authVerifier ?? null;
     }
   }
 
@@ -455,11 +505,17 @@ class PlatformStore {
     this.pushSubsByOrg.clear();
     this.legacyTenantsForDryRun = [];
     this.userCredentials.clear();
+    this.customSupabaseClientOverride = null;
+    this.customSupabaseAuthVerifier = null;
     this.landingConfig = { ...DEFAULT_LANDING_CMS };
     this.seedBaselineState();
   }
 
   private seedBaselineState(): void {
+    if (!this.isTestRuntime) {
+      return;
+    }
+
     for (const plan of Object.values(DEFAULT_PLANS)) {
       this.plans.set(plan.id, { ...plan, featureFlags: { ...plan.featureFlags } });
     }
@@ -500,10 +556,6 @@ class PlatformStore {
         createdAt: now.toISOString(),
       };
       this.userCredentials.set(creatorId, creatorRecord);
-    }
-
-    if (!this.isTestRuntime) {
-      return;
     }
 
     const testOrgId = TEST_ANCHOR_ORGANIZATION_ID;
@@ -702,9 +754,10 @@ class PlatformStore {
   // ===========================================================================
 
   public async verifySupabaseAccessToken(accessToken: string): Promise<AuthUserPayload | null> {
-    if (!this.supabase) return null;
+    const sb = this.activeSupabase;
+    if (!sb) return null;
 
-    const { data, error } = await this.supabase.auth.getUser(accessToken);
+    const { data, error } = await sb.auth.getUser(accessToken);
     if (error || !data?.user) {
       return null;
     }
@@ -715,32 +768,43 @@ class PlatformStore {
       sbUser.app_metadata?.creator === true || sbUser.app_metadata?.is_super_admin === true
     );
 
-    if (!isCreator && email) {
-      const { data: credRow } = await this.supabase
-        .from('account_credentials')
-        .select('is_creator, role, status')
-        .ilike('email', email)
-        .limit(1)
-        .maybeSingle();
-      if (
-        credRow &&
-        credRow.status === 'active' &&
-        (credRow.is_creator === true || credRow.role === 'creator' || credRow.role === 'super_admin')
-      ) {
-        isCreator = true;
-      }
+    let credRow: Record<string, any> | null = null;
+    const credOrFilters = [`auth_user_id.eq.${sbUser.id}`];
+    if (email) credOrFilters.push(`email.ilike.${email}`);
+    const { data: matchedCredRow } = await sb
+      .from('account_credentials')
+      .select('is_creator, role, status, organization_id')
+      .or(credOrFilters.join(','))
+      .limit(1)
+      .maybeSingle();
+    credRow = matchedCredRow || null;
+
+    if (credRow && credRow.status && credRow.status !== 'active') {
+      return null;
+    }
+    if (
+      !isCreator &&
+      credRow &&
+      (credRow.is_creator === true || credRow.role === 'creator' || credRow.role === 'super_admin')
+    ) {
+      isCreator = true;
     }
 
-    // Resolve organization membership and church role strictly from public.members
-    let resolvedOrgId = '';
-    let resolvedRole: ChurchRole = isCreator ? 'creator' : 'member';
+    // Resolve organization membership and church role strictly from database tables (public.members / public.users + public.user_roles)
+    let resolvedOrgId =
+      credRow?.organization_id && UUID_REGEX.test(String(credRow.organization_id))
+        ? String(credRow.organization_id).toLowerCase()
+        : '';
+    let resolvedRole: ChurchRole = isCreator
+      ? mapCredentialRoleToChurchRole(credRow?.role, true)
+      : 'member';
     let resolvedName =
       (typeof sbUser.user_metadata?.full_name === 'string' && sbUser.user_metadata.full_name) ||
       (typeof sbUser.user_metadata?.name === 'string' && sbUser.user_metadata.name) ||
       email.split('@')[0] ||
       'Ekklesphere User';
 
-    const { data: memberRow } = await this.supabase
+    const { data: memberRow } = await sb
       .from('members')
       .select('id, organization_id, role, preferred_name, first_name, last_name')
       .or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ''}`)
@@ -758,6 +822,24 @@ class PlatformStore {
         memberRow.preferred_name ||
         `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim();
       if (dbName) resolvedName = dbName;
+    } else {
+      // Fall back to public.users (linked via auth_user_id) + public.user_roles
+      const usersLookup = await this.lookupUserAndRolesByAuthId(sb, sbUser.id);
+      if (usersLookup) {
+        if (usersLookup.organizationId) {
+          resolvedOrgId = usersLookup.organizationId;
+        }
+        if (!isCreator && usersLookup.role) {
+          resolvedRole = usersLookup.role;
+        }
+      }
+    }
+
+    if (!isCreator && resolvedOrgId) {
+      const org = await this.getOrganisationById(resolvedOrgId);
+      if (org && (org.status === 'suspended' || org.status === 'archived')) {
+        return null;
+      }
     }
 
     if (!resolvedOrgId) {
@@ -778,14 +860,57 @@ class PlatformStore {
     };
   }
 
+  private async lookupUserAndRolesByAuthId(
+    sb: SupabaseClient,
+    authUserId: string
+  ): Promise<{ organizationId: string; role: ChurchRole } | null> {
+    if (!UUID_REGEX.test(authUserId)) return null;
+    try {
+      const { data: userRow, error: userErr } = await sb
+        .from('users')
+        .select('id, tenant_id, status')
+        .eq('auth_user_id', authUserId)
+        .limit(1)
+        .maybeSingle();
+
+      if (userErr || !userRow || (userRow.status && userRow.status !== 'active')) {
+        return null;
+      }
+
+      const orgId = userRow.tenant_id ? String(userRow.tenant_id).toLowerCase() : '';
+      let resolvedRole: ChurchRole = 'member';
+
+      const { data: roleRows } = await sb
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userRow.id);
+
+      if (Array.isArray(roleRows) && roleRows.length > 0) {
+        const priority: ChurchRole[] = ['admin', 'pastor', 'finance', 'usher', 'group_leader', 'member'];
+        const mapped = roleRows.map((r) => mapSupabaseRoleToChurchRole(r.role));
+        for (const candidate of priority) {
+          if (mapped.includes(candidate)) {
+            resolvedRole = candidate;
+            break;
+          }
+        }
+      }
+
+      return { organizationId: orgId, role: resolvedRole };
+    } catch {
+      return null;
+    }
+  }
+
   public async lookupMemberRoleInStore(
     userId: string,
     email: string
   ): Promise<{ organizationId: string; role: ChurchRole; name?: string }> {
     const cleanEmail = (email || '').trim().toLowerCase();
+    const sb = this.activeSupabase;
 
-    if (this.supabase) {
-      const { data: row } = await this.supabase
+    if (sb) {
+      const { data: row } = await sb
         .from('members')
         .select('organization_id, role, preferred_name, first_name, last_name')
         .or(
@@ -805,6 +930,16 @@ class PlatformStore {
             `${row.first_name || ''} ${row.last_name || ''}`.trim() ||
             undefined,
         };
+      }
+
+      if (UUID_REGEX.test(userId)) {
+        const usersLookup = await this.lookupUserAndRolesByAuthId(sb, userId);
+        if (usersLookup) {
+          return {
+            organizationId: usersLookup.organizationId,
+            role: usersLookup.role,
+          };
+        }
       }
     }
 
@@ -935,7 +1070,8 @@ class PlatformStore {
     isCreator?: boolean;
     memberId?: string;
   }): Promise<string | null> {
-    if (!this.supabase || !this.supabase.auth?.admin) return null;
+    const sb = this.activeSupabase;
+    if (!sb || !sb.auth?.admin) return null;
 
     const cleanEmail = params.email ? params.email.trim().toLowerCase() : '';
     const cleanPhone = params.phoneE164 ? normalizePhone(params.phoneE164) : '';
@@ -964,7 +1100,7 @@ class PlatformStore {
         : null;
 
     if (!authUserId && params.memberId && UUID_REGEX.test(params.memberId)) {
-      const { data: memberRow } = await this.supabase
+      const { data: memberRow } = await sb
         .from('members')
         .select('user_id')
         .eq('id', params.memberId)
@@ -975,7 +1111,7 @@ class PlatformStore {
     }
 
     if (authUserId) {
-      const { data: updatedData, error: updateErr } = await this.supabase.auth.admin.updateUserById(
+      const { data: updatedData, error: updateErr } = await sb.auth.admin.updateUserById(
         authUserId,
         {
           email: authEmail,
@@ -995,7 +1131,7 @@ class PlatformStore {
     }
 
     if (!authUserId) {
-      let createRes = await this.supabase.auth.admin.createUser({
+      let createRes = await sb.auth.admin.createUser({
         email: authEmail,
         ...(params.password ? { password: params.password } : {}),
         ...(cleanPhone ? { phone: cleanPhone, phone_confirm: true } : {}),
@@ -1005,7 +1141,7 @@ class PlatformStore {
       });
 
       if (createRes.error && cleanPhone && /phone/i.test(createRes.error.message || '')) {
-        createRes = await this.supabase.auth.admin.createUser({
+        createRes = await sb.auth.admin.createUser({
           email: authEmail,
           ...(params.password ? { password: params.password } : {}),
           email_confirm: true,
@@ -1020,7 +1156,7 @@ class PlatformStore {
         createRes.error &&
         /already|exists|registered|duplicate/i.test(createRes.error.message || '')
       ) {
-        const listRes = await this.supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        const listRes = await sb.auth.admin.listUsers({ page: 1, perPage: 1000 });
         const matchedUser = listRes.data?.users?.find(
           (u) =>
             (u.email && u.email.toLowerCase() === authEmail) ||
@@ -1028,7 +1164,7 @@ class PlatformStore {
         );
         if (matchedUser?.id) {
           authUserId = matchedUser.id;
-          await this.supabase.auth.admin.updateUserById(authUserId, {
+          await sb.auth.admin.updateUserById(authUserId, {
             email: authEmail,
             ...(params.password ? { password: params.password } : {}),
             email_confirm: true,
@@ -1042,7 +1178,7 @@ class PlatformStore {
     }
 
     if (authUserId && params.memberId && UUID_REGEX.test(params.memberId)) {
-      const { error: linkErr } = await this.supabase
+      const { error: linkErr } = await sb
         .from('members')
         .update({ user_id: authUserId, updated_at: new Date().toISOString() })
         .eq('id', params.memberId);
@@ -1052,6 +1188,143 @@ class PlatformStore {
     }
 
     return authUserId;
+  }
+
+  private async resolveAuthEmailForCredential(cred: {
+    authUserId?: string;
+    email?: string;
+    phoneE164?: string;
+  }): Promise<string> {
+    const sb = this.activeSupabase;
+    if (sb && cred.authUserId && UUID_REGEX.test(cred.authUserId) && sb.auth?.admin?.getUserById) {
+      try {
+        const { data } = await sb.auth.admin.getUserById(cred.authUserId);
+        if (data?.user?.email) {
+          return data.user.email.trim().toLowerCase();
+        }
+      } catch {
+        // Fallback to credential email/phone derivative
+      }
+    }
+    const cleanEmail = cred.email ? cred.email.trim().toLowerCase() : '';
+    if (cleanEmail) return cleanEmail;
+    const digitsOnly = (cred.phoneE164 || '').replace(/\D/g, '');
+    return digitsOnly ? `phone-${digitsOnly}@members.ekklesphere.local` : '';
+  }
+
+  private async verifyPasswordViaSupabaseAuth(
+    authEmail: string,
+    password: string
+  ): Promise<{ matched: boolean; authUserId?: string }> {
+    const cleanEmail = (authEmail || '').trim().toLowerCase();
+    if (!cleanEmail || !password) return { matched: false };
+
+    if (this.customSupabaseAuthVerifier) {
+      return this.customSupabaseAuthVerifier(cleanEmail, password);
+    }
+
+    if (!this.supabaseUrl || !this.supabaseAuthKey) {
+      return { matched: false };
+    }
+
+    try {
+      const verifierClient = createClient(this.supabaseUrl, this.supabaseAuthKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+        },
+      });
+      const { data, error } = await verifierClient.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+      if (!error && data?.user?.id) {
+        return { matched: true, authUserId: data.user.id };
+      }
+      return { matched: false };
+    } catch {
+      return { matched: false };
+    }
+  }
+
+  private async upsertAccountCredentialsRow(
+    sb: SupabaseClient,
+    payload: Record<string, unknown>,
+    legacyHashFallback?: { hash: string; salt: string }
+  ): Promise<void> {
+    const { error: firstErr } = await sb
+      .from('account_credentials')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (!firstErr) return;
+
+    // Fallback 1: If pre-migration DB still enforces NOT NULL on password_hash/password_salt
+    if (
+      /null value in column "password_(?:hash|salt)"|23502/i.test(firstErr.message || '') &&
+      legacyHashFallback
+    ) {
+      const withHashes = {
+        ...payload,
+        password_hash: legacyHashFallback.hash,
+        password_salt: legacyHashFallback.salt,
+      };
+      const retry = await sb
+        .from('account_credentials')
+        .upsert(withHashes, { onConflict: 'id' });
+      if (!retry.error) return;
+    }
+
+    // Fallback 2: If newer optional columns are missing from schema cache
+    if (
+      /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+        firstErr.message || ''
+      )
+    ) {
+      const stripped = { ...payload };
+      delete stripped.must_change_password;
+      delete stripped.password_updated_at;
+      const retry = await sb
+        .from('account_credentials')
+        .upsert(stripped, { onConflict: 'id' });
+      if (!retry.error) return;
+      if (
+        /null value in column "password_(?:hash|salt)"|23502/i.test(retry.error.message || '') &&
+        legacyHashFallback
+      ) {
+        const retryWithHashes = await sb
+          .from('account_credentials')
+          .upsert(
+            {
+              ...stripped,
+              password_hash: legacyHashFallback.hash,
+              password_salt: legacyHashFallback.salt,
+            },
+            { onConflict: 'id' }
+          );
+        if (!retryWithHashes.error) return;
+        throw new Error(`Failed to persist account credentials in Supabase: ${retryWithHashes.error.message}`);
+      }
+      throw new Error(`Failed to persist account credentials in Supabase: ${retry.error.message}`);
+    }
+
+    throw new Error(`Failed to persist account credentials in Supabase: ${firstErr.message}`);
+  }
+
+  private async scrubLegacyPasswordHashes(credId: string, authUserId?: string): Promise<void> {
+    const sb = this.activeSupabase;
+    if (!sb || !this.canVerifyViaSupabaseAuth) return;
+    try {
+      const patch: Record<string, unknown> = {
+        password_hash: null,
+        password_salt: null,
+        updated_at: new Date().toISOString(),
+        ...(authUserId ? { auth_user_id: authUserId } : {}),
+      };
+      await sb.from('account_credentials').update(patch).eq('id', credId);
+    } catch {
+      // Ignore if pre-migration NOT NULL constraint still exists until migration runs
+    }
   }
 
   public async provisionCredentialRecord(params: {
@@ -1078,7 +1351,8 @@ class PlatformStore {
     const cleanOrgId = params.organizationId ? params.organizationId.toLowerCase() : '';
     const fullName = params.name.trim() || 'Ekklesphere User';
 
-    if (this.supabase) {
+    const sb = this.activeSupabase;
+    if (sb) {
       let resolvedId = UUID_REGEX.test(requestedId) ? requestedId : toDeterministicUuid(requestedId);
       let existingAuthUserId: string | null = null;
 
@@ -1087,7 +1361,7 @@ class PlatformStore {
       if (normalizedUsername) lookupFilters.push(`username.ilike.${normalizedUsername}`);
       if (normalizedPhone) lookupFilters.push(`phone_e164.eq.${normalizedPhone}`);
 
-      const { data: existingRow } = await this.supabase
+      const { data: existingRow } = await sb
         .from('account_credentials')
         .select('id, auth_user_id')
         .or(lookupFilters.join(','))
@@ -1111,7 +1385,8 @@ class PlatformStore {
         memberId: params.memberId && UUID_REGEX.test(params.memberId) ? params.memberId : undefined,
       });
 
-      const baseRow: Record<string, unknown> = {
+      const omitStoredHashes = Boolean(authUserId && this.canVerifyViaSupabaseAuth);
+      const payload: Record<string, unknown> = {
         id: resolvedId,
         member_id: params.memberId && UUID_REGEX.test(params.memberId) ? params.memberId : null,
         organization_id: cleanOrgId && UUID_REGEX.test(cleanOrgId) ? cleanOrgId : null,
@@ -1121,51 +1396,18 @@ class PlatformStore {
         full_name: fullName,
         role: params.role,
         is_creator: Boolean(params.isCreator),
-        password_hash: hash,
-        password_salt: salt,
+        // Passwords live in Supabase Auth (auth.users); keep hashes null once migrated
+        password_hash: omitStoredHashes ? null : hash,
+        password_salt: omitStoredHashes ? null : salt,
         status: 'active',
         failed_attempts: 0,
         locked_until: null,
-      };
-
-      const fullPayload: Record<string, unknown> = {
-        ...baseRow,
         must_change_password: Boolean(params.mustChangePassword),
         password_updated_at: params.passwordUpdatedAt ?? null,
         ...(authUserId ? { auth_user_id: authUserId } : {}),
       };
 
-      let { error } = await this.supabase
-        .from('account_credentials')
-        .upsert(fullPayload, { onConflict: 'id' });
-
-      if (
-        error &&
-        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
-          error.message || ''
-        )
-      ) {
-        const retryWithAuth = authUserId ? { ...baseRow, auth_user_id: authUserId } : baseRow;
-        let retry = await this.supabase
-          .from('account_credentials')
-          .upsert(retryWithAuth, { onConflict: 'id' });
-        if (
-          retry.error &&
-          authUserId &&
-          /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
-            retry.error.message || ''
-          )
-        ) {
-          retry = await this.supabase
-            .from('account_credentials')
-            .upsert(baseRow, { onConflict: 'id' });
-        }
-        error = retry.error;
-      }
-
-      if (error) {
-        throw new Error(`Failed to persist account credentials in Supabase: ${error.message}`);
-      }
+      await this.upsertAccountCredentialsRow(sb, payload, { hash, salt });
 
       return {
         id: resolvedId,
@@ -1178,8 +1420,8 @@ class PlatformStore {
         name: fullName,
         role: params.role,
         isCreator: Boolean(params.isCreator),
-        passwordHash: hash,
-        passwordSalt: salt,
+        passwordHash: authUserId ? '' : hash,
+        passwordSalt: authUserId ? '' : salt,
         status: 'active',
         mustChangePassword: Boolean(params.mustChangePassword),
         passwordUpdatedAt: params.passwordUpdatedAt ?? null,
@@ -1232,11 +1474,16 @@ class PlatformStore {
     const cleanEmail = params.email ? params.email.trim().toLowerCase() : '';
     const cleanPhone = params.phoneE164 ? normalizePhone(params.phoneE164) : '';
     const cleanMemberId = params.memberId ? params.memberId.trim() : '';
+    const sb = this.activeSupabase;
 
-    if (this.supabase) {
+    if (sb) {
       const orFilters: string[] = [];
       if (cleanMemberId && UUID_REGEX.test(cleanMemberId)) {
-        orFilters.push(`id.eq.${cleanMemberId}`, `member_id.eq.${cleanMemberId}`);
+        orFilters.push(
+          `id.eq.${cleanMemberId}`,
+          `member_id.eq.${cleanMemberId}`,
+          `auth_user_id.eq.${cleanMemberId}`
+        );
       }
       if (cleanEmail) {
         orFilters.push(`email.ilike.${cleanEmail}`);
@@ -1245,7 +1492,7 @@ class PlatformStore {
         orFilters.push(`phone_e164.eq.${cleanPhone}`);
       }
       if (orFilters.length > 0) {
-        const { data: row, error } = await this.supabase
+        const { data: row, error } = await sb
           .from('account_credentials')
           .select('*')
           .or(orFilters.join(','))
@@ -1256,7 +1503,10 @@ class PlatformStore {
           throw new Error(`Failed to query account credentials in Supabase: ${error.message}`);
         }
 
-        if (row && row.password_hash && row.password_salt) {
+        if (row && (row.auth_user_id || (row.password_hash && row.password_salt))) {
+          const isCreator = Boolean(
+            row.is_creator || row.role === 'creator' || row.role === 'super_admin'
+          );
           return {
             id: String(row.id),
             memberId: row.member_id ? String(row.member_id) : undefined,
@@ -1266,10 +1516,10 @@ class PlatformStore {
             username: row.username ? String(row.username).toLowerCase() : undefined,
             phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
             name: String(row.full_name || 'Member'),
-            role: mapSupabaseRoleToChurchRole(row.role),
-            isCreator: Boolean(row.is_creator || row.role === 'creator' || row.role === 'super_admin'),
-            passwordHash: String(row.password_hash),
-            passwordSalt: String(row.password_salt),
+            role: mapCredentialRoleToChurchRole(row.role, isCreator),
+            isCreator,
+            passwordHash: row.password_hash ? String(row.password_hash) : '',
+            passwordSalt: row.password_salt ? String(row.password_salt) : '',
             status: (row.status as UserCredentialRecord['status']) || 'active',
             mustChangePassword: Boolean(row.must_change_password),
             passwordUpdatedAt: row.password_updated_at ? String(row.password_updated_at) : null,
@@ -1452,7 +1702,22 @@ class PlatformStore {
       throw err;
     }
 
-    if (!verifyPassword(currentPassword, cred.passwordHash, cred.passwordSalt)) {
+    const sb = this.activeSupabase;
+    let currentPasswordMatches = false;
+    if (sb) {
+      const authEmail = await this.resolveAuthEmailForCredential(cred);
+      if (authEmail) {
+        const sbVerify = await this.verifyPasswordViaSupabaseAuth(authEmail, currentPassword);
+        currentPasswordMatches = sbVerify.matched;
+      }
+      if (!currentPasswordMatches && cred.passwordHash && cred.passwordSalt) {
+        currentPasswordMatches = verifyPassword(currentPassword, cred.passwordHash, cred.passwordSalt);
+      }
+    } else {
+      currentPasswordMatches = verifyPassword(currentPassword, cred.passwordHash, cred.passwordSalt);
+    }
+
+    if (!currentPasswordMatches) {
       await this.recordAuthAuditEvent({
         organizationId: cred.organizationId,
         accountId: cred.id,
@@ -1475,11 +1740,10 @@ class PlatformStore {
       throw err;
     }
 
-    const { hash, salt } = hashPassword(newPassword);
     const nowIso = new Date().toISOString();
 
-    if (this.supabase) {
-      await this.syncUserToSupabaseAuth({
+    if (sb) {
+      const syncedAuthUserId = await this.syncUserToSupabaseAuth({
         existingAuthUserId: cred.authUserId,
         email: cred.email,
         phoneE164: cred.phoneE164,
@@ -1491,40 +1755,61 @@ class PlatformStore {
         memberId: cred.memberId,
       });
 
-      const baseUpdate = {
-        password_hash: hash,
-        password_salt: salt,
+      const fallbackHashes = hashPassword(newPassword);
+      const omitStoredHashes = Boolean(syncedAuthUserId && this.canVerifyViaSupabaseAuth);
+      const baseUpdate: Record<string, unknown> = {
+        id: cred.id,
+        password_hash: omitStoredHashes ? null : fallbackHashes.hash,
+        password_salt: omitStoredHashes ? null : fallbackHashes.salt,
         failed_attempts: 0,
         locked_until: null,
         updated_at: nowIso,
+        must_change_password: false,
+        password_updated_at: nowIso,
+        ...(syncedAuthUserId ? { auth_user_id: syncedAuthUserId } : {}),
       };
 
-      let { error } = await this.supabase
+      const { error: updateErr } = await sb
         .from('account_credentials')
-        .update({
-          ...baseUpdate,
-          must_change_password: false,
-          password_updated_at: nowIso,
-        })
+        .update(baseUpdate)
         .eq('id', cred.id);
 
       if (
-        error &&
+        updateErr &&
+        /null value in column "password_(?:hash|salt)"|23502/i.test(updateErr.message || '')
+      ) {
+        const retry = await sb
+          .from('account_credentials')
+          .update({
+            ...baseUpdate,
+            password_hash: fallbackHashes.hash,
+            password_salt: fallbackHashes.salt,
+          })
+          .eq('id', cred.id);
+        if (retry.error) {
+          throw new Error(`Failed to update password in Supabase: ${retry.error.message}`);
+        }
+      } else if (
+        updateErr &&
         /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
-          error.message || ''
+          updateErr.message || ''
         )
       ) {
-        const retry = await this.supabase
+        const stripped = { ...baseUpdate };
+        delete stripped.must_change_password;
+        delete stripped.password_updated_at;
+        const retry = await sb
           .from('account_credentials')
-          .update(baseUpdate)
+          .update(stripped)
           .eq('id', cred.id);
-        error = retry.error;
-      }
-
-      if (error) {
-        throw new Error(`Failed to update password in Supabase: ${error.message}`);
+        if (retry.error) {
+          throw new Error(`Failed to update password in Supabase: ${retry.error.message}`);
+        }
+      } else if (updateErr) {
+        throw new Error(`Failed to update password in Supabase: ${updateErr.message}`);
       }
     } else {
+      const { hash, salt } = hashPassword(newPassword);
       cred.passwordHash = hash;
       cred.passwordSalt = salt;
       cred.mustChangePassword = false;
@@ -1900,10 +2185,11 @@ class PlatformStore {
     let existingCred: UserCredentialRecord | undefined;
     let existingAuthUserId: string | null = null;
 
-    if (this.supabase) {
+    const sb = this.activeSupabase;
+    if (sb) {
       let row: Record<string, any> | null = null;
       if (params.id && UUID_REGEX.test(params.id)) {
-        const byId = await this.supabase
+        const byId = await sb
           .from('account_credentials')
           .select('*')
           .eq('id', params.id)
@@ -1912,7 +2198,7 @@ class PlatformStore {
         row = byId.data;
       }
       if (!row) {
-        const byEmail = await this.supabase
+        const byEmail = await sb
           .from('account_credentials')
           .select('*')
           .ilike('email', email)
@@ -1924,6 +2210,7 @@ class PlatformStore {
         existingAuthUserId = row.auth_user_id ? String(row.auth_user_id) : null;
         existingCred = {
           id: String(row.id),
+          authUserId: existingAuthUserId || undefined,
           organizationId: row.organization_id ? String(row.organization_id).toLowerCase() : '',
           email: row.email ? String(row.email).toLowerCase() : undefined,
           username: row.username ? String(row.username).toLowerCase() : undefined,
@@ -1931,8 +2218,8 @@ class PlatformStore {
           name: String(row.full_name || 'Platform Creator'),
           role: 'creator',
           isCreator: true,
-          passwordHash: String(row.password_hash),
-          passwordSalt: String(row.password_salt),
+          passwordHash: row.password_hash ? String(row.password_hash) : '',
+          passwordSalt: row.password_salt ? String(row.password_salt) : '',
           status: (row.status as UserCredentialRecord['status']) || 'active',
         };
       }
@@ -1964,7 +2251,7 @@ class PlatformStore {
 
     const { hash, salt } = rawPassword
       ? hashPassword(rawPassword)
-      : { hash: existingCred!.passwordHash, salt: existingCred!.passwordSalt };
+      : { hash: existingCred?.passwordHash || '', salt: existingCred?.passwordSalt || '' };
 
     const credId = existingCred?.id || toDeterministicUuid(`creator:${email}`);
     const resolvedOrgId = orgId || existingCred?.organizationId || '';
@@ -1972,7 +2259,7 @@ class PlatformStore {
     const resolvedPhone = phoneE164 !== undefined ? phoneE164 || undefined : existingCred?.phoneE164;
 
     let persistedInSupabase = false;
-    if (this.supabase) {
+    if (sb) {
       const authUserId = await this.syncUserToSupabaseAuth({
         existingAuthUserId,
         email,
@@ -1984,6 +2271,7 @@ class PlatformStore {
         isCreator: true,
       });
 
+      const omitStoredHashes = Boolean(authUserId && this.canVerifyViaSupabaseAuth);
       const baseCreatorRow: Record<string, unknown> = {
         id: UUID_REGEX.test(credId) ? credId : toDeterministicUuid(credId),
         organization_id: resolvedOrgId && UUID_REGEX.test(resolvedOrgId) ? resolvedOrgId : null,
@@ -1993,34 +2281,15 @@ class PlatformStore {
         full_name: name,
         role: 'creator',
         is_creator: true,
-        password_hash: hash,
-        password_salt: salt,
+        password_hash: omitStoredHashes ? null : hash,
+        password_salt: omitStoredHashes ? null : salt,
         status: 'active',
         failed_attempts: 0,
         locked_until: null,
+        ...(authUserId ? { auth_user_id: authUserId } : {}),
       };
 
-      let { error } = await this.supabase.from('account_credentials').upsert(
-        {
-          ...baseCreatorRow,
-          ...(authUserId ? { auth_user_id: authUserId } : {}),
-        },
-        { onConflict: 'id' }
-      );
-      if (
-        error &&
-        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
-          error.message || ''
-        )
-      ) {
-        const retry = await this.supabase
-          .from('account_credentials')
-          .upsert(baseCreatorRow, { onConflict: 'id' });
-        error = retry.error;
-      }
-      if (error) {
-        throw new Error(`Failed to persist creator credentials in Supabase: ${error.message}`);
-      }
+      await this.upsertAccountCredentialsRow(sb, baseCreatorRow, hash && salt ? { hash, salt } : undefined);
       persistedInSupabase = true;
     } else {
       const updated: UserCredentialRecord = {
@@ -2198,14 +2467,15 @@ class PlatformStore {
     const normalizedPhone = normalizePhone(identifier);
 
     // 1. Resolve credential strictly from Supabase in live mode (RAM map only in Vitest)
+    const sb = this.activeSupabase;
     let foundCred: UserCredentialRecord | undefined;
-    if (this.supabase) {
+    if (sb) {
       const orFilters = [`email.ilike.${lowerId}`, `username.ilike.${lowerId}`];
       if (normalizedPhone) {
         orFilters.push(`phone_e164.eq.${normalizedPhone}`);
       }
 
-      const { data: credRow, error: credQueryErr } = await this.supabase
+      const { data: credRow, error: credQueryErr } = await sb
         .from('account_credentials')
         .select('*')
         .or(orFilters.join(','))
@@ -2216,19 +2486,23 @@ class PlatformStore {
         throw new Error(`Failed to verify credentials against Supabase: ${credQueryErr.message}`);
       }
 
-      if (credRow && credRow.password_hash && credRow.password_salt) {
+      if (credRow && (credRow.auth_user_id || (credRow.password_hash && credRow.password_salt))) {
+        const isCreator = Boolean(
+          credRow.is_creator || credRow.role === 'creator' || credRow.role === 'super_admin'
+        );
         foundCred = {
           id: String(credRow.id),
           memberId: credRow.member_id ? String(credRow.member_id) : undefined,
+          authUserId: credRow.auth_user_id ? String(credRow.auth_user_id) : undefined,
           email: credRow.email ? String(credRow.email).toLowerCase() : undefined,
           username: credRow.username ? String(credRow.username).toLowerCase() : undefined,
           phoneE164: credRow.phone_e164 ? String(credRow.phone_e164) : undefined,
-          passwordHash: String(credRow.password_hash),
-          passwordSalt: String(credRow.password_salt),
-          role: mapSupabaseRoleToChurchRole(credRow.role),
+          passwordHash: credRow.password_hash ? String(credRow.password_hash) : '',
+          passwordSalt: credRow.password_salt ? String(credRow.password_salt) : '',
+          role: mapCredentialRoleToChurchRole(credRow.role, isCreator),
           organizationId: String(credRow.organization_id || '').toLowerCase(),
           name: String(credRow.full_name || 'Member'),
-          isCreator: Boolean(credRow.is_creator || credRow.role === 'creator' || credRow.role === 'super_admin'),
+          isCreator,
           status: (credRow.status as UserCredentialRecord['status']) || 'active',
           mustChangePassword: Boolean(credRow.must_change_password),
           passwordUpdatedAt: credRow.password_updated_at ? String(credRow.password_updated_at) : null,
@@ -2261,7 +2535,6 @@ class PlatformStore {
                 ? process.env.CREATOR_ORGANIZATION_ID.trim().toLowerCase()
                 : '',
           });
-          const { hash, salt } = hashPassword(envPass);
           foundCred = {
             id: bootstrapped.user.id,
             organizationId: bootstrapped.user.organizationId,
@@ -2271,8 +2544,8 @@ class PlatformStore {
             name: bootstrapped.user.name,
             role: 'creator',
             isCreator: true,
-            passwordHash: hash,
-            passwordSalt: salt,
+            passwordHash: '',
+            passwordSalt: '',
             status: 'active',
             mustChangePassword: false,
             failedAttempts: 0,
@@ -2343,7 +2616,54 @@ class PlatformStore {
       throw err;
     }
 
-    const passwordMatches = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
+    // 4. Verify password via Supabase Auth first in live mode; one-time legacy hash migration fallback
+    let passwordMatches = false;
+    let verifiedAuthUserId = foundCred.authUserId;
+
+    if (sb) {
+      const authEmail = await this.resolveAuthEmailForCredential(foundCred);
+      if (authEmail) {
+        const sbAuthRes = await this.verifyPasswordViaSupabaseAuth(authEmail, password);
+        if (sbAuthRes.matched) {
+          passwordMatches = true;
+          verifiedAuthUserId = sbAuthRes.authUserId || verifiedAuthUserId;
+          // Scrub any legacy password_hash/password_salt if still present
+          if (foundCred.passwordHash || foundCred.passwordSalt || !foundCred.authUserId) {
+            await this.scrubLegacyPasswordHashes(foundCred.id, verifiedAuthUserId);
+          }
+        }
+      }
+
+      // One-time transparent migration for legacy accounts not yet in auth.users
+      if (!passwordMatches && foundCred.passwordHash && foundCred.passwordSalt) {
+        const legacyValid = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
+        if (legacyValid) {
+          passwordMatches = true;
+          try {
+            const syncedId = await this.syncUserToSupabaseAuth({
+              existingAuthUserId: foundCred.authUserId,
+              email: foundCred.email,
+              phoneE164: foundCred.phoneE164,
+              password,
+              fullName: foundCred.name,
+              organizationId: foundCred.organizationId || undefined,
+              role: foundCred.role,
+              isCreator: foundCred.isCreator,
+              memberId: foundCred.memberId,
+            });
+            if (syncedId) {
+              verifiedAuthUserId = syncedId;
+              await this.scrubLegacyPasswordHashes(foundCred.id, syncedId);
+            }
+          } catch (syncErr: any) {
+            console.warn('[Ekklesphere Auth Migration] Deferred Auth sync warning:', syncErr?.message);
+          }
+        }
+      }
+    } else {
+      passwordMatches = verifyPassword(password, foundCred.passwordHash, foundCred.passwordSalt);
+    }
+
     const distributedRateKey = `login:${foundCred.id}`;
     if (!passwordMatches) {
       const nextAttempts = (foundCred.failedAttempts || 0) + 1;
@@ -2363,8 +2683,8 @@ class PlatformStore {
         foundCred.lockedUntil = lockedUntilIso;
       }
 
-      if (this.supabase) {
-        await this.supabase
+      if (sb) {
+        await sb
           .from('account_credentials')
           .update({
             failed_attempts: nextAttempts,
@@ -2405,13 +2725,14 @@ class PlatformStore {
     // Valid login: reset failed attempts counter + distributed rate limit window
     await this.resetDistributedAuthRateLimit(distributedRateKey);
 
-    if (this.supabase) {
-      await this.supabase
+    if (sb) {
+      await sb
         .from('account_credentials')
         .update({
           failed_attempts: 0,
           locked_until: null,
           last_login_at: new Date().toISOString(),
+          ...(verifiedAuthUserId && !foundCred.authUserId ? { auth_user_id: verifiedAuthUserId } : {}),
         })
         .eq('id', foundCred.id);
     } else {
@@ -2432,6 +2753,27 @@ class PlatformStore {
     let organization: OrganizationRecord | null = null;
     if (foundCred.organizationId) {
       organization = (await this.getOrganisationById(foundCred.organizationId)) || null;
+      if (
+        !foundCred.isCreator &&
+        organization &&
+        (organization.status === 'suspended' || organization.status === 'archived')
+      ) {
+        await this.recordAuthAuditEvent({
+          organizationId: foundCred.organizationId,
+          accountId: foundCred.id,
+          identifier,
+          eventType: 'login_failed',
+          ipAddress,
+          success: false,
+          reason: `organisation_${organization.status}`,
+        });
+        const err: any = new Error(
+          'Organisation access has been revoked or suspended. Contact platform support.'
+        );
+        err.code = 'ACCOUNT_INACTIVE';
+        err.status = 403;
+        throw err;
+      }
     }
 
     const token = signToken({
@@ -3201,9 +3543,7 @@ class PlatformStore {
       const { error: orgErr } = await this.supabase
         .from('organizations')
         .update({
-          ...(params.churchName && params.churchName !== 'Ekklesphere Sanctuary'
-            ? { name: params.churchName }
-            : {}),
+          ...(params.churchName.trim() ? { name: params.churchName.trim() } : {}),
           premise_address: params.campusAddress,
           inner_geofence_m: site.radius_m,
           outer_geofence_m: site.outer_radius_m,
@@ -3278,8 +3618,8 @@ class PlatformStore {
 
     const org = this.orgs.get(orgId);
     if (org) {
-      if (params.churchName && params.churchName !== 'Ekklesphere Sanctuary') {
-        org.name = params.churchName;
+      if (params.churchName.trim()) {
+        org.name = params.churchName.trim();
       }
       org.geofenceConfigured = true;
       org.geofenceRadiusMeters = site.outer_radius_m;
@@ -3294,7 +3634,13 @@ class PlatformStore {
     const orgId = organizationId.toLowerCase();
     const nowIso = new Date().toISOString();
     if (this.supabase) {
-      await this.supabase.from('sites').update({ active: false, updated_at: nowIso }).eq('organization_id', orgId);
+      const { error: siteDelErr } = await this.supabase
+        .from('sites')
+        .delete()
+        .eq('organization_id', orgId);
+      if (siteDelErr) {
+        throw new Error(`Failed to clear campus site in Supabase: ${siteDelErr.message}`);
+      }
       const { data: orgRow } = await this.supabase
         .from('organizations')
         .select('settings')
@@ -3588,7 +3934,7 @@ class PlatformStore {
     if (hasExplicitCoords) {
       await this.savePremiseSettings(orgId, {
         siteId: currentRes.site?.id,
-        churchName: merged.churchName || 'Ekklesphere Sanctuary',
+        churchName: merged.churchName || '',
         campusName: merged.campusName || 'Main Campus',
         campusAddress: merged.campusAddress,
         lat: merged.campusLatitude!,
@@ -4266,8 +4612,11 @@ class PlatformStore {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
     if (this.supabase) {
+      if (personId !== '__all__' && !UUID_REGEX.test(personId)) {
+        return this.getLiveCheckins(orgId, serviceId);
+      }
       let query = this.supabase.from('attendance').delete().eq('organization_id', orgId);
-      if (personId !== '__all__' && UUID_REGEX.test(personId)) {
+      if (personId !== '__all__') {
         query = query.eq('member_id', personId);
       }
       if (serviceId && UUID_REGEX.test(serviceId)) {
@@ -5163,21 +5512,128 @@ class PlatformStore {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
     if (this.supabase) {
-      if (UUID_REGEX.test(memberId)) {
-        const { error } = await this.supabase
-          .from('members')
-          .delete()
-          .eq('organization_id', orgId)
-          .eq('id', memberId);
-        if (error) {
-          throw new Error(`Failed to delete member in Supabase: ${error.message}`);
+      if (!UUID_REGEX.test(memberId)) {
+        const notFound: any = new Error('Member not found.');
+        notFound.code = 'MEMBER_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+
+      const { data: existingMember, error: lookupErr } = await this.supabase
+        .from('members')
+        .select('id, user_id, email')
+        .eq('organization_id', orgId)
+        .eq('id', memberId)
+        .maybeSingle();
+
+      if (lookupErr) {
+        throw new Error(`Failed to verify member before deletion: ${lookupErr.message}`);
+      }
+      if (!existingMember) {
+        const notFound: any = new Error('Member not found in database.');
+        notFound.code = 'MEMBER_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+
+      const authUserIds = new Set<string>();
+      const creatorAuthIds = new Set<string>();
+      const { data: creatorRows } = await this.supabase
+        .from('account_credentials')
+        .select('auth_user_id')
+        .eq('is_creator', true);
+      for (const row of creatorRows || []) {
+        if (row.auth_user_id) creatorAuthIds.add(String(row.auth_user_id).toLowerCase());
+      }
+
+      if (existingMember.user_id) {
+        const uid = String(existingMember.user_id).toLowerCase();
+        if (!creatorAuthIds.has(uid)) authUserIds.add(uid);
+      }
+
+      const { data: credRows } = await this.supabase
+        .from('account_credentials')
+        .select('id, auth_user_id, is_creator')
+        .eq('organization_id', orgId)
+        .eq('member_id', memberId);
+
+      for (const row of credRows || []) {
+        if (!row.is_creator && row.auth_user_id) {
+          const uid = String(row.auth_user_id).toLowerCase();
+          if (!creatorAuthIds.has(uid)) authUserIds.add(uid);
+        }
+      }
+
+      const safeDeleteMemberDep = async (table: string, filters: Record<string, string>) => {
+        let q = this.supabase!.from(table).delete();
+        for (const [col, val] of Object.entries(filters)) {
+          q = q.eq(col, val);
+        }
+        const { error } = await q;
+        if (
+          error &&
+          !/does not exist|Could not find the|relation "?(?:public\.)?[^"]+"? does not exist|schema cache|42P01|42703|PGRST205/i.test(
+            error.message || ''
+          )
+        ) {
+          throw new Error(`Failed deleting dependent member records from ${table}: ${error.message}`);
+        }
+      };
+
+      await safeDeleteMemberDep('attendance', { organization_id: orgId, member_id: memberId });
+      await safeDeleteMemberDep('attendance_records', { tenant_id: orgId, person_id: memberId });
+      await safeDeleteMemberDep('push_subscriptions', { organization_id: orgId, person_id: memberId });
+      await safeDeleteMemberDep('church_wall_posts', { organization_id: orgId, author_id: memberId });
+      await safeDeleteMemberDep('church_wall_posts', { organization_id: orgId, target_member_id: memberId });
+      await safeDeleteMemberDep('account_credentials', {
+        organization_id: orgId,
+        member_id: memberId,
+      });
+
+      const { error: memDelErr } = await this.supabase
+        .from('members')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('id', memberId);
+      if (memDelErr) {
+        throw new Error(`Failed to delete member in Supabase: ${memDelErr.message}`);
+      }
+
+      for (const authUid of authUserIds) {
+        try {
+          await this.supabase.auth.admin.deleteUser(authUid);
+        } catch {
+          // ignore if already removed from Auth
         }
       }
       return;
     }
 
-    const list = (this.membersByOrg.get(orgId) || []).filter((m) => m.id !== memberId);
+    const currentList = this.membersByOrg.get(orgId) || [];
+    if (!currentList.some((m) => m.id === memberId)) {
+      const notFound: any = new Error('Member not found.');
+      notFound.code = 'MEMBER_NOT_FOUND';
+      notFound.status = 404;
+      throw notFound;
+    }
+    const list = currentList.filter((m) => m.id !== memberId);
     this.membersByOrg.set(orgId, list);
+
+    const existingCheckins = this.checkinsByOrg.get(orgId) || [];
+    this.checkinsByOrg.set(
+      orgId,
+      existingCheckins.filter((c) => c.personId !== memberId)
+    );
+    const existingSubs = this.pushSubsByOrg.get(orgId) || [];
+    this.pushSubsByOrg.set(
+      orgId,
+      existingSubs.filter((s) => s.personId !== memberId)
+    );
+    for (const [credId, cred] of this.userCredentials.entries()) {
+      if (cred.organizationId.toLowerCase() === orgId && cred.memberId === memberId && !cred.isCreator) {
+        this.userCredentials.delete(credId);
+      }
+    }
     const org = this.orgs.get(orgId);
     if (org) {
       org.memberCount = list.length;
@@ -5263,6 +5719,70 @@ class PlatformStore {
     list.push(created);
     this.eventsByOrg.set(orgId, list);
     return created;
+  }
+
+  public async deleteEvent(organizationId: string, eventId: string): Promise<void> {
+    this.assertDatabaseAvailable();
+    const orgId = organizationId.toLowerCase();
+    if (this.supabase) {
+      if (!UUID_REGEX.test(eventId)) {
+        const notFound: any = new Error('Service event not found.');
+        notFound.code = 'EVENT_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+
+      const { data: existingEvent, error: lookupErr } = await this.supabase
+        .from('events')
+        .select('id')
+        .eq('organization_id', orgId)
+        .eq('id', eventId)
+        .maybeSingle();
+
+      if (lookupErr) {
+        throw new Error(`Failed to verify service event before deletion: ${lookupErr.message}`);
+      }
+      if (!existingEvent) {
+        const notFound: any = new Error('Service event not found in database.');
+        notFound.code = 'EVENT_NOT_FOUND';
+        notFound.status = 404;
+        throw notFound;
+      }
+
+      await this.supabase
+        .from('attendance')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('event_id', eventId);
+
+      const { error: delErr } = await this.supabase
+        .from('events')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('id', eventId);
+
+      if (delErr) {
+        throw new Error(`Failed to delete service event in Supabase: ${delErr.message}`);
+      }
+      return;
+    }
+
+    const list = this.eventsByOrg.get(orgId) || [];
+    if (!list.some((ev) => ev.id === eventId)) {
+      const notFound: any = new Error('Service event not found.');
+      notFound.code = 'EVENT_NOT_FOUND';
+      notFound.status = 404;
+      throw notFound;
+    }
+    this.eventsByOrg.set(
+      orgId,
+      list.filter((ev) => ev.id !== eventId)
+    );
+    const checkins = this.checkinsByOrg.get(orgId) || [];
+    this.checkinsByOrg.set(
+      orgId,
+      checkins.filter((c) => c.serviceInstanceId !== eventId)
+    );
   }
 
   public async upsertPushSubscription(
@@ -5470,7 +5990,7 @@ class PlatformStore {
       if (error) {
         throw new Error(`Failed to fetch plans from Supabase: ${error.message}`);
       }
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         return data.map((row) => ({
           id: row.id as LicenseTier,
           name: String(row.name),
@@ -5488,7 +6008,7 @@ class PlatformStore {
           updatedAt: String(row.updated_at || new Date().toISOString()),
         }));
       }
-      return Object.values(DEFAULT_PLANS);
+      return [];
     }
     return Array.from(this.plans.values());
   }
@@ -5588,7 +6108,7 @@ class PlatformStore {
             contactName: settings.contact_name || row.contact_name || '',
             contactEmail: row.email || settings.contact_email || row.contact_email || '',
             contactPhone: row.phone || settings.contact_phone || row.contact_phone || '',
-            status: (settings.status || row.status || 'trial') as TenantStatus,
+            status: (row.status || settings.status || 'trial') as TenantStatus,
             memberCount,
             maxCapacity: lic?.overrides?.seatsLimit ?? lic?.seatsLimit ?? plan.seatsLimit,
             sitesCount: sites.length,
@@ -5859,7 +6379,17 @@ class PlatformStore {
       if (updates.contactName !== undefined) dbPatch.contact_name = updates.contactName;
       if (updates.contactEmail !== undefined) dbPatch.contact_email = updates.contactEmail;
       if (updates.contactPhone !== undefined) dbPatch.contact_phone = updates.contactPhone;
-      if (updates.status !== undefined) dbPatch.status = updates.status;
+      if (updates.status !== undefined) {
+        dbPatch.status = updates.status;
+        const { data: curRow } = await this.supabase
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const curSettings =
+          curRow?.settings && typeof curRow.settings === 'object' ? curRow.settings : {};
+        dbPatch.settings = { ...curSettings, status: updates.status };
+      }
       if (updates.customDomain !== undefined) dbPatch.custom_domain = updates.customDomain;
       if (updates.smsConfigured !== undefined) dbPatch.sms_configured = updates.smsConfigured;
       if (updates.pushConfigured !== undefined) dbPatch.push_configured = updates.pushConfigured;
@@ -5880,6 +6410,338 @@ class PlatformStore {
     };
     this.orgs.set(orgId, updated);
     return (await this.getOrganisationById(orgId))!;
+  }
+
+  public async revokeOrganisation(
+    organizationId: string,
+    reason: string
+  ): Promise<{
+    organisation: TenantChurch;
+    license: SystemLicense | null;
+    revokedGrantsCount: number;
+    suspendedCredentialsCount: number;
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const cleanReason = (reason || '').trim();
+    if (cleanReason.length < 3) {
+      const err: any = new Error('A clear audit reason (min 3 characters) is required to revoke an organisation.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    const existingOrg = await this.getOrganisationById(orgId);
+    if (!existingOrg) {
+      const err: any = new Error('Organisation not found.');
+      err.code = 'ORG_NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    const nowIso = new Date().toISOString();
+    let revokedGrantsCount = 0;
+    let suspendedCredentialsCount = 0;
+
+    if (this.supabase) {
+      // 1. Revoke all licenses belonging to this organisation
+      const { error: licErr } = await this.supabase
+        .from('licenses')
+        .update({
+          status: 'revoked',
+          revoked_reason: cleanReason,
+          updated_at: nowIso,
+        })
+        .eq('organization_id', orgId);
+
+      if (
+        licErr &&
+        /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+          licErr.message || ''
+        )
+      ) {
+        await this.supabase
+          .from('licenses')
+          .update({ status: 'revoked' })
+          .or(`organization_id.eq.${orgId},tenant_id.eq.${orgId}`);
+      } else if (licErr) {
+        throw new Error(`Failed to revoke organisation licenses: ${licErr.message}`);
+      }
+
+      // 2. Revoke any active support grants for this organisation
+      const { data: revokedGrants } = await this.supabase
+        .from('support_grants')
+        .update({ revoked_at: nowIso })
+        .eq('organization_id', orgId)
+        .is('revoked_at', null)
+        .select('id');
+      revokedGrantsCount = Array.isArray(revokedGrants) ? revokedGrants.length : 0;
+
+      // 3. Suspend non-creator credentials scoped to this organisation
+      const { data: suspendedCreds } = await this.supabase
+        .from('account_credentials')
+        .update({ status: 'suspended', updated_at: nowIso })
+        .eq('organization_id', orgId)
+        .eq('is_creator', false)
+        .neq('status', 'suspended')
+        .select('id');
+      suspendedCredentialsCount = Array.isArray(suspendedCreds) ? suspendedCreds.length : 0;
+
+      // 4. Mark organisation suspended in both status column and settings JSONB
+      const { data: curRow } = await this.supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', orgId)
+        .maybeSingle();
+      const curSettings =
+        curRow?.settings && typeof curRow.settings === 'object' ? curRow.settings : {};
+
+      const { error: orgErr } = await this.supabase
+        .from('organizations')
+        .update({
+          status: 'suspended',
+          settings: { ...curSettings, status: 'suspended', revoked_reason: cleanReason, revoked_at: nowIso },
+          updated_at: nowIso,
+        })
+        .eq('id', orgId);
+
+      if (orgErr) {
+        throw new Error(`Failed to suspend organisation status: ${orgErr.message}`);
+      }
+    } else {
+      for (const [licId, lic] of this.licenses.entries()) {
+        if ((lic.organizationId || lic.tenantId).toLowerCase() === orgId) {
+          this.licenses.set(licId, {
+            ...lic,
+            status: 'revoked',
+            notes: cleanReason,
+          });
+        }
+      }
+
+      for (const [grantId, grant] of this.supportGrants.entries()) {
+        if (grant.organizationId.toLowerCase() === orgId && !grant.revokedAt) {
+          this.supportGrants.set(grantId, {
+            ...grant,
+            revokedAt: nowIso,
+            active: false,
+          });
+          revokedGrantsCount++;
+        }
+      }
+
+      for (const [credId, cred] of this.userCredentials.entries()) {
+        if (
+          cred.organizationId.toLowerCase() === orgId &&
+          !cred.isCreator &&
+          cred.status !== 'suspended'
+        ) {
+          this.userCredentials.set(credId, {
+            ...cred,
+            status: 'suspended',
+          });
+          suspendedCredentialsCount++;
+        }
+      }
+
+      const memOrg = this.orgs.get(orgId);
+      if (memOrg) {
+        this.orgs.set(orgId, {
+          ...memOrg,
+          status: 'suspended',
+          licenseStatus: 'revoked',
+        });
+      }
+    }
+
+    const refreshedOrg = await this.getOrganisationById(orgId);
+    const refreshedLic = await this.getLatestLicenseForOrg(orgId);
+
+    return {
+      organisation: refreshedOrg!,
+      license: refreshedLic,
+      revokedGrantsCount,
+      suspendedCredentialsCount,
+    };
+  }
+
+  public async deleteOrganisation(organizationId: string): Promise<{
+    deleted: true;
+    organizationId: string;
+    organizationName: string;
+    deletedAuthUsersCount: number;
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const existingOrg = await this.getOrganisationById(orgId);
+    if (!existingOrg) {
+      const err: any = new Error('Organisation not found.');
+      err.code = 'ORG_NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    let deletedAuthUsersCount = 0;
+
+    if (this.supabase) {
+      // 1. Collect linked non-creator Supabase Auth user IDs before purging rows
+      const authUserIds = new Set<string>();
+      const creatorAuthIds = new Set<string>();
+
+      const { data: creatorRows } = await this.supabase
+        .from('account_credentials')
+        .select('auth_user_id')
+        .eq('is_creator', true);
+      for (const row of creatorRows || []) {
+        if (row.auth_user_id) creatorAuthIds.add(String(row.auth_user_id).toLowerCase());
+      }
+
+      const { data: credRows } = await this.supabase
+        .from('account_credentials')
+        .select('auth_user_id, is_creator')
+        .eq('organization_id', orgId);
+      for (const row of credRows || []) {
+        if (!row.is_creator && row.auth_user_id) {
+          const uid = String(row.auth_user_id).toLowerCase();
+          if (!creatorAuthIds.has(uid)) authUserIds.add(uid);
+        }
+      }
+
+      const { data: memberRows } = await this.supabase
+        .from('members')
+        .select('user_id')
+        .eq('organization_id', orgId);
+      for (const row of memberRows || []) {
+        if (row.user_id) {
+          const uid = String(row.user_id).toLowerCase();
+          if (!creatorAuthIds.has(uid)) authUserIds.add(uid);
+        }
+      }
+
+      const safeDeleteByCol = async (table: string, col: string) => {
+        const { error } = await this.supabase!.from(table).delete().eq(col, orgId);
+        if (
+          error &&
+          !/does not exist|Could not find the|relation "?(?:public\.)?[^"]+"? does not exist|schema cache|42P01|42703|PGRST205/i.test(
+            error.message || ''
+          )
+        ) {
+          throw new Error(`Failed deleting from ${table}.${col}: ${error.message}`);
+        }
+      };
+
+      // 2. Delete all dependent records in FK-safe order (children before parents)
+      const deleteOrder: Array<[string, string]> = [
+        ['license_payments', 'organization_id'],
+        ['data_requests', 'organization_id'],
+        ['support_grants', 'organization_id'],
+        ['licenses', 'organization_id'],
+        ['licenses', 'tenant_id'],
+        ['account_credentials', 'organization_id'],
+        ['auth_audit_events', 'organization_id'],
+        ['attendance', 'organization_id'],
+        ['attendance_records', 'tenant_id'],
+        ['attendance_events', 'organization_id'],
+        ['donations', 'tenant_id'],
+        ['service_instances', 'tenant_id'],
+        ['services', 'tenant_id'],
+        ['events', 'organization_id'],
+        ['sites', 'organization_id'],
+        ['campuses', 'tenant_id'],
+        ['persons', 'tenant_id'],
+        ['members', 'organization_id'],
+        ['church_groups', 'organization_id'],
+        ['church_wall_posts', 'organization_id'],
+        ['push_subscriptions', 'organization_id'],
+        ['usage_daily', 'organization_id'],
+        ['alerts', 'organization_id'],
+        ['system_settings', 'tenant_id'],
+        ['system_settings', 'organization_id'],
+        ['church_public_profiles', 'organization_id'],
+        ['service_times', 'organization_id'],
+        ['ministries', 'organization_id'],
+        ['church_events', 'organization_id'],
+        ['news_posts', 'organization_id'],
+        ['user_roles', 'organization_id'],
+        ['user_roles', 'tenant_id'],
+        ['users', 'tenant_id'],
+      ];
+
+      for (const [table, col] of deleteOrder) {
+        await safeDeleteByCol(table, col);
+      }
+
+      // 3. Delete the primary organisation & legacy tenant rows
+      const { error: orgDelErr } = await this.supabase
+        .from('organizations')
+        .delete()
+        .eq('id', orgId);
+      if (orgDelErr) {
+        throw new Error(`Failed to delete organisation record: ${orgDelErr.message}`);
+      }
+      await safeDeleteByCol('tenants', 'id');
+
+      // 4. Delete linked non-creator Supabase Auth accounts so nothing remains on server/auth
+      for (const authUid of authUserIds) {
+        try {
+          const { error: authDelErr } = await this.supabase.auth.admin.deleteUser(authUid);
+          if (!authDelErr) deletedAuthUsersCount++;
+        } catch {
+          // Ignore missing auth user so purge completes cleanly
+        }
+      }
+    }
+
+    // 5. Purge ALL server in-memory maps/collections so ZERO organisation data remains anywhere on the server
+    this.orgs.delete(orgId);
+    for (const [licId, lic] of this.licenses.entries()) {
+      if ((lic.organizationId || lic.tenantId).toLowerCase() === orgId) {
+        this.licenses.delete(licId);
+      }
+    }
+    this.payments = this.payments.filter((p) => p.organizationId.toLowerCase() !== orgId);
+    for (const [uKey, uVal] of this.usageDaily.entries()) {
+      if (uVal.organizationId.toLowerCase() === orgId) {
+        this.usageDaily.delete(uKey);
+      }
+    }
+    for (const [aId, aVal] of this.alerts.entries()) {
+      if ((aVal.organizationId || '').toLowerCase() === orgId) {
+        this.alerts.delete(aId);
+      }
+    }
+    for (const [drId, drVal] of this.dataRequests.entries()) {
+      if (drVal.organizationId.toLowerCase() === orgId) {
+        this.dataRequests.delete(drId);
+      }
+    }
+    for (const [gId, gVal] of this.supportGrants.entries()) {
+      if (gVal.organizationId.toLowerCase() === orgId) {
+        this.supportGrants.delete(gId);
+      }
+    }
+    this.sitesByOrg.delete(orgId);
+    this.premiseByOrg.delete(orgId);
+    this.systemSettingsByOrg.delete(orgId);
+    this.churchGroupsByOrg.delete(orgId);
+    this.checkinsByOrg.delete(orgId);
+    this.rawEventsByOrg.delete(orgId);
+    this.membersByOrg.delete(orgId);
+    this.eventsByOrg.delete(orgId);
+    this.pushSubsByOrg.delete(orgId);
+    for (const [credId, cred] of this.userCredentials.entries()) {
+      if (cred.organizationId.toLowerCase() === orgId && !cred.isCreator) {
+        this.userCredentials.delete(credId);
+      }
+    }
+    churchWallStore.clearOrganizationInMemory(orgId);
+
+    return {
+      deleted: true,
+      organizationId: orgId,
+      organizationName: existingOrg.name,
+      deletedAuthUsersCount,
+    };
   }
 
   public async listLicenses(): Promise<SystemLicense[]> {
@@ -6225,10 +7087,10 @@ class PlatformStore {
 
       if (error) throw new Error(`Failed to update license: ${error.message}`);
 
-      if (actionPayload.action === 'suspend') {
-        await this.supabase.from('organizations').update({ status: 'suspended' }).eq('id', orgId);
+      if (actionPayload.action === 'suspend' || actionPayload.action === 'revoke') {
+        await this.updateOrganisation(orgId, { status: 'suspended' });
       } else if (actionPayload.action === 'reactivate' || actionPayload.action === 'renew') {
-        await this.supabase.from('organizations').update({ status: 'active' }).eq('id', orgId);
+        await this.updateOrganisation(orgId, { status: 'active' });
       }
 
       return (await this.listLicenses()).find((l) => l.id === licenseId)!;
@@ -6257,7 +7119,9 @@ class PlatformStore {
     if (memOrg) {
       memOrg.licenseTier = nextTier;
       memOrg.renewalDate = updated.expiresDate;
-      if (actionPayload.action === 'suspend') memOrg.status = 'suspended';
+      if (actionPayload.action === 'suspend' || actionPayload.action === 'revoke') {
+        memOrg.status = 'suspended';
+      }
       if (actionPayload.action === 'reactivate' || actionPayload.action === 'renew') memOrg.status = 'active';
       if (actionPayload.action === 'start_trial') memOrg.status = 'trial';
     }

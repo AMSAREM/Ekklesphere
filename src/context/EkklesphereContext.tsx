@@ -190,6 +190,7 @@ interface EkklesphereContextType {
     expectedAttendance?: number;
     dwellMinutes?: number;
   }) => Promise<void>;
+  deleteService: (serviceId: string) => Promise<void>;
 
   // People & Members
   members: Person[];
@@ -267,7 +268,7 @@ interface EkklesphereContextType {
 
   // Check-in Actions
   checkInPerson: (personId: string, method: CheckinMethod, confidence?: number, note?: string) => boolean;
-  removeCheckIn: (personId: string) => void;
+  removeCheckIn: (personId: string) => Promise<void>;
 
   // Usher PWA Offline simulation
   isUsherOnline: boolean;
@@ -647,7 +648,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const issueLicense = (tenantId: string, tier: LicenseTier, billingCycle: BillingCycle): SystemLicense => {
     const matchedTenant = tenants.find((t) => t.id === tenantId);
-    const tenantName = matchedTenant ? matchedTenant.name : 'Sanctuary Tenant';
+    const tenantName = matchedTenant ? matchedTenant.name : 'Organisation';
     const prefix = tenantName.replace(/[^A-Za-z0-9]/g, '').substring(0, 6).toUpperCase() || 'EKKLE';
     const key = `LIC-${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date();
@@ -923,6 +924,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setIsChangePasswordModalOpen(false);
     setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
     setChurchGroups([]);
+    setMembers([]);
+    setServices([]);
+    setAttendanceRecords([]);
     setAuditLogs([]);
     setPushSubscribersCount(0);
     try {
@@ -932,6 +936,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       localStorage.removeItem('ekklesphere_view_mode');
       localStorage.removeItem('ekklesphere_system_settings');
       localStorage.removeItem('ekklesphere_church_groups');
+      localStorage.removeItem('ekklesphere_tenants');
+      localStorage.removeItem('ekklesphere_members');
+      localStorage.removeItem('ekklesphere_services');
+      localStorage.removeItem('ekklesphere_active_service_id');
+      localStorage.removeItem('ekklesphere_licenses');
+      localStorage.removeItem('ekklesphere_landing_config');
     } catch {
       // ignore
     }
@@ -1265,12 +1275,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const saved = localStorage.getItem('ekklesphere_services');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
     } catch {}
-    return [LIVE_DEFAULT_SERVICE];
+    return [];
   });
   const [members, setMembers] = useState<Person[]>(() => {
     try {
@@ -1294,8 +1304,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const cleaned: SystemSettings = {
           ...DEFAULT_SYSTEM_SETTINGS,
           ...parsed,
-          churchName: parsed.churchName || '',
-          campusName: parsed.campusName || '',
+          churchName:
+            parsed.churchName === 'Ekklesphere Sanctuary' ||
+            parsed.churchName === 'Primary Church Organization'
+              ? ''
+              : parsed.churchName || '',
+          campusName: parsed.campusName === 'Accra Central' ? '' : parsed.campusName || '',
           seniorPastor:
             parsed.seniorPastor === 'Pastor David Osei' ? '' : parsed.seniorPastor || '',
           contactEmail:
@@ -1359,12 +1373,26 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           }
         })
         .catch(() => {});
-    } else if (currentUser) {
-      // Zero-trust rule: never trust a cached user object without a verifiable Bearer token
+    } else {
+      // Zero-trust rule: never retain cached user/organisation state without a verifiable Bearer token
       try {
         localStorage.removeItem('ekklesphere_user');
+        localStorage.removeItem('ekklesphere_system_settings');
+        localStorage.removeItem('ekklesphere_tenants');
+        localStorage.removeItem('ekklesphere_members');
+        localStorage.removeItem('ekklesphere_services');
+        localStorage.removeItem('ekklesphere_active_service_id');
+        localStorage.removeItem('ekklesphere_church_groups');
+        localStorage.removeItem('ekklesphere_licenses');
       } catch {}
-      setCurrentUser(null);
+      setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+      setMembers([]);
+      setServices([]);
+      setChurchGroups([]);
+      setAttendanceRecords([]);
+      if (currentUser) {
+        setCurrentUser(null);
+      }
     }
 
     // 2. Listen for Supabase OAuth redirects / auth state changes and exchange for backend JWT
@@ -1691,29 +1719,46 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return true;
   };
 
-  const removeCheckIn = (personId: string) => {
-    setAttendanceRecords((prev) =>
-      prev.filter(
-        (r) => !(r.personId === personId && (!r.serviceInstanceId || r.serviceInstanceId === activeServiceId))
-      )
-    );
-    fetch(
-      `/api/live-checkins/${encodeURIComponent(personId)}?serviceId=${encodeURIComponent(activeServiceId)}`,
-      {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      }
-    ).catch((err) => console.warn('Could not remove check-in on server:', err));
+  const removeCheckIn = async (personId: string): Promise<void> => {
     const person = members.find((m) => m.id === personId);
-    showToast(`Check-in removed for ${person?.firstName || 'Member'}`);
+    try {
+      const res = await fetch(
+        `/api/live-checkins/${encodeURIComponent(personId)}?serviceId=${encodeURIComponent(activeServiceId)}`,
+        {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        showToast(errBody?.message || 'Could not remove check-in from database.');
+        await refreshLivePremise();
+        return;
+      }
+      setAttendanceRecords((prev) =>
+        prev.filter(
+          (r) => !(r.personId === personId && (!r.serviceInstanceId || r.serviceInstanceId === activeServiceId))
+        )
+      );
+      showToast(`Check-in removed from database for ${person?.firstName || 'Member'}`);
+    } catch (err) {
+      console.warn('Could not remove check-in on server:', err);
+      showToast('Network error removing check-in from database.');
+      await refreshLivePremise();
+    }
   };
 
   const refreshMembers = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
     try {
       const res = await fetch('/api/members', { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           const normalized = data.map((item) => normalizePersonRecord(item));
           setMembers(normalized);
           try {
@@ -1728,12 +1773,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // transient network warning
     }
 
-    // Fallback: restore from localStorage
+    // Fallback: restore from localStorage on transient offline error only
     try {
       const saved = localStorage.getItem('ekklesphere_members');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           setMembers(parsed.map((item) => normalizePersonRecord(item)));
         }
       }
@@ -2195,13 +2240,23 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const deleteMember = async (memberId: string): Promise<void> => {
     const memberToDelete = members.find((m) => m.id === memberId);
     try {
-      fetch(`/api/members/${encodeURIComponent(memberId)}`, {
+      const res = await fetch(`/api/members/${encodeURIComponent(memberId)}`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
-      }).catch(() => {});
-    } catch {}
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        showToast(errBody?.message || 'Could not delete member from database.');
+        await refreshMembers();
+        return;
+      }
+    } catch (err) {
+      console.error('Error deleting member:', err);
+      showToast('Network error deleting member from database.');
+      return;
+    }
 
-    // Delete from Firestore as cloud backup
+    // Delete from Firestore mirror if configured
     try {
       deleteDoc(doc(db, 'members', memberId)).catch(() => {});
     } catch {}
@@ -2216,7 +2271,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     setAttendanceRecords((prev) => prev.filter((r) => r.personId !== memberId));
     showToast(
-      `Member ${memberToDelete ? `${memberToDelete.firstName} ${memberToDelete.lastName}` : ''} removed from database`
+      `Member ${memberToDelete ? `${memberToDelete.firstName} ${memberToDelete.lastName}` : ''} permanently deleted from database`
     );
   };
 
@@ -2463,18 +2518,27 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const refreshServices = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
     try {
-      const res = await fetch('/api/events');
+      const res = await fetch('/api/events', { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           const mapped = data.map(mapDbEventToService);
           setServices(mapped);
           try {
             localStorage.setItem('ekklesphere_services', JSON.stringify(mapped));
           } catch {}
           setActiveServiceId((prev) =>
-            mapped.some((s) => s.id === prev) ? prev : mapped[0].id
+            mapped.length === 0
+              ? LIVE_DEFAULT_SERVICE.id
+              : mapped.some((s) => s.id === prev)
+              ? prev
+              : mapped[0].id
           );
           return;
         }
@@ -2483,16 +2547,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // ignore transient network errors
     }
 
-    // Fallback: restore from localStorage
+    // Fallback: restore from localStorage on transient offline error only
     try {
       const saved = localStorage.getItem('ekklesphere_services');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           setServices(parsed);
-          setActiveServiceId((prev) =>
-            parsed.some((s: ServiceInstance) => s.id === prev) ? prev : parsed[0].id
-          );
+          if (parsed.length > 0) {
+            setActiveServiceId((prev) =>
+              parsed.some((s: ServiceInstance) => s.id === prev) ? prev : parsed[0].id
+            );
+          }
         }
       }
     } catch {}
@@ -2612,6 +2678,43 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
+  const deleteService = async (serviceId: string): Promise<void> => {
+    const svcToDelete = services.find((s) => s.id === serviceId);
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(serviceId)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        showToast(errBody?.message || 'Could not delete scheduled service from database.');
+        await refreshServices();
+        return;
+      }
+    } catch (err) {
+      console.error('Error deleting service:', err);
+      showToast('Network error deleting service from database.');
+      return;
+    }
+
+    try {
+      deleteDoc(doc(db, 'events', serviceId)).catch(() => {});
+    } catch {}
+
+    setServices((prev) => {
+      const updated = prev.filter((s) => s.id !== serviceId);
+      try {
+        localStorage.setItem('ekklesphere_services', JSON.stringify(updated));
+      } catch {}
+      setActiveServiceId((curr) =>
+        curr === serviceId ? updated[0]?.id || LIVE_DEFAULT_SERVICE.id : curr
+      );
+      return updated;
+    });
+    setAttendanceRecords((prev) => prev.filter((r) => r.serviceInstanceId !== serviceId));
+    showToast(`Service "${svcToDelete?.name || 'Event'}" deleted from database`);
+  };
+
   useEffect(() => {
     refreshSystemSettings();
     refreshChurchGroups();
@@ -2651,7 +2754,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return false;
       }
 
-      const churchName = (params.churchName || systemSettings.churchName || 'Ekklesphere Sanctuary').trim();
+      const churchName = (params.churchName || systemSettings.churchName || '').trim();
       const campusName = (params.campusName || systemSettings.campusName || 'Main Campus').trim();
       const campusAddress = params.campusAddress ?? systemSettings.campusAddress ?? '';
       const innerGeofenceMeters = Math.max(10, Number(params.innerGeofenceMeters ?? systemSettings.innerGeofenceMeters ?? 50));
@@ -3356,6 +3459,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         currentService,
         refreshServices,
         addService,
+        deleteService,
         members,
         visitorsCount,
         refreshMembers,

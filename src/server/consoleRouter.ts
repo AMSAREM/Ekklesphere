@@ -88,6 +88,14 @@ const UpdateOrgSchema = z.object({
   reason: z.string().trim().max(400).optional(),
 });
 
+const RevokeOrgSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(3, 'A clear audit reason (min 3 characters) is required to revoke an organisation.')
+    .max(500),
+});
+
 const ProvisionOrgAdminSchema = z
   .object({
     fullName: z.string().trim().min(2, 'Administrator full name is required').max(160),
@@ -434,6 +442,86 @@ consoleRouter.patch('/organisations/:orgId', async (req: Request, res: Response)
     return res.status(200).json({ organisation: updated });
   } catch (err: any) {
     return res.status(404).json({ error: 'not_found', message: err?.message || 'Organisation not found' });
+  }
+});
+
+consoleRouter.post('/organisations/:orgId/revoke', async (req: Request, res: Response) => {
+  const parsed = RevokeOrgSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'validation_error',
+      message: parsed.error.issues[0]?.message || 'A valid audit reason is required to revoke an organisation.',
+      details: parsed.error.flatten(),
+    });
+  }
+
+  try {
+    const result = await platformStore.revokeOrganisation(req.params.orgId, parsed.data.reason);
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'organisation.revoked',
+      targetType: 'organization',
+      targetId: result.organisation.id,
+      organizationId: result.organisation.id,
+      reason: parsed.data.reason,
+      metadata: {
+        name: result.organisation.name,
+        revokedGrantsCount: result.revokedGrantsCount,
+        suspendedCredentialsCount: result.suspendedCredentialsCount,
+        licenseStatus: result.license?.status || null,
+      },
+      ipAddress: clientIp(req),
+    });
+    return res.status(200).json({ success: true, ...result });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: status === 404 ? 'not_found' : 'revoke_organisation_failed',
+      message: err?.message || 'Could not revoke organisation.',
+    });
+  }
+});
+
+consoleRouter.delete('/organisations/:orgId', async (req: Request, res: Response) => {
+  try {
+    const rawReason =
+      typeof req.body?.reason === 'string'
+        ? req.body.reason.trim()
+        : typeof req.query?.reason === 'string'
+        ? req.query.reason.trim()
+        : '';
+
+    const result = await platformStore.deleteOrganisation(req.params.orgId);
+
+    // Record audit entry with organizationId: null so no FK/row ties back to the purged organisation
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'organisation.deleted',
+      targetType: 'organization',
+      targetId: result.organizationId,
+      organizationId: null,
+      reason: rawReason || 'Permanent deletion requested via Creator Console',
+      metadata: {
+        deletedAuthUsersCount: result.deletedAuthUsersCount,
+        purgedFromServer: true,
+      },
+      ipAddress: clientIp(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return res.status(status).json({
+      error: status === 404 ? 'not_found' : 'delete_organisation_failed',
+      message: err?.message || 'Could not delete organisation.',
+    });
   }
 });
 
