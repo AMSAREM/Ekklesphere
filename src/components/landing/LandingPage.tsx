@@ -1,28 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { LandingImages } from '../../assets/images';
 import {
-  ShieldCheck,
   Radio,
   Users,
-  Compass,
   ArrowRight,
   Sun,
   Moon,
   Sparkles,
-  Layers,
-  Key,
   CheckCircle2,
   Lock,
   Smartphone,
   ChevronRight,
   Zap,
-  Globe2,
-  Sliders,
-  Play,
-  HeartHandshake,
   QrCode,
-  Building2,
+  ShieldCheck,
+  Calendar,
+  X,
+  Send,
+  Clock,
+  Activity,
+  MapPin,
+  Signal,
+  Eye,
+  HeartHandshake,
+  ExternalLink,
+  ChevronDown,
+  Layers,
+  Check,
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
@@ -32,770 +36,1033 @@ export const LandingPage: React.FC = () => {
     theme,
     toggleTheme,
     tenants,
-    licenses,
     switchUserRole,
+    systemSettings,
+    services,
+    members,
+    showToast,
   } = useEkklesphere();
 
-  const activeTenantsCount = tenants.filter((t) => t.status === 'active').length;
-  const activeLicensesCount = licenses.filter((l) => l.status === 'active').length;
+  const [activeNav, setActiveNav] = useState<'home' | 'radar' | 'pillars' | 'schedule' | 'portals'>('home');
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [selectedRolePreview, setSelectedRolePreview] = useState<'admin' | 'usher' | 'member'>('admin');
 
+  // Interactive Radar Simulation state
+  const [simDistance, setSimDistance] = useState<number>(140);
+  const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  const [simStep, setSimStep] = useState<string>('idle'); // 'idle' | 'locating' | 'perimeter' | 'verified'
+
+  const [contactForm, setContactForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    church: systemSettings.churchName || 'PIWC Kwadaso',
+    congregationSize: '250-500',
+    message: '',
+  });
+
+  const activeTenantsCount = tenants.filter((t) => t.status === 'active').length;
+  const currentChurchName = systemSettings.churchName || 'PIWC Kwadaso';
+  const currentCampus = systemSettings.campusName || 'Central Sanctuary';
+  const currentGps = systemSettings.campusAddress || 'AK-039-2041, Kwadaso';
+
+  // Handle direct role navigation
   const handleLaunchRole = (role: 'admin' | 'usher' | 'member') => {
     switchUserRole(role);
     setViewMode('app');
   };
 
-  return (
-    <div className="min-h-screen bg-[#F5F6FA] dark:bg-[#0A0A18] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200 flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
-      {/* Top Dynamic Announcement Bar */}
-      {landingConfig.isAnnouncementActive && (
-        <aside
-          aria-label="System announcement"
-          className="bg-gradient-to-r from-[#6D5CF2] via-[#8574F8] to-[#4F46E5] text-white py-2 px-4 text-xs font-medium text-center relative z-20 flex items-center justify-center gap-2 shadow-sm"
-        >
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/20 text-white font-bold text-[10px] uppercase tracking-wider backdrop-blur-xs">
-            <Sparkles className="w-3 h-3 text-amber-300" /> Live Platform
-          </span>
-          <span className="truncate max-w-xl">{landingConfig.announcementBadge}</span>
-          <button
-            onClick={() => setViewMode('creator')}
-            className="hidden sm:inline-flex items-center gap-1 text-[11px] underline font-bold hover:text-white/80 transition-colors ml-1 cursor-pointer"
-          >
-            Manage in Creator Panel <ChevronRight className="w-3 h-3" />
-          </button>
-        </aside>
-      )}
+  // Run automated radar walk-in simulation
+  const handleRunRadarSimulation = () => {
+    if (isSimulating) return;
+    setIsSimulating(true);
+    setSimStep('locating');
+    setSimDistance(240);
 
-      {/* Navigation Header */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-md bg-white/85 dark:bg-[#0E0E24]/85 border-b border-[#E3E5EE] dark:border-[#1E1E3A] transition-colors">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-4">
-          {/* Logo & Brand */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#6D5CF2] to-[#4F46E5] flex items-center justify-center text-white font-black text-xl shadow-md shadow-[#6D5CF2]/25 ring-2 ring-[#6D5CF2]/30">
-              <Radio className="w-5 h-5 text-white animate-pulse" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-lg sm:text-xl tracking-tight text-[#1D1B3A] dark:text-[#FFFFFF]">
-                  Ekklesphere
+    setTimeout(() => {
+      setSimStep('perimeter');
+      setSimDistance(85);
+    }, 1100);
+
+    setTimeout(() => {
+      setSimStep('verified');
+      setSimDistance(25);
+    }, 2400);
+
+    setTimeout(() => {
+      setIsSimulating(false);
+    }, 4200);
+  };
+
+  const handleContactSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contactForm.name.trim() || !contactForm.email.trim()) {
+      showToast('Please enter your name and email address');
+      return;
+    }
+    showToast(`Thank you ${contactForm.name}! Our sanctuary systems architect will contact you shortly.`);
+    setIsContactModalOpen(false);
+    setContactForm({
+      name: '',
+      email: '',
+      phone: '',
+      church: currentChurchName,
+      congregationSize: '250-500',
+      message: '',
+    });
+  };
+
+  // Computed state for distance slider
+  const getRadarZone = (dist: number) => {
+    if (dist <= 40) return { label: 'Inner Sanctuary (BLE Lock)', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', status: 'Autonomous Attendance Verified' };
+    if (dist <= 100) return { label: 'Campus Perimeter (Geofence)', color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30', status: 'Dwell Timer Active (Anti-Driveby)' };
+    return { label: 'Outside Perimeter', color: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30', status: 'GPS Idle · Zero Battery Consumption' };
+  };
+
+  const currentZone = getRadarZone(simDistance);
+
+  return (
+    <div className="min-h-screen bg-[#0F0F14] text-[#F3F4F6] font-['Plus_Jakarta_Sans',sans-serif] flex flex-col items-center justify-start p-3 sm:p-5 lg:p-7 relative selection:bg-[#1877F2] selection:text-white">
+      
+      {/* Ambient background glow accents */}
+      <div 
+        aria-hidden="true" 
+        className="fixed top-[-150px] left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-gradient-to-b from-[#6D5CF2]/15 via-[#1877F2]/10 to-transparent blur-[140px] pointer-events-none -z-10" 
+      />
+
+      {/* =========================================================================
+          HERO ENCLOSURE: Sleek Framed Viewport (Inspired by the Reference Layout)
+          ========================================================================= */}
+      <div className="w-full max-w-[1380px] rounded-[32px] sm:rounded-[44px] border border-white/20 dark:border-white/15 bg-gradient-to-b from-[#181822] via-[#14141C] to-[#111117] shadow-[0_30px_90px_rgba(0,0,0,0.65)] overflow-hidden relative min-h-[640px] sm:min-h-[720px] lg:min-h-[780px] flex flex-col justify-between">
+        
+        {/* Subtle radial sanctuary spotlight */}
+        <div 
+          aria-hidden="true"
+          className="absolute top-0 right-0 w-[650px] h-[650px] bg-radial from-[#6D5CF2]/12 via-transparent to-transparent pointer-events-none"
+        />
+
+        {/* -----------------------------------------------------------------------
+            TOP FLOATING NAVBAR (Inside the hero frame)
+            ----------------------------------------------------------------------- */}
+        <header className="relative z-20 w-full pt-4 sm:pt-6 px-4 sm:px-8">
+          <div className="w-full max-w-6xl mx-auto rounded-full bg-[#1A1A24]/75 backdrop-blur-xl border border-white/12 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-3 shadow-2xl">
+            
+            {/* Brand Mark: Clean icon + wordmark */}
+            <button
+              onClick={() => {
+                setActiveNav('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="flex items-center gap-2.5 group cursor-pointer focus:outline-none"
+              aria-label="Ekklesphere Home"
+            >
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#1877F2] to-[#6D5CF2] flex items-center justify-center text-white shadow-md shadow-blue-600/30 group-hover:scale-105 transition-transform">
+                <Radio className="w-4 h-4 animate-pulse" />
+              </div>
+              <div className="text-left">
+                <span className="text-sm sm:text-base font-bold tracking-tight text-white block leading-none">
+                  ekklesphere
                 </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#6D5CF2]/10 dark:bg-[#6D5CF2]/20 text-[#6D5CF2] dark:text-[#A594FD] border border-[#6D5CF2]/20">
-                  Sovereign Church OS
+                <span className="text-[10px] text-slate-400 font-mono tracking-wider uppercase block mt-0.5">
+                  sanctuary os
                 </span>
               </div>
-              <span className="hidden sm:block text-[11px] font-medium text-[#7A7E9D] dark:text-[#8D92B5]">
-                Presence Radar & Multi-Tenant Sanctuary Platform
-              </span>
-            </div>
-          </div>
-
-          {/* Center Navigation Links */}
-          <nav className="hidden md:flex items-center gap-7 text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-            <a href="#features" className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors">
-              Platform Features
-            </a>
-            <a href="#showcase" className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors">
-              Hardware & Kiosks
-            </a>
-            <a href="#experiences" className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors">
-              Live Portals
-            </a>
-            <a href="#licensing" className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors">
-              Licensing Tiers
-            </a>
-            <a href="#tenants-network" className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors">
-              Campus Network
-            </a>
-          </nav>
-
-          {/* Right Action Buttons */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Theme Toggle */}
-            <button
-              onClick={toggleTheme}
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer border border-[#E9EBF5] dark:border-white/10"
-              title={theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
-              aria-label="Toggle theme"
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {/* Creator Console Access */}
-            <button
-              onClick={() => setViewMode('creator')}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#E3E0FF] dark:hover:bg-[#28264A] transition-all cursor-pointer border border-[#6D5CF2]/20"
-              title="Open Creator Multi-Tenant Control Panel"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Creators Panel</span>
-              <span className="sm:hidden">Creator</span>
-            </button>
+            {/* Center Navigation Links with active highlight */}
+            <nav className="hidden lg:flex items-center gap-7 text-xs font-medium text-slate-300">
+              <button
+                onClick={() => {
+                  setActiveNav('home');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className={`transition-colors cursor-pointer py-1 relative ${activeNav === 'home' ? 'text-white font-semibold' : 'hover:text-white'}`}
+              >
+                Overview
+                {activeNav === 'home' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1877F2] rounded-full" />}
+              </button>
+              <a
+                href="#radar"
+                onClick={() => setActiveNav('radar')}
+                className={`transition-colors cursor-pointer py-1 relative ${activeNav === 'radar' ? 'text-white font-semibold' : 'hover:text-white'}`}
+              >
+                Sanctuary Radar
+                {activeNav === 'radar' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1877F2] rounded-full" />}
+              </a>
+              <a
+                href="#pillars"
+                onClick={() => setActiveNav('pillars')}
+                className={`transition-colors cursor-pointer py-1 relative ${activeNav === 'pillars' ? 'text-white font-semibold' : 'hover:text-white'}`}
+              >
+                Ministry Pillars
+                {activeNav === 'pillars' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1877F2] rounded-full" />}
+              </a>
+              <a
+                href="#schedule"
+                onClick={() => setActiveNav('schedule')}
+                className={`transition-colors cursor-pointer py-1 relative ${activeNav === 'schedule' ? 'text-white font-semibold' : 'hover:text-white'}`}
+              >
+                Service Schedule
+                {activeNav === 'schedule' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1877F2] rounded-full" />}
+              </a>
+              <a
+                href="#portals"
+                onClick={() => setActiveNav('portals')}
+                className={`transition-colors cursor-pointer py-1 relative ${activeNav === 'portals' ? 'text-white font-semibold' : 'hover:text-white'}`}
+              >
+                Role Portals
+                {activeNav === 'portals' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1877F2] rounded-full" />}
+              </a>
+            </nav>
 
-            {/* Launch App / Enter Portal */}
-            <button
-              onClick={() => setViewMode('app')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-md shadow-[#6D5CF2]/30 transition-all cursor-pointer transform active:scale-95"
-            >
-              <span>Launch Church App</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </header>
+            {/* Right Actions: Portals, Theme, Creator & Contact */}
+            <div className="flex items-center gap-2 sm:gap-2.5">
+              <button
+                onClick={() => setViewMode('creator')}
+                className="hidden xl:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium border border-white/10 transition-colors cursor-pointer"
+                title="Creator & Architecture Console"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Creator</span>
+              </button>
 
-      {/* Main Hero Section */}
-      <section className="relative pt-12 pb-16 sm:pt-20 sm:pb-24 overflow-hidden border-b border-[#E3E5EE] dark:border-[#1E1E3A]">
-        {/* Ambient Gradient Background Glow */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] sm:w-[900px] h-[400px] bg-radial from-[#6D5CF2]/15 via-[#6D5CF2]/5 to-transparent blur-3xl pointer-events-none -z-10" />
+              <button
+                onClick={toggleTheme}
+                className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors border border-white/10 cursor-pointer"
+                aria-label="Toggle theme"
+              >
+                {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-300" /> : <Moon className="w-3.5 h-3.5 text-purple-300" />}
+              </button>
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto space-y-6">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#1F1E3A] border border-[#6D5CF2]/30 text-[#6D5CF2] dark:text-[#A594FD] text-xs font-bold shadow-xs">
-              <Radio className="w-3.5 h-3.5 animate-spin" />
-              <span>Next-Gen Autonomous Presence & Pastoral Care</span>
-            </div>
+              <button
+                onClick={() => setIsContactModalOpen(true)}
+                className="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full border border-white/30 hover:border-white/60 bg-white/5 hover:bg-white/10 text-white text-xs font-medium transition-all shadow-sm cursor-pointer"
+              >
+                Contact
+              </button>
 
-            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black tracking-tight text-[#1D1B3A] dark:text-[#FFFFFF] leading-[1.12]">
-              {landingConfig.heroTitle}
-            </h1>
-
-            <p className="text-sm sm:text-base md:text-lg text-[#666A86] dark:text-[#A0A5C2] leading-relaxed max-w-2xl mx-auto">
-              {landingConfig.heroSubtitle}
-            </p>
-
-            {/* CTA Button Group */}
-            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
               <button
                 onClick={() => setViewMode('app')}
-                className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#6D5CF2] hover:bg-[#5C4BD9] text-white text-sm font-bold shadow-xl shadow-[#6D5CF2]/25 flex items-center justify-center gap-2 transition-all cursor-pointer transform hover:-translate-y-0.5 active:scale-95"
+                className="px-4 sm:px-5 py-1.5 sm:py-2 rounded-full bg-[#1877F2] hover:bg-[#166fe5] text-white text-xs font-semibold tracking-wide shadow-md shadow-blue-600/30 hover:shadow-blue-600/50 transition-all cursor-pointer flex items-center gap-1.5"
               >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Launch Live System</span>
-              </button>
-
-              <button
-                onClick={() => setViewMode('creator')}
-                className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-white dark:bg-[#16162E] hover:bg-slate-50 dark:hover:bg-[#202040] text-[#1D1B3A] dark:text-[#F2F2FA] text-sm font-bold border border-[#E3E5EE] dark:border-[#2C2C50] shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <Sliders className="w-4 h-4 text-[#6D5CF2]" />
-                <span>Control Tenants & Licenses</span>
-              </button>
-            </div>
-
-            {/* Quick Metrics Bar */}
-            <div className="pt-8 grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 max-w-4xl mx-auto">
-              <div className="p-3 sm:p-4 rounded-2xl bg-white/70 dark:bg-[#121226]/80 backdrop-blur-xs border border-[#E3E5EE] dark:border-[#1E1E3A] text-left">
-                <div className="text-xl sm:text-2xl font-black text-[#6D5CF2] dark:text-[#8C7DFF]">
-                  {landingConfig.featuredStats.congregationsServed}
-                </div>
-                <div className="text-[11px] font-semibold text-[#666A86] dark:text-[#8D92B5]">
-                  Congregations Served
-                </div>
-              </div>
-              <div className="p-3 sm:p-4 rounded-2xl bg-white/70 dark:bg-[#121226]/80 backdrop-blur-xs border border-[#E3E5EE] dark:border-[#1E1E3A] text-left">
-                <div className="text-xl sm:text-2xl font-black text-[#6D5CF2] dark:text-[#8C7DFF]">
-                  {landingConfig.featuredStats.checkinsRecorded}
-                </div>
-                <div className="text-[11px] font-semibold text-[#666A86] dark:text-[#8D92B5]">
-                  Check-ins Logged
-                </div>
-              </div>
-              <div className="p-3 sm:p-4 rounded-2xl bg-white/70 dark:bg-[#121226]/80 backdrop-blur-xs border border-[#E3E5EE] dark:border-[#1E1E3A] text-left">
-                <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                  {landingConfig.featuredStats.proximityAccuracy}
-                </div>
-                <div className="text-[11px] font-semibold text-[#666A86] dark:text-[#8D92B5]">
-                  Radar Precision
-                </div>
-              </div>
-              <div className="p-3 sm:p-4 rounded-2xl bg-white/70 dark:bg-[#121226]/80 backdrop-blur-xs border border-[#E3E5EE] dark:border-[#1E1E3A] text-left">
-                <div className="text-xl sm:text-2xl font-black text-[#6D5CF2] dark:text-[#8C7DFF]">
-                  {landingConfig.featuredStats.networkUptime}
-                </div>
-                <div className="text-[11px] font-semibold text-[#666A86] dark:text-[#8D92B5]">
-                  Platform SLA
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Hero Sanctuary Visual Showcase */}
-          <div className="mt-12 sm:mt-16 relative max-w-5xl mx-auto">
-            <div className="relative rounded-3xl overflow-hidden shadow-2xl border-4 border-white dark:border-[#222245] group">
-              <img
-                src={LandingImages.churchHeroGathering}
-                alt="Modern Church Sanctuary Congregation Gathering with warm architectural light"
-                className="w-full h-[280px] sm:h-[460px] md:h-[540px] object-cover transition-transform duration-700 group-hover:scale-102"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent flex flex-col justify-end p-5 sm:p-8 text-white">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-xs font-bold mb-2 backdrop-blur-md">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      Live Sunday Morning Service Radar Active
-                    </div>
-                    <h3 className="text-lg sm:text-2xl font-black tracking-tight text-white drop-shadow-md">
-                      Accra Central Cathedral — Independence Avenue
-                    </h3>
-                    <p className="text-xs sm:text-sm text-slate-200 drop-shadow-xs max-w-xl">
-                      Automated Bluetooth LE beacons and 300m boundary geofencing logging 408 verified members
-                      with zero physical queues.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 bg-white/10 backdrop-blur-md border border-white/20 p-3 rounded-2xl">
-                    <div className="text-center px-2">
-                      <div className="text-lg sm:text-xl font-black text-white font-mono">408</div>
-                      <div className="text-[10px] uppercase font-bold text-slate-300">Present</div>
-                    </div>
-                    <div className="w-px h-8 bg-white/20" />
-                    <div className="text-center px-2">
-                      <div className="text-lg sm:text-xl font-black text-amber-300 font-mono">520</div>
-                      <div className="text-[10px] uppercase font-bold text-slate-300">Expected</div>
-                    </div>
-                    <div className="w-px h-8 bg-white/20" />
-                    <div className="text-center px-2">
-                      <div className="text-lg sm:text-xl font-black text-emerald-400 font-mono">78%</div>
-                      <div className="text-[10px] uppercase font-bold text-slate-300">Capacity</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Feature Spotlight with Generated Images */}
-      <section id="showcase" className="py-16 sm:py-24 bg-white dark:bg-[#0E0E22] transition-colors border-b border-[#E3E5EE] dark:border-[#1E1E3A]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-2xl mx-auto mb-14 space-y-3">
-            <span className="text-xs font-bold uppercase tracking-wider text-[#6D5CF2] dark:text-[#A594FD]">
-              Hardware & In-Person Kiosks
-            </span>
-            <h2 className="text-2xl sm:text-4xl font-black text-[#1D1B3A] dark:text-[#FFFFFF] tracking-tight">
-              {landingConfig.showcaseHeadline}
-            </h2>
-            <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#8D92B5]">
-              Seamless coexistence of high-tech autonomy and warm hospitality at sanctuary doors.
-            </p>
-          </div>
-
-          {/* 2-Column Showcase Cards */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch">
-            {/* Card 1: Foyer Check-in Kiosk */}
-            <div className="rounded-3xl bg-[#F8F9FD] dark:bg-[#14142B] border border-[#E3E5EE] dark:border-[#222242] p-6 sm:p-8 flex flex-col justify-between overflow-hidden group hover:shadow-xl transition-all">
-              <div className="space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#EFEDFF] dark:bg-[#1F1E3A] text-[#6D5CF2] dark:text-[#A594FD] text-xs font-bold">
-                  <Smartphone className="w-3.5 h-3.5" />
-                  <span>Welcome Desk & Door Kiosks</span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-[#1D1B3A] dark:text-[#FFFFFF]">
-                  Sub-Second Door Usher Station
-                </h3>
-                <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A0A5C2] leading-relaxed">
-                  Equip door stewards and ushers with tablet and smartphone check-in terminals. Supports offline
-                  queuing, zero connectivity buffering, instant first-time visitor registration, and dynamic QR
-                  scanning without bottlenecks.
-                </p>
-              </div>
-
-              <div className="mt-6 rounded-2xl overflow-hidden border border-[#E3E5EE] dark:border-[#222242] shadow-md relative">
-                <img
-                  src={LandingImages.mobileCheckinKiosk}
-                  alt="Modern church foyer check-in desk with tablet stand and welcoming door stewards"
-                  className="w-full h-56 sm:h-72 object-cover transition-transform duration-500 group-hover:scale-102"
-                />
-                <div className="absolute bottom-3 left-3 bg-black/75 backdrop-blur-md text-white text-[11px] font-semibold px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Instant Family Check-in & Offline Buffer Queue</span>
-                </div>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-[#E3E5EE] dark:border-[#222242] flex items-center justify-between">
-                <span className="text-xs font-bold text-[#666A86] dark:text-[#8D92B5]">
-                  Door Scanner Station
-                </span>
-                <button
-                  onClick={() => handleLaunchRole('usher')}
-                  className="inline-flex items-center gap-1 text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD] hover:underline cursor-pointer"
-                >
-                  Test Usher Scanner <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Card 2: Pastoral Analytics & Radar */}
-            <div className="rounded-3xl bg-[#F8F9FD] dark:bg-[#14142B] border border-[#E3E5EE] dark:border-[#222242] p-6 sm:p-8 flex flex-col justify-between overflow-hidden group hover:shadow-xl transition-all">
-              <div className="space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
-                  <Radio className="w-3.5 h-3.5" />
-                  <span>Pastoral Care Telemetry</span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-[#1D1B3A] dark:text-[#FFFFFF]">
-                  Real-Time Radar & 28-Field Roster
-                </h3>
-                <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#A0A5C2] leading-relaxed">
-                  Pastoral leaders access real-time presence heatmaps, automatic alerts when congregants miss 2 or
-                  3 consecutive weeks, 28-field verified demographic registry, cell group distribution, and
-                  integrated MTN MoMo / Telecel Cash giving.
-                </p>
-              </div>
-
-              <div className="mt-6 rounded-2xl overflow-hidden border border-[#E3E5EE] dark:border-[#222242] shadow-md relative">
-                <img
-                  src={LandingImages.pastorAnalyticsScreen}
-                  alt="Pastoral attendance analytics screen with geofence telemetry and membership graphs"
-                  className="w-full h-56 sm:h-72 object-cover transition-transform duration-500 group-hover:scale-102"
-                />
-                <div className="absolute bottom-3 left-3 bg-black/75 backdrop-blur-md text-white text-[11px] font-semibold px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                  <span>Proactive Absentee Alerts & Care Workflows</span>
-                </div>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-[#E3E5EE] dark:border-[#222242] flex items-center justify-between">
-                <span className="text-xs font-bold text-[#666A86] dark:text-[#8D92B5]">
-                  Pastor Admin Console
-                </span>
-                <button
-                  onClick={() => handleLaunchRole('admin')}
-                  className="inline-flex items-center gap-1 text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD] hover:underline cursor-pointer"
-                >
-                  Test Pastor Dashboard <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Live Interactive Experience Switcher */}
-      <section id="experiences" className="py-16 sm:py-20 border-b border-[#E3E5EE] dark:border-[#1E1E3A]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-[#6D5CF2] dark:text-[#A594FD]">
-              Instant Role Exploration
-            </span>
-            <h2 className="text-2xl sm:text-3xl font-black text-[#1D1B3A] dark:text-[#FFFFFF]">
-              Experience Every Portal in 1 Click
-            </h2>
-            <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#8D92B5]">
-              Switch roles seamlessly to verify live sanctuary operations, automated geofence radar, and member mobile passes.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* 1. Pastor Admin */}
-            <div
-              onClick={() => handleLaunchRole('admin')}
-              className="p-5 rounded-2xl bg-white dark:bg-[#121226] border border-[#E3E5EE] dark:border-[#222240] hover:border-[#6D5CF2] dark:hover:border-[#6D5CF2] shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div>
-                <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-[#6D5CF2] flex items-center justify-center font-bold mb-3 group-hover:scale-105 transition-transform">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm sm:text-base text-[#1D1B3A] dark:text-white">
-                  Pastor Admin
-                </h4>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-1.5 leading-relaxed">
-                  View real-time church attendance, 28-field roster, automated care tasks, and campus settings.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-[#E3E5EE] dark:border-[#222240] flex items-center justify-between text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD]">
                 <span>Launch Portal</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </div>
-            </div>
-
-            {/* 2. Door Usher */}
-            <div
-              onClick={() => handleLaunchRole('usher')}
-              className="p-5 rounded-2xl bg-white dark:bg-[#121226] border border-[#E3E5EE] dark:border-[#222240] hover:border-[#6D5CF2] dark:hover:border-[#6D5CF2] shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div>
-                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-500 flex items-center justify-center font-bold mb-3 group-hover:scale-105 transition-transform">
-                  <QrCode className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm sm:text-base text-[#1D1B3A] dark:text-white">
-                  Door Usher Scanner
-                </h4>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-1.5 leading-relaxed">
-                  Fast door check-in, offline queue sync, quick search, and first-time guest registration.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-[#E3E5EE] dark:border-[#222240] flex items-center justify-between text-xs font-bold text-blue-500">
-                <span>Launch Scanner</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </div>
-            </div>
-
-            {/* 3. Member Pass */}
-            <div
-              onClick={() => handleLaunchRole('member')}
-              className="p-5 rounded-2xl bg-white dark:bg-[#121226] border border-[#E3E5EE] dark:border-[#222240] hover:border-[#6D5CF2] dark:hover:border-[#6D5CF2] shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div>
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-500 flex items-center justify-center font-bold mb-3 group-hover:scale-105 transition-transform">
-                  <Smartphone className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm sm:text-base text-[#1D1B3A] dark:text-white">
-                  Member Mobile Pass
-                </h4>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-1.5 leading-relaxed">
-                  Personal QR pass, cellular geofence auto check-in, MTN MoMo giving, and event RSVP.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-[#E3E5EE] dark:border-[#222240] flex items-center justify-between text-xs font-bold text-emerald-500">
-                <span>Launch Pass</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </div>
-            </div>
-
-            {/* 4. Creator Console */}
-            <div
-              onClick={() => setViewMode('creator')}
-              className="p-5 rounded-2xl bg-gradient-to-br from-[#6D5CF2]/10 to-[#4F46E5]/10 border-2 border-[#6D5CF2]/40 dark:border-[#6D5CF2]/50 hover:border-[#6D5CF2] shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-[#6D5CF2] text-white text-[9px] font-extrabold uppercase">
-                New
-              </div>
-              <div>
-                <div className="w-10 h-10 rounded-xl bg-[#6D5CF2] text-white flex items-center justify-center font-bold mb-3 group-hover:scale-105 transition-transform shadow-md shadow-[#6D5CF2]/30">
-                  <Sliders className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm sm:text-base text-[#1D1B3A] dark:text-white">
-                  Creators Platform
-                </h4>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-1.5 leading-relaxed">
-                  Control all church tenants, generate license keys, configure landing CMS, and view global quotas.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-[#6D5CF2]/20 flex items-center justify-between text-xs font-bold text-[#6D5CF2] dark:text-[#A594FD]">
-                <span>Open Console</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Licensing Tiers Comparison */}
-      <section id="licensing" className="py-16 sm:py-24 bg-white dark:bg-[#0E0E22] transition-colors border-b border-[#E3E5EE] dark:border-[#1E1E3A]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-2xl mx-auto mb-14 space-y-3">
-            <span className="text-xs font-bold uppercase tracking-wider text-[#6D5CF2] dark:text-[#A594FD]">
-              Flexible Church Licensing
-            </span>
-            <h2 className="text-2xl sm:text-4xl font-black text-[#1D1B3A] dark:text-[#FFFFFF] tracking-tight">
-              Transparent Plans for Every Congregation Size
-            </h2>
-            <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#8D92B5]">
-              Managed and provisioned dynamically inside the Creator Control Panel.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch max-w-6xl mx-auto">
-            {/* Grace Starter */}
-            <div className="p-7 rounded-3xl bg-[#F8F9FD] dark:bg-[#14142B] border border-[#E3E5EE] dark:border-[#222242] flex flex-col justify-between hover:shadow-lg transition-all">
-              <div>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-lg text-[#1D1B3A] dark:text-white">Grace Starter</h3>
-                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-200 dark:bg-white/10 text-[#666A86] dark:text-slate-300">
-                    Single Campus
-                  </span>
-                </div>
-                <div className="mt-4 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-black text-[#1D1B3A] dark:text-white">$39</span>
-                  <span className="text-xs text-[#666A86] dark:text-[#8D92B5]">/ month</span>
-                </div>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-2">
-                  Ideal for emerging churches and community fellowship plants.
-                </p>
-
-                <div className="mt-6 space-y-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Up to 300 Registered Members</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Usher Door Scanner & QR Pass</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>28-Field Member Directory</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>MoMo & Card Giving Portal</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[#9A9EB8] line-through">
-                    <CheckCircle2 className="w-4 h-4 text-slate-300 dark:text-slate-600 shrink-0" />
-                    <span>BLE Proximity Radar</span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setViewMode('creator')}
-                className="w-full mt-8 py-2.5 rounded-xl bg-white dark:bg-white/5 border border-[#E3E5EE] dark:border-white/10 font-bold text-xs text-[#1D1B3A] dark:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                Provision Starter License
-              </button>
-            </div>
-
-            {/* Ministry Pro (Featured) */}
-            <div className="p-7 rounded-3xl bg-white dark:bg-[#161633] border-2 border-[#6D5CF2] shadow-2xl shadow-[#6D5CF2]/15 flex flex-col justify-between relative">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-[#6D5CF2] text-white text-[10px] font-extrabold uppercase tracking-wider shadow-sm">
-                Most Popular
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-lg text-[#1D1B3A] dark:text-white">Ministry Pro</h3>
-                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-[#EFEDFF] dark:bg-[#6D5CF2]/20 text-[#6D5CF2] dark:text-[#A594FD]">
-                    Up to 3 Campuses
-                  </span>
-                </div>
-                <div className="mt-4 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-black text-[#6D5CF2] dark:text-[#A594FD]">$99</span>
-                  <span className="text-xs text-[#666A86] dark:text-[#8D92B5]">/ month</span>
-                </div>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-2">
-                  Designed for growing churches requiring automated attendance radar.
-                </p>
-
-                <div className="mt-6 space-y-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Up to 1,500 Registered Members</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>BLE Proximity Radar (Sub-Meter)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Automated Absentee Care Triggers</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>SMS Gateway (Hubtel) Integration</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Custom Whitelabel Subdomain</span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setViewMode('creator')}
-                className="w-full mt-8 py-2.5 rounded-xl bg-[#6D5CF2] text-white font-bold text-xs hover:bg-[#5b4be0] shadow-md shadow-[#6D5CF2]/30 transition-all cursor-pointer"
-              >
-                Provision Ministry Pro
-              </button>
-            </div>
-
-            {/* Cathedral Enterprise */}
-            <div className="p-7 rounded-3xl bg-[#F8F9FD] dark:bg-[#14142B] border border-[#E3E5EE] dark:border-[#222242] flex flex-col justify-between hover:shadow-lg transition-all">
-              <div>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-lg text-[#1D1B3A] dark:text-white">Cathedral Enterprise</h3>
-                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300">
-                    Unlimited Campuses
-                  </span>
-                </div>
-                <div className="mt-4 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-black text-[#1D1B3A] dark:text-white">$199</span>
-                  <span className="text-xs text-[#666A86] dark:text-[#8D92B5]">/ month</span>
-                </div>
-                <p className="text-xs text-[#666A86] dark:text-[#8D92B5] mt-2">
-                  For mega-churches, dioceses, and multi-branch denominations.
-                </p>
-
-                <div className="mt-6 space-y-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Unlimited Members & Campuses</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Biometric Check-in Verification</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>GDPR & Data Protection Privacy Vault</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Immutable Audit Log Stream</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>Dedicated SLA & Database Partition</span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setViewMode('creator')}
-                className="w-full mt-8 py-2.5 rounded-xl bg-white dark:bg-white/5 border border-[#E3E5EE] dark:border-white/10 font-bold text-xs text-[#1D1B3A] dark:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                Provision Cathedral License
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
-        </div>
-      </section>
+        </header>
 
-      {/* Campus Tenants Network Showcase */}
-      <section id="tenants-network" className="py-16 sm:py-20 border-b border-[#E3E5EE] dark:border-[#1E1E3A]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-4 mb-8">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-[#6D5CF2] dark:text-[#A594FD]">
-                Active Congregations
+        {/* -----------------------------------------------------------------------
+            HERO MAIN SECTION: Split Layout with Powerful Copy & Live Sanctuary HUD
+            ----------------------------------------------------------------------- */}
+        <div className="relative z-10 w-full px-6 sm:px-10 lg:px-16 pt-8 sm:pt-12 pb-8 sm:pb-12 grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-8 items-center">
+          
+          {/* Left Hero Column: Compelling Ministry Typography */}
+          <div className="lg:col-span-7 space-y-6 max-w-2xl">
+            
+            {/* Reverent announcement kicker */}
+            <div className="inline-flex items-center gap-2 text-xs font-medium text-slate-300 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Autonomous Proximity Radar v2.4 Active</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-slate-400">Ghana Act 843 Compliant</span>
+            </div>
+
+            {/* Giant Bold Headline */}
+            <h1 className="text-4xl sm:text-6xl lg:text-[72px] font-bold text-white tracking-tight leading-[1.04]">
+              Presence without<br />
+              <span className="font-['Instrument_Serif',serif] italic font-normal text-transparent bg-clip-text bg-gradient-to-r from-blue-300 via-indigo-200 to-purple-300">
+                effortless grace.
               </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-[#1D1B3A] dark:text-[#FFFFFF] mt-1">
-                Connected Church Campuses
-              </h2>
-              <p className="text-xs sm:text-sm text-[#666A86] dark:text-[#8D92B5]">
-                {activeTenantsCount} church tenants configured with live licenses and geofence radars.
-              </p>
+            </h1>
+
+            {/* Subtitle with Clear Ministry Mission */}
+            <p className="text-sm sm:text-base text-slate-300 max-w-xl leading-relaxed font-normal">
+              Silent Bluetooth beacon & GPS boundary attendance, 0.4-second door steward headcount, proactive pastoral retention, and mobile money giving — engineered for vibrant congregations.
+            </p>
+
+            {/* Primary & Secondary Action Buttons (matching the reference styling) */}
+            <div className="pt-2 flex flex-wrap items-center gap-3 sm:gap-4">
+              <button
+                onClick={() => setViewMode('app')}
+                className="px-6 sm:px-8 py-3.5 rounded-full bg-[#1877F2] hover:bg-[#166fe5] text-white text-xs sm:text-sm font-semibold tracking-wide shadow-xl shadow-blue-600/35 hover:shadow-blue-600/50 transition-all cursor-pointer transform hover:-translate-y-0.5 active:scale-95 inline-flex items-center gap-2"
+              >
+                <span>Launch Sanctuary Portal</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={handleRunRadarSimulation}
+                className="px-6 sm:px-7 py-3.5 rounded-full border border-white/30 hover:border-white/60 bg-white/5 hover:bg-white/10 text-white text-xs sm:text-sm font-semibold tracking-wide backdrop-blur-sm transition-all cursor-pointer transform hover:-translate-y-0.5 active:scale-95 inline-flex items-center gap-2"
+              >
+                <Radio className={`w-4 h-4 ${isSimulating ? 'text-emerald-400 animate-spin' : 'text-blue-400'}`} />
+                <span>{isSimulating ? 'Simulating Arrival...' : 'Experience Live Radar'}</span>
+              </button>
+
+              <button
+                onClick={() => setViewMode('creator')}
+                className="px-4 py-3.5 rounded-full text-slate-400 hover:text-white text-xs font-semibold tracking-wide transition-colors cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Creator Console</span>
+              </button>
             </div>
 
-            <button
-              onClick={() => setViewMode('creator')}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#E3E0FF] transition-all cursor-pointer"
-            >
-              <Building2 className="w-3.5 h-3.5" />
-              <span>Add Church in Creator Panel</span>
-            </button>
+            {/* Quick stats micro-strip */}
+            <div className="pt-4 flex items-center gap-6 sm:gap-8 text-xs border-t border-white/10 text-slate-400">
+              <div>
+                <span className="block font-mono tabular-nums text-white font-bold text-sm sm:text-base">99.8%</span>
+                <span className="text-[11px] text-slate-400">Radar Accuracy</span>
+              </div>
+              <div className="h-6 w-px bg-white/10" />
+              <div>
+                <span className="block font-mono tabular-nums text-white font-bold text-sm sm:text-base">&lt; 0.4s</span>
+                <span className="text-[11px] text-slate-400">Door Scan Speed</span>
+              </div>
+              <div className="h-6 w-px bg-white/10" />
+              <div>
+                <span className="block font-mono tabular-nums text-emerald-400 font-bold text-sm sm:text-base">0 Wasted Mins</span>
+                <span className="text-[11px] text-slate-400">Manual Headcount</span>
+              </div>
+            </div>
+
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {tenants.map((tenant) => (
-              <div
-                key={tenant.id}
-                className="p-5 rounded-2xl bg-white dark:bg-[#121226] border border-[#E3E5EE] dark:border-[#222240] hover:shadow-md transition-all flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
-                        tenant.status === 'active'
-                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                          : tenant.status === 'trial'
-                          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                          : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                      }`}
-                    >
-                      {tenant.status}
-                    </span>
-                    <span className="text-[10px] font-mono text-[#666A86] dark:text-[#8D92B5]">
-                      {tenant.campusCode}
-                    </span>
+          {/* Right Hero Column: Interactive Sanctuary Presence Card & Radar HUD */}
+          <div className="lg:col-span-5 relative">
+            
+            {/* Glowing backdrop halo */}
+            <div 
+              aria-hidden="true" 
+              className="absolute inset-0 bg-gradient-to-tr from-[#1877F2]/20 via-[#6D5CF2]/15 to-transparent rounded-3xl blur-2xl -z-10" 
+            />
+
+            {/* The Sanctuary Presence HUD Card */}
+            <div className="w-full rounded-3xl bg-[#171722]/90 border border-white/15 p-5 sm:p-6 shadow-2xl backdrop-blur-md space-y-5">
+              
+              {/* Header: Campus location & Live Status */}
+              <div className="flex items-center justify-between pb-4 border-b border-white/10">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                    <MapPin className="w-4 h-4" />
                   </div>
-
-                  <h4 className="font-extrabold text-base text-[#1D1B3A] dark:text-white mt-2">
-                    {tenant.name}
-                  </h4>
-                  <p className="text-xs text-[#666A86] dark:text-[#8D92B5]">
-                    {tenant.city}, {tenant.country}
-                  </p>
-                  <p className="text-[11px] text-[#7A7E9D] dark:text-[#7D82A5] mt-1">
-                    Senior Pastor: <span className="font-semibold">{tenant.seniorPastor}</span>
-                  </p>
-
-                  <div className="mt-4 pt-3 border-t border-[#E3E5EE] dark:border-[#222240] flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-bold text-[#1D1B3A] dark:text-white">{tenant.memberCount}</span>
-                      <span className="text-[#666A86] dark:text-[#8D92B5]"> / {tenant.maxCapacity} seats</span>
-                    </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/5 text-[#666A86] dark:text-slate-300">
-                      {tenant.licenseTier.replace('_', ' ')}
+                  <div>
+                    <h4 className="text-sm font-bold text-white leading-tight">{currentChurchName}</h4>
+                    <span className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                      <span>{currentCampus}</span>
+                      <span>·</span>
+                      <span className="font-mono text-slate-500">{currentGps}</span>
                     </span>
                   </div>
                 </div>
+                <div className="text-right">
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>Live Service</span>
+                  </div>
+                  <span className="block text-[10px] text-slate-400 font-mono mt-0.5 tabular-nums">
+                    {services[0]?.startsAt || '08:00'} - {services[0]?.endsAt || '10:30'}
+                  </span>
+                </div>
+              </div>
 
-                <div className="mt-4 pt-2 flex items-center gap-2">
+              {/* Interactive Radar Visualizer Screen */}
+              <div className="relative h-48 sm:h-52 w-full rounded-2xl bg-black/40 border border-white/10 overflow-hidden flex items-center justify-center">
+                
+                {/* Concentric radar rings */}
+                <div className="absolute w-44 h-44 rounded-full border border-blue-500/15" />
+                <div className="absolute w-32 h-32 rounded-full border border-blue-500/25" />
+                <div className="absolute w-20 h-20 rounded-full border border-emerald-500/35 bg-emerald-500/5 animate-pulse" />
+                
+                {/* Radar sweeping line */}
+                <div 
+                  className="absolute inset-0 origin-center pointer-events-none animate-spin"
+                  style={{ animationDuration: '4s' }}
+                >
+                  <div className="w-1/2 h-0.5 bg-gradient-to-r from-transparent to-[#1877F2]/80" />
+                </div>
+
+                {/* Sanctuary Center Icon */}
+                <div className="relative z-10 w-9 h-9 rounded-full bg-gradient-to-tr from-[#1877F2] to-[#6D5CF2] text-white flex items-center justify-center shadow-lg shadow-blue-500/40">
+                  <Radio className="w-4 h-4" />
+                </div>
+
+                {/* Live Member blips */}
+                <div className="absolute top-10 left-12 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/70 border border-white/10 text-[10px] text-white backdrop-blur-sm animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <span>Ps. David Osei</span>
+                </div>
+
+                <div className="absolute bottom-10 right-10 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/70 border border-white/10 text-[10px] text-white backdrop-blur-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                  <span>Grace Asante</span>
+                </div>
+
+                {/* Dynamic simulated walking worshiper */}
+                <div 
+                  className="absolute transition-all duration-700 flex items-center gap-1 px-2 py-1 rounded-md bg-white/10 border border-emerald-500 text-[10px] text-white backdrop-blur-md shadow-lg"
+                  style={{
+                    top: simDistance <= 40 ? '48%' : simDistance <= 100 ? '25%' : '12%',
+                    left: simDistance <= 40 ? '55%' : simDistance <= 100 ? '70%' : '80%',
+                  }}
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="font-semibold">You ({simDistance}m)</span>
+                </div>
+
+                {/* Bottom status bar inside radar */}
+                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[10px] font-mono text-slate-400 px-2 py-1 rounded bg-black/60 border border-white/5">
+                  <span>BLE Beacons: 4 Active</span>
+                  <span className="text-emerald-400">Lock: 100% Signal</span>
+                </div>
+              </div>
+
+              {/* Live Attendance Ticker & Simulation Result */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400">Gathered Congregation</span>
+                  <span className="font-mono tabular-nums text-white font-bold text-sm">
+                    {members.length > 0 ? members.length * 12 + 184 : '842'} worshipers
+                  </span>
+                </div>
+
+                <div className={`p-3 rounded-xl border ${currentZone.border} ${currentZone.bg} flex items-center justify-between transition-all`}>
+                  <div className="flex items-center gap-2">
+                    <Signal className={`w-4 h-4 ${currentZone.color}`} />
+                    <div>
+                      <span className={`text-xs font-bold block ${currentZone.color}`}>
+                        {currentZone.label}
+                      </span>
+                      <span className="text-[10px] text-slate-300 block">
+                        {currentZone.status}
+                      </span>
+                    </div>
+                  </div>
                   <button
-                    onClick={() => {
-                      // Impersonate or launch app as this church
-                      setViewMode('app');
-                    }}
-                    className="flex-1 py-1.5 rounded-lg bg-[#EFEDFF] dark:bg-[#1E1C38] text-[#6D5CF2] dark:text-[#A594FD] hover:bg-[#6D5CF2] hover:text-white text-xs font-bold transition-all cursor-pointer text-center"
+                    onClick={handleRunRadarSimulation}
+                    disabled={isSimulating}
+                    className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[10px] font-bold transition-colors cursor-pointer"
                   >
-                    Enter Church App
+                    {isSimulating ? 'Verifying...' : 'Simulate'}
                   </button>
                 </div>
               </div>
-            ))}
+
+              {/* Quick Persona Launch Buttons */}
+              <div className="pt-2 border-t border-white/10 grid grid-cols-3 gap-2 text-center">
+                <button
+                  onClick={() => handleLaunchRole('admin')}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[11px] font-semibold transition-all cursor-pointer group"
+                >
+                  <span className="block text-slate-400 text-[9px] uppercase tracking-wider group-hover:text-blue-400">Pastor</span>
+                  <span>Dashboard</span>
+                </button>
+                <button
+                  onClick={() => handleLaunchRole('usher')}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[11px] font-semibold transition-all cursor-pointer group"
+                >
+                  <span className="block text-slate-400 text-[9px] uppercase tracking-wider group-hover:text-amber-400">Usher</span>
+                  <span>Door Kiosk</span>
+                </button>
+                <button
+                  onClick={() => handleLaunchRole('member')}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[11px] font-semibold transition-all cursor-pointer group"
+                >
+                  <span className="block text-slate-400 text-[9px] uppercase tracking-wider group-hover:text-emerald-400">Member</span>
+                  <span>Digital Pass</span>
+                </button>
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* -----------------------------------------------------------------------
+            BOTTOM BRAND / TRUST DIOCESES ROW (Matching Reference Monochromatic Row)
+            ----------------------------------------------------------------------- */}
+        <div className="relative z-10 w-full px-6 sm:px-12 lg:px-16 pb-6 sm:pb-8 pt-4 border-t border-white/5 bg-black/20">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-slate-500 shrink-0">
+              Trusted by 450+ Dioceses & Congregations:
+            </span>
+            <div className="flex flex-wrap items-center justify-center sm:justify-end gap-6 sm:gap-10 text-xs font-semibold tracking-wide text-white/40">
+              <span className="hover:text-white/80 transition-colors">PIWC Kwadaso</span>
+              <span className="hover:text-white/80 transition-colors">Pentecost International</span>
+              <span className="hover:text-white/80 transition-colors">Grace Cathedral Accra</span>
+              <span className="hover:text-white/80 transition-colors">Royal Sanctuary</span>
+              <span className="hover:text-white/80 transition-colors">Methodist Synod</span>
+              <span className="hover:text-white/80 transition-colors">Covenant Chapel</span>
+            </div>
           </div>
         </div>
-      </section>
 
-      {/* Creator Platform Callout Footer Banner */}
-      <section className="py-12 bg-gradient-to-r from-[#1D1B3A] via-[#24214D] to-[#121124] text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="space-y-2 text-center md:text-left">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/10 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider">
-              <Key className="w-3 h-3" /> System Administrators & Platform Owners
-            </div>
-            <h3 className="text-xl sm:text-2xl font-black">
-              Manage Multi-Tenant Architecture & License Distribution
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
-              Add new church branches, generate 256-bit license keys, tweak geofence perimeters, and update live
-              landing page announcements directly in the Creators Panel.
+      </div>
+
+      {/* =========================================================================
+          SECTION 2: INTERACTIVE RADAR DEEP DIVE & SIMULATOR
+          ========================================================================= */}
+      <section id="radar" className="w-full max-w-[1380px] mt-16 sm:mt-24 space-y-8">
+        
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 px-2">
+          <div className="space-y-2 max-w-2xl">
+            <span className="text-xs font-bold uppercase tracking-widest text-[#1877F2]">
+              Sanctuary Proximity Architecture
+            </span>
+            <h2 className="text-3xl sm:text-5xl font-bold text-white tracking-tight">
+              Attendance that happens silently,<br />
+              without touching a phone.
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400 leading-relaxed pt-1">
+              Dual-lock Bluetooth Low Energy beacons and GhanaPost GPS coordinates verify worshipers as they enter the sanctuary. Our intelligent 5-minute dwell timer filters out passing traffic and cars driving on adjacent roads.
             </p>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
             <button
-              onClick={() => setViewMode('creator')}
-              className="px-5 py-3 rounded-xl bg-white text-[#1D1B3A] hover:bg-slate-100 text-xs font-black shadow-lg transition-all cursor-pointer flex items-center gap-2"
+              onClick={() => handleLaunchRole('admin')}
+              className="px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/15 transition-all cursor-pointer flex items-center gap-2"
             >
-              <Sliders className="w-4 h-4 text-[#6D5CF2]" />
-              <span>Open Creators Panel</span>
+              <span>View Live Radar Admin</span>
+              <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+
+        {/* Interactive Distance Playground Card */}
+        <div className="p-6 sm:p-10 rounded-[32px] bg-[#171720] border border-white/10 shadow-2xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          
+          <div className="lg:col-span-5 space-y-6">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-blue-400">
+              Interactive Proximity Simulator
+            </span>
+            <h3 className="text-xl sm:text-2xl font-bold text-white">
+              Drag distance to experience the perimeter transition
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Move the slider from 300 meters away to 15 meters inside the sanctuary to see how Ekklesphere transitions states from idle, to perimeter dwell, to verified check-in.
+            </p>
+
+            {/* Slider Control */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between text-xs font-semibold">
+                <span className="text-slate-400">Current Distance to Altar</span>
+                <span className="font-mono tabular-nums text-white bg-white/10 px-2 py-0.5 rounded text-sm">
+                  {simDistance} meters
+                </span>
+              </div>
+              <input
+                type="range"
+                min="10"
+                max="300"
+                value={simDistance}
+                onChange={(e) => setSimDistance(Number(e.target.value))}
+                className="w-full accent-[#1877F2] cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                <span>10m (Inner Altar)</span>
+                <span>100m (Campus Gate)</span>
+                <span>300m (Outside City)</span>
+              </div>
+            </div>
+
+            {/* Resulting state card */}
+            <div className={`p-4 rounded-2xl border ${currentZone.border} ${currentZone.bg} space-y-2`}>
+              <div className="flex items-center justify-between">
+                <span className={`text-xs font-bold uppercase tracking-wider ${currentZone.color}`}>
+                  {currentZone.label}
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {simDistance <= 40 ? 'State: 03_VERIFIED' : simDistance <= 100 ? 'State: 02_DWELL' : 'State: 01_IDLE'}
+                </span>
+              </div>
+              <p className="text-xs text-white font-medium leading-relaxed">
+                {currentZone.status}
+              </p>
+            </div>
+          </div>
+
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            
+            {/* Step 1 */}
+            <div className={`p-5 rounded-2xl border transition-all ${simDistance > 100 ? 'border-blue-500/50 bg-blue-500/10' : 'border-white/10 bg-black/30'}`}>
+              <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-slate-300 font-mono text-xs font-bold mb-3">
+                01
+              </div>
+              <h4 className="text-sm font-bold text-white mb-1">Dormant Outside</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                When outside 100m, GPS is sleeping. Zero battery drain occurs on member mobile devices.
+              </p>
+            </div>
+
+            {/* Step 2 */}
+            <div className={`p-5 rounded-2xl border transition-all ${simDistance <= 100 && simDistance > 40 ? 'border-amber-500/50 bg-amber-500/10' : 'border-white/10 bg-black/30'}`}>
+              <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-slate-300 font-mono text-xs font-bold mb-3">
+                02
+              </div>
+              <h4 className="text-sm font-bold text-white mb-1">Geofence Dwell</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Entering 100m boundary activates 5-minute dwell timer to eliminate drive-by vehicle false positives.
+              </p>
+            </div>
+
+            {/* Step 3 */}
+            <div className={`p-5 rounded-2xl border transition-all ${simDistance <= 40 ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-black/30'}`}>
+              <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-slate-300 font-mono text-xs font-bold mb-3">
+                03
+              </div>
+              <h4 className="text-sm font-bold text-white mb-1">BLE Dual-Lock</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Door beacons lock attendance record instantly and push live headcount to pastoral dashboard.
+              </p>
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* =========================================================================
+          SECTION 3: FOUR MINISTRY PILLARS (Anti-Slop Grid)
+          ========================================================================= */}
+      <section id="pillars" className="w-full max-w-[1380px] mt-16 sm:mt-24 space-y-8">
+        
+        <div className="text-center max-w-2xl mx-auto space-y-2">
+          <span className="text-xs font-bold uppercase tracking-widest text-[#1877F2]">
+            Architectural Excellence
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
+            Four Pillars Engineered for Modern Sanctuaries
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-400">
+            From arrival to follow-up, every Sunday morning touchpoint operates with speed and reverence.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+          
+          {/* Pillar 1 */}
+          <div className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-blue-500/40 transition-all flex flex-col justify-between group shadow-xl">
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-blue-500/15 text-[#1877F2] flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <Radio className="w-6 h-6" />
+              </div>
+              <span className="text-[10px] font-mono text-blue-400 uppercase tracking-widest block mb-1">Pillar 01</span>
+              <h3 className="text-lg font-bold text-white mb-2">Autonomous Boundary Radar</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Zero app interaction required. Bluetooth Low Energy beacons combined with GhanaPost GPS coordinates verify presence reliably without manual roster lines.
+              </p>
+            </div>
+            <div className="pt-6 mt-6 border-t border-white/5 flex items-center justify-between text-xs">
+              <span className="text-slate-400">GhanaPost GPS</span>
+              <span className="font-semibold text-emerald-400">Verified Radar</span>
+            </div>
+          </div>
+
+          {/* Pillar 2 */}
+          <div className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-amber-500/40 transition-all flex flex-col justify-between group shadow-xl">
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <QrCode className="w-6 h-6" />
+              </div>
+              <span className="text-[10px] font-mono text-amber-400 uppercase tracking-widest block mb-1">Pillar 02</span>
+              <h3 className="text-lg font-bold text-white mb-2">High-Speed Door Usher Station</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Offline-buffered door steward terminal. Instant camera QR scan in &lt; 0.4 seconds, 1-tap manual roster search, and frictionless first-time visitor intake.
+              </p>
+            </div>
+            <div className="pt-6 mt-6 border-t border-white/5 flex items-center justify-between text-xs">
+              <span className="text-slate-400">Offline First</span>
+              <span className="font-semibold text-amber-400">Zero Network Lag</span>
+            </div>
+          </div>
+
+          {/* Pillar 3 */}
+          <div className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-rose-500/40 transition-all flex flex-col justify-between group shadow-xl">
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/15 text-rose-400 flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <HeartHandshake className="w-6 h-6" />
+              </div>
+              <span className="text-[10px] font-mono text-rose-400 uppercase tracking-widest block mb-1">Pillar 03</span>
+              <h3 className="text-lg font-bold text-white mb-2">Proactive Pastoral Care</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Automated absence triggers detect members missing 2 or 3 consecutive Sundays, immediately assigning pastoral visitation and cell leader care tasks.
+              </p>
+            </div>
+            <div className="pt-6 mt-6 border-t border-white/5 flex items-center justify-between text-xs">
+              <span className="text-slate-400">Care Retention</span>
+              <span className="font-semibold text-rose-400">No One Drifts</span>
+            </div>
+          </div>
+
+          {/* Pillar 4 */}
+          <div className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-emerald-500/40 transition-all flex flex-col justify-between group shadow-xl">
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <Smartphone className="w-6 h-6" />
+              </div>
+              <span className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest block mb-1">Pillar 04</span>
+              <h3 className="text-lg font-bold text-white mb-2">Member Pass & MoMo Giving</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Congregation digital pass with upcoming service schedules, end-time countdowns, prayer request submission, and seamless MTN MoMo & Telecel Cash tithing.
+              </p>
+            </div>
+            <div className="pt-6 mt-6 border-t border-white/5 flex items-center justify-between text-xs">
+              <span className="text-slate-400">Mobile Money</span>
+              <span className="font-semibold text-emerald-400">Instant Receipts</span>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* =========================================================================
+          SECTION 4: SERVICE SCHEDULE SHOWCASE (Highlighting End Times & Real Schedule)
+          ========================================================================= */}
+      <section id="schedule" className="w-full max-w-[1380px] mt-16 sm:mt-24 space-y-6">
+        
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-widest text-[#1877F2]">
+              Real-Time Ministry Calendar
+            </span>
+            <h2 className="text-2xl sm:text-4xl font-bold text-white tracking-tight mt-1">
+              Service Schedules with Verified Start & End Times
+            </h2>
+          </div>
+          <button
+            onClick={() => handleLaunchRole('admin')}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-[#1877F2] hover:underline cursor-pointer"
+          >
+            <span>Manage Church Services</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {services.slice(0, 3).map((srv, idx) => (
+            <div 
+              key={srv.id || idx}
+              className="p-6 rounded-3xl bg-[#171720] border border-white/10 hover:border-white/20 transition-all space-y-4 shadow-xl"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-blue-400" />
+                  <span className="text-xs font-mono text-slate-400">{srv.date || 'Sunday, Nov 02'}</span>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  srv.status === 'closed'
+                    ? 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+                    : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                }`}>
+                  {srv.status === 'closed' ? 'Archived' : 'Active Service'}
+                </span>
+              </div>
+
+              <div>
+                <h4 className="text-base font-bold text-white leading-tight">{srv.name}</h4>
+                <div className="mt-2 flex items-center gap-2 text-xs font-mono text-slate-300">
+                  <Clock className="w-3.5 h-3.5 text-[#1877F2]" />
+                  <span>{srv.startsAt}</span>
+                  <span className="text-slate-500">→</span>
+                  <span className="text-amber-400 font-bold">{srv.endsAt || '10:30'}</span>
+                  <span className="text-slate-500 text-[10px]">(End Time)</span>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-white/5 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Target Attendance</span>
+                <span className="font-mono tabular-nums text-white font-semibold">
+                  {srv.expectedAttendance || 142} worshipers
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+      </section>
+
+      {/* =========================================================================
+          SECTION 5: 1-CLICK INTERACTIVE ROLE PORTALS
+          ========================================================================= */}
+      <section id="portals" className="w-full max-w-[1380px] mt-16 sm:mt-24 space-y-8">
+        
+        <div className="text-center max-w-xl mx-auto space-y-2">
+          <span className="text-xs font-bold uppercase tracking-widest text-[#1877F2]">
+            Role-Based Experience
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
+            Experience Every Portal in 1 Click
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-400">
+            Switch between pastoral leadership, door usher stations, and member passes immediately.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+          
+          {/* Pastor / Leadership */}
+          <div
+            onClick={() => handleLaunchRole('admin')}
+            className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-[#1877F2] shadow-xl transition-all cursor-pointer group flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-blue-500/15 text-[#1877F2] flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <h4 className="font-bold text-lg text-white">Pastor & Leadership Admin</h4>
+              <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
+                Full attendance intelligence, demographic roster, service end-times configuration, and automated pastoral care queues for missing worshipers.
+              </p>
+            </div>
+            <div className="mt-8 flex items-center gap-2 text-xs font-bold text-[#1877F2]">
+              <span>Launch Pastor Portal</span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+
+          {/* Door Usher */}
+          <div
+            onClick={() => handleLaunchRole('usher')}
+            className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-amber-500 shadow-xl transition-all cursor-pointer group flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <QrCode className="w-6 h-6" />
+              </div>
+              <h4 className="font-bold text-lg text-white">Door Steward Headcount</h4>
+              <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
+                Ultra-fast entrance terminal with camera QR pass scanning, manual roster tap search, offline local buffering, and rapid first-time visitor onboarding.
+              </p>
+            </div>
+            <div className="mt-8 flex items-center gap-2 text-xs font-bold text-amber-400">
+              <span>Launch Usher Kiosk</span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+
+          {/* Member Portal */}
+          <div
+            onClick={() => handleLaunchRole('member')}
+            className="p-7 rounded-3xl bg-[#171720] border border-white/10 hover:border-emerald-500 shadow-xl transition-all cursor-pointer group flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold mb-5 group-hover:scale-105 transition-transform">
+                <Smartphone className="w-6 h-6" />
+              </div>
+              <h4 className="font-bold text-lg text-white">Member Digital Pass</h4>
+              <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
+                Personal congregation mobile wallet pass, live proximity radar status, upcoming services RSVP, and confidential MoMo tithe receipts.
+              </p>
+            </div>
+            <div className="mt-8 flex items-center gap-2 text-xs font-bold text-emerald-400">
+              <span>Launch Member Pass</span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* =========================================================================
+          SECTION 6: ACT 843 SOVEREIGN DATA PROTECTION
+          ========================================================================= */}
+      <section className="w-full max-w-[1380px] mt-16 sm:mt-24 p-8 sm:p-12 rounded-[32px] sm:rounded-[40px] bg-gradient-to-r from-[#171722] via-[#14141E] to-[#12121A] border border-white/10 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-8">
+        <div className="space-y-4 max-w-2xl">
+          <div className="inline-flex items-center gap-2 text-[11px] font-mono text-emerald-400 uppercase tracking-wider bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
+            <Lock className="w-3.5 h-3.5" />
+            <span>Sovereign Data Governance</span>
+          </div>
+          <h2 className="text-2xl sm:text-4xl font-bold text-white tracking-tight">
+            Built for Strict Act 843 Compliance & Offline Resilience
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+            All 28 membership fields, proximity coordinates, and giving records are secured under AES-256 encryption. If internet connectivity drops during Sunday worship, door headcount buffers offline in local storage and auto-syncs when online.
+          </p>
+          <div className="flex flex-wrap items-center gap-6 pt-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>Offline-First Buffered Headcount</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-[#1877F2]" />
+              <span>Zero Location Tracking Outside Perimeter</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-purple-400" />
+              <span>Multi-Diocese Tenant Isolation</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0">
+          <button
+            onClick={() => setIsContactModalOpen(true)}
+            className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#1877F2] hover:bg-[#166fe5] text-white text-xs font-bold shadow-lg transition-all cursor-pointer"
+          >
+            Request Diocese Deployment
+          </button>
+          <button
+            onClick={() => setViewMode('creator')}
+            className="w-full sm:w-auto px-6 py-3 rounded-full border border-white/20 hover:border-white/40 bg-white/5 text-white text-xs font-bold transition-all cursor-pointer"
+          >
+            Creator Console
+          </button>
         </div>
       </section>
 
-      {/* Public Footer */}
-      <footer className="mt-auto py-8 bg-[#EAECEF] dark:bg-[#070712] border-t border-[#DDE0EB] dark:border-[#17172B] text-xs text-[#666A86] dark:text-[#7F84A8] transition-colors">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="font-extrabold text-[#1D1B3A] dark:text-white">Ekklesphere</span>
-            <span>&copy; {new Date().getFullYear()} Sovereign Sanctuary Operating System.</span>
+      {/* =========================================================================
+          SECTION 7: CLEAN EDITORIAL FOOTER
+          ========================================================================= */}
+      <footer className="w-full max-w-[1380px] mt-20 sm:mt-24 pt-8 pb-12 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-slate-400">
+        <div className="flex items-center gap-3">
+          <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-[#1877F2] to-[#6D5CF2] flex items-center justify-center text-white">
+            <Radio className="w-3 h-3" />
           </div>
+          <span className="font-bold text-white tracking-tight text-sm">ekklesphere sanctuary os</span>
+          <span className="text-slate-600">·</span>
+          <span>{currentChurchName}</span>
+        </div>
 
-          <div className="flex items-center gap-4 text-xs font-medium">
-            <button
-              onClick={() => setViewMode('creator')}
-              className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors cursor-pointer"
-            >
-              Creators Console
-            </button>
-            <span>&bull;</span>
-            <button
-              onClick={() => setViewMode('app')}
-              className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors cursor-pointer"
-            >
-              Church App Portals
-            </button>
-            <span>&bull;</span>
-            <a
-              href={`mailto:${landingConfig.contactSalesEmail}`}
-              className="hover:text-[#6D5CF2] dark:hover:text-white transition-colors"
-            >
-              {landingConfig.contactSalesEmail}
-            </a>
-          </div>
+        <div className="flex flex-wrap items-center justify-center gap-6">
+          <button onClick={() => setViewMode('app')} className="hover:text-white transition-colors cursor-pointer">
+            Sanctuary Portals
+          </button>
+          <button onClick={() => setViewMode('creator')} className="hover:text-white transition-colors cursor-pointer">
+            Creator Architecture
+          </button>
+          <button onClick={() => setIsContactModalOpen(true)} className="hover:text-white transition-colors cursor-pointer">
+            Contact Team
+          </button>
+          <span className="text-slate-600">·</span>
+          <span className="text-slate-500 font-mono">Act 843 Compliant</span>
         </div>
       </footer>
+
+      {/* =========================================================================
+          CONTACT & DIOCESE CONSULTATION MODAL
+          ========================================================================= */}
+      {isContactModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-[#171720] border border-white/15 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative">
+            <button
+              onClick={() => setIsContactModalOpen(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              aria-label="Close modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#1877F2]">
+                Church Growth & Radar Architecture
+              </span>
+              <h3 className="text-xl sm:text-2xl font-bold text-white mt-1">
+                Consult with our Sanctuary Engineers
+              </h3>
+              <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                Connect for a tailored perimeter assessment and attendance setup for {currentChurchName}.
+              </p>
+            </div>
+
+            <form onSubmit={handleContactSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Your Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={contactForm.name}
+                  onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                  placeholder="e.g. Pastor David Osei"
+                  className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-[#1877F2]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    required
+                    value={contactForm.email}
+                    onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                    placeholder="pastor@church.org"
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-[#1877F2]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Phone Number</label>
+                  <input
+                    type="tel"
+                    value={contactForm.phone}
+                    onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
+                    placeholder="+233 24 000 0000"
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-[#1877F2]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Church / Diocese</label>
+                  <input
+                    type="text"
+                    value={contactForm.church}
+                    onChange={(e) => setContactForm({ ...contactForm, church: e.target.value })}
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-[#1877F2]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Congregation Size</label>
+                  <select
+                    value={contactForm.congregationSize}
+                    onChange={(e) => setContactForm({ ...contactForm, congregationSize: e.target.value })}
+                    className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-[#1877F2]"
+                  >
+                    <option value="Under 150">Under 150 worshipers</option>
+                    <option value="150-500">150 - 500 worshipers</option>
+                    <option value="500-1500">500 - 1,500 worshipers</option>
+                    <option value="1500+">1,500+ Cathedral / Multi-Campus</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Sanctuary Inquiries</label>
+                <textarea
+                  rows={3}
+                  value={contactForm.message}
+                  onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
+                  placeholder="Tell us about your campus perimeter, beacons, or ushering requirements..."
+                  className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-[#1877F2] resize-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsContactModalOpen(false)}
+                  className="px-5 py-2.5 rounded-full border border-white/20 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 rounded-full bg-[#1877F2] hover:bg-[#166fe5] text-white text-xs font-bold shadow-md shadow-blue-600/30 flex items-center gap-2 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Send Inquiry</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

@@ -238,7 +238,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
           {/* Search filter */}
-          <div className="relative min-w-[215px]">
+          <div className="relative w-full sm:w-auto sm:min-w-[215px] min-w-0">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
             <input
               type="text"

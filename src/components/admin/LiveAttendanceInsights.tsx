@@ -737,7 +737,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               value={quickMemberId}
               onChange={(e) => setQuickMemberId(e.target.value)}
               disabled={unarrivedMembers.length === 0}
-              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] min-w-[200px]"
+              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] w-full sm:w-auto sm:min-w-[200px] min-w-0"
             >
               <option value="">
                 {unarrivedMembers.length > 0
@@ -1353,7 +1353,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               </div>
             )}
 
-            <div className="relative min-w-[210px] flex-1 sm:flex-initial">
+            <div className="relative w-full sm:w-auto sm:min-w-[210px] min-w-0 flex-1 sm:flex-initial">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8] pointer-events-none" />
               <input
                 type="text"

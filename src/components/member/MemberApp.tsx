@@ -36,6 +36,7 @@ import {
   Edit3,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
+import { MemberProfileEditorModal } from './MemberProfileEditorModal';
 import { ChurchLocationMiniMap } from './ChurchLocationMiniMap';
 import { DigitalMemberCard, getCanonicalMemberId } from './DigitalMemberCard';
 import { MemberAttendanceStreakCard } from './MemberAttendanceStreakCard';
@@ -101,6 +102,7 @@ export const MemberApp: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
   const [isQrSheetOpen, setIsQrSheetOpen] = useState(false);
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
 
   // Live Hardware GPS Proximity & Verification State
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'acquiring' | 'watching' | 'verifying' | 'error'>('idle');
@@ -659,38 +661,47 @@ export const MemberApp: React.FC = () => {
     return (
       <div className="space-y-4 sm:space-y-6">
         {/* Welcome & Member Identity Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-[#1C1C3C] p-4 sm:p-5 rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm">
-          <div>
-            <div className="flex flex-wrap items-center gap-2 mb-1 text-xs">
-              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-[#1C1C3C] p-4 sm:p-5 rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm min-w-0">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-1 text-xs">
+              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] truncate max-w-full">
                 {systemSettings.churchName}
               </span>
               <span className="text-[#5B5F7A] dark:text-[#A9ACC8]" aria-hidden="true">
                 ·
               </span>
-              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8]">
+              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] truncate max-w-full">
                 {systemSettings.campusName}
               </span>
               <span className="text-[#5B5F7A] dark:text-[#A9ACC8]" aria-hidden="true">
                 ·
               </span>
-              <span className="font-bold text-[#6C5CE7] dark:text-[#8C7DFF]">{memberGroup}</span>
+              <span className="font-bold text-[#6C5CE7] dark:text-[#8C7DFF] truncate max-w-full">{memberGroup}</span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] break-words">
               Welcome, {memberDisplayName}
             </h1>
-            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5">
+            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5 tabular-nums">
               Member ID: <span className="font-mono font-bold">{memberCode}</span>
             </p>
           </div>
 
-          <div className="flex items-center gap-2 pt-1 sm:pt-0">
+          <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-0 shrink-0">
             <button
-              onClick={() => setIsQrSheetOpen(true)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-2xl bg-[#EEEBFF] hover:bg-[#E0DCFF] dark:bg-[#2A2A55] dark:hover:bg-[#343468] text-[#6C5CE7] dark:text-[#8C7DFF] text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-sm"
+              type="button"
+              onClick={() => setIsProfileEditorOpen(true)}
+              className="min-h-[42px] px-3.5 py-2 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-[#1D1B3A] dark:text-[#F2F2FA] text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
-              <QrCode className="w-4 h-4" />
-              <span>Check-in Pass & Scanner</span>
+              <Edit3 className="w-3.5 h-3.5 text-[#6C5CE7] dark:text-[#8C7DFF]" />
+              <span>Edit Profile</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsQrSheetOpen(true)}
+              className="flex-1 sm:flex-none min-h-[42px] px-4 py-2 rounded-2xl bg-[#EEEBFF] hover:bg-[#E0DCFF] dark:bg-[#2A2A55] dark:hover:bg-[#343468] text-[#6C5CE7] dark:text-[#8C7DFF] text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer"
+            >
+              <QrCode className="w-4 h-4 shrink-0" />
+              <span>Check-in Pass &amp; Scanner</span>
             </button>
           </div>
         </div>
@@ -1759,53 +1770,88 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* Member Profile & Data Rights */}
-        <div className="space-y-4">
-          <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">
-            <div className="flex items-center justify-between gap-2">
+        <div className="space-y-4 min-w-0">
+          <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-4 sm:p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] uppercase tracking-wide">
                 Official Church Records
               </h2>
-              <button
-                type="button"
-                onClick={() => setIsEditingMyGroups((prev) => !prev)}
-                className="text-[11px] font-bold text-[#6C5CE7] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <Edit3 className="w-3 h-3" />
-                <span>{isEditingMyGroups ? 'Close Editor' : 'Edit Ministry / Cell'}</span>
-              </button>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingMyGroups((prev) => !prev)}
+                  className="text-[11px] font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] hover:text-[#6C5CE7] dark:hover:text-[#8C7DFF] hover:underline cursor-pointer"
+                >
+                  {isEditingMyGroups ? 'Close Quick Edit' : 'Quick Cell Edit'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsProfileEditorOpen(true)}
+                  className="min-h-[34px] px-3 py-1 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[11px] font-bold text-[#6C5CE7] dark:text-[#9D90FF] hover:bg-[#E2DFFF] dark:hover:bg-[#343468] flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Edit3 className="w-3 h-3 shrink-0" />
+                  <span>Edit My Details</span>
+                </button>
+              </div>
             </div>
             <div className="space-y-2 text-xs">
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Member ID</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums">{memberCode}</b>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Member ID</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono tabular-nums text-right break-all min-w-0">{memberCode}</b>
               </div>
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Full Name</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberDisplayName}</b>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Full Name</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">
+                  {[matchedMember?.firstName, matchedMember?.middleName, matchedMember?.lastName].filter(Boolean).join(' ') || memberDisplayName}
+                </b>
               </div>
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Phone</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono">{memberPhone}</b>
+              {matchedMember?.preferredName && matchedMember.preferredName !== memberDisplayName && (
+                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                  <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Preferred Name</span>
+                  <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">{matchedMember.preferredName}</b>
+                </div>
+              )}
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Phone</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono text-right break-all min-w-0">{memberPhone || 'Not set'}</b>
               </div>
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Registered Email</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberEmail}</b>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Registered Email</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-all min-w-0">{memberEmail || 'Not set'}</b>
               </div>
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Cell / Fellowship Group</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberGroup}</b>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Cell / Fellowship Group</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">{memberGroup}</b>
               </div>
-              <div className="flex justify-between py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">Ministry / Department</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{memberDepartment || 'General Congregation'}</b>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Ministry / Department</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">{memberDepartment || 'General Congregation'}</b>
               </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] inline-flex items-center gap-1">
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] inline-flex items-center gap-1 shrink-0">
                   <Cake className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
                   <span>Birthday</span>
                 </span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right min-w-0">
                   {memberDateOfBirth ? formatBirthdayMonthDay(memberDateOfBirth) : 'Not set'}
+                </b>
+              </div>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Residence</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">
+                  {[matchedMember?.placeOfResidence, matchedMember?.residentialDigitalAddress].filter(Boolean).join(' · ') || 'Not set'}
+                </b>
+              </div>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Occupation &amp; Marital</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">
+                  {[matchedMember?.occupation, matchedMember?.maritalStatus].filter(Boolean).join(' · ') || 'Not set'}
+                </b>
+              </div>
+              <div className="flex items-start justify-between gap-3 py-1.5">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Emergency Contact</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">
+                  {[matchedMember?.emergencyContactPerson, matchedMember?.emergencyContactPhone].filter(Boolean).join(' · ') || 'Not set'}
                 </b>
               </div>
             </div>
@@ -1987,26 +2033,26 @@ export const MemberApp: React.FC = () => {
      ========================================================================= */
 
   return (
-    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] transition-all duration-200">
+    <main className="relative max-w-[1360px] w-[calc(100%-12px)] sm:w-[calc(100%-24px)] lg:w-[calc(100%-32px)] mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100dvh-76px)] min-w-0 overflow-x-clip transition-all duration-200">
       {/* Navigation Bar - Responsive Floating Dock on Mobile & Signature Left Tab on Desktop */}
       <aside
         aria-label="Member Navigation"
-        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-20px)] max-w-md lg:w-[64px] bg-[#6D5CF2]/95 dark:bg-[#5E4EE0]/95 backdrop-blur-xl rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-5 lg:flex lg:flex-col items-center justify-items-center sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-5 shadow-[0_12px_36px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200 select-none touch-manipulation"
+        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-16px)] max-w-md lg:w-[64px] bg-[#6D5CF2]/95 dark:bg-[#5E4EE0]/95 backdrop-blur-xl rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-5 lg:flex lg:flex-col items-center justify-items-center sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-5 shadow-[0_12px_36px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200 select-none touch-manipulation"
       >
         {/* 1. Home */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setActiveTab('home')}
             aria-label="Home"
             aria-current={activeTab === 'home' && !isQrSheetOpen ? 'page' : undefined}
-            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-w-0 min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               activeTab === 'home' && !isQrSheetOpen
                 ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
             <Home className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Home</span>
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight truncate max-w-full">Home</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-[#1D1B3A] dark:bg-[#F2F2FA] text-white dark:text-[#1D1B3A] text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50">
             <span>Home</span>
@@ -2014,7 +2060,7 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 2. Services & Events */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setActiveTab('events')}
             aria-label="Events"
@@ -2034,7 +2080,7 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 3. Giving */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setActiveTab('give')}
             aria-label="Give"
@@ -2054,7 +2100,7 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 4. Scanner & Pass */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setIsQrSheetOpen(true)}
             aria-label="Scan & Pass"
@@ -2069,7 +2115,7 @@ export const MemberApp: React.FC = () => {
         </div>
 
         {/* 5. Me (Digital Member Card & Profile) */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setActiveTab('me')}
             aria-label="Me"
@@ -2105,6 +2151,16 @@ export const MemberApp: React.FC = () => {
         isOpen={isQrSheetOpen}
         onClose={() => setIsQrSheetOpen(false)}
         currentUserMember={matchedMember}
+      />
+
+      <MemberProfileEditorModal
+        isOpen={isProfileEditorOpen}
+        onClose={() => setIsProfileEditorOpen(false)}
+        member={matchedMember}
+        fallbackName={currentUser?.name}
+        fallbackEmail={currentUser?.email}
+        fallbackPhone={currentUser?.phone}
+        fallbackPhotoUrl={memberPhotoUrl}
       />
     </main>
   );

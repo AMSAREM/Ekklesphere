@@ -1924,7 +1924,7 @@ export const CreatorsPanel: React.FC = () => {
 
       {/* MAIN CONTENT AREA */}
       <main
-        className={`flex-1 max-w-7xl w-full md:w-auto mx-auto min-w-0 px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 transition-all duration-200 ease-in-out ${
+        className={`flex-1 max-w-7xl w-full md:w-auto mx-auto min-w-0 overflow-x-clip px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 transition-all duration-200 ease-in-out ${
           isSidebarCollapsed ? 'md:ml-[68px]' : 'md:ml-64'
         }`}
       >
@@ -4425,13 +4425,13 @@ export const CreatorsPanel: React.FC = () => {
       </main>
 
       {/* ============================================================== */}
-      {/* MODALS AND DRAWERS (Optimized for all viewports, max-h-[90vh]) */}
+      {/* MODALS AND DRAWERS (Optimized for all viewports, max-h-[90dvh]) */}
       {/* ============================================================== */}
 
       {/* MODAL: PROVISION ORGANISATION */}
       {isProvisionOrgOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-lg w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-lg w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Provision New Organisation</h3>
               <button onClick={() => setIsProvisionOrgOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -4525,7 +4525,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: ISSUE NEW LICENSE */}
       {isIssueLicenseOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Issue New License</h3>
               <button onClick={() => setIsIssueLicenseOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -4638,7 +4638,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: RECORD MANUAL PAYMENT */}
       {isPaymentDrawerOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Record Offline Manual Payment</h3>
               <button onClick={() => setIsPaymentDrawerOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -4732,7 +4732,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: AUDITED SUPPORT ACCESS ("View as Organisation Admin") */}
       {isSupportModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-amber-500/30 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-amber-500/30 space-y-4">
             <div className="flex items-center gap-2 text-amber-500 font-black text-base">
               <ShieldCheck className="w-5 h-5 shrink-0" />
               <span>Audited Read-Only Support Access</span>
@@ -4792,7 +4792,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: LICENSE ACTION */}
       {isLicenseActionOpen && targetLicenseForAction && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">License Lifecycle Action</h3>
               <button onClick={() => setIsLicenseActionOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -4885,7 +4885,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: BROADCAST ANNOUNCEMENT */}
       {isAnnouncementModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Broadcast Platform Announcement</h3>
               <button onClick={() => setIsAnnouncementModalOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -4967,7 +4967,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: EDIT PLAN PRICING AND LIMITS */}
       {isEditPlanOpen && editingPlan && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-lg w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-lg w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Edit Plan Limits: {editingPlan.name}</h3>
               <button onClick={() => setIsEditPlanOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -5098,7 +5098,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: LOG ACT 843 DATA REQUEST */}
       {isLogDataRequestOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Log Ghana Act 843 Data Request</h3>
               <button onClick={() => setIsLogDataRequestOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -5187,7 +5187,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: EDIT FEATURE FLAG */}
       {isEditFeatureFlagOpen && editingFeatureFlag && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-base">Edit Feature Flag: {editingFeatureFlag.key}</h3>
               <button onClick={() => setIsEditFeatureFlagOpen(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
@@ -5332,7 +5332,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: PROVISION OR RESET ORGANISATION ADMIN CREDENTIALS */}
       {isOrgAdminCredModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <KeyRound className="w-5 h-5 text-[#6D5CF2]" />
@@ -5486,7 +5486,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: REVOKE ORGANISATION CONFIRMATION */}
       {orgToRevoke && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-amber-500/30 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-amber-500/30 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
                 <Ban className="w-5 h-5" />
@@ -5549,7 +5549,7 @@ export const CreatorsPanel: React.FC = () => {
       {/* MODAL: PERMANENTLY DELETE ORGANISATION */}
       {orgToDelete && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="max-w-md w-full max-h-[90vh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-rose-500/30 space-y-4">
+          <div className="max-w-md w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-rose-500/30 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
                 <Trash2 className="w-5 h-5" />

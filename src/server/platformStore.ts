@@ -1032,7 +1032,8 @@ class PlatformStore {
       | 'token_exchanged'
       | 'logout'
       | 'account_auto_provisioned'
-      | 'password_changed';
+      | 'password_changed'
+      | 'member_profile_updated';
     ipAddress?: string;
     success: boolean;
     reason?: string;
@@ -5648,8 +5649,11 @@ class PlatformStore {
     const next: Record<string, unknown> = { ...(existingCustom || {}) };
     const extendedKeys = [
       'middleName',
+      'preferredName',
+      'phoneNumber',
       'specificLocation',
       'remarks',
+      'notes',
       'memberId',
       'squads',
       'department',
@@ -5728,15 +5732,17 @@ class PlatformStore {
       firstName,
       middleName: row.middle_name ?? custom.middleName,
       lastName,
+      preferredName: row.preferred_name ?? custom.preferredName ?? `${firstName} ${lastName}`.trim(),
       email: row.email ?? custom.email ?? undefined,
       phoneE164,
-      phoneNumber: row.phone_number ?? phoneE164,
+      phoneNumber: row.phone_number ?? custom.phoneNumber ?? phoneE164,
       memberId: row.member_id ?? custom.memberId,
       department: row.department ?? custom.department ?? 'General Congregation',
       squads: row.squads ?? custom.squads,
       officerName: row.member_officer_name ?? custom.officerName,
       specificLocation: row.specific_location ?? custom.specificLocation,
       remarks: row.remarks ?? custom.remarks,
+      notes: row.notes ?? custom.notes,
       gender: row.gender ?? custom.gender ?? 'other',
       dateOfBirth: row.date_of_birth ?? custom.dateOfBirth,
       placeOfResidence: row.place_of_residence ?? custom.placeOfResidence,
@@ -6269,7 +6275,11 @@ class PlatformStore {
       const lastName = updates.lastName ?? existingRow?.last_name;
       if (updates.firstName !== undefined) patch.first_name = updates.firstName;
       if (updates.lastName !== undefined) patch.last_name = updates.lastName;
-      if (updates.firstName !== undefined || updates.lastName !== undefined) {
+      if (updates.preferredName !== undefined) {
+        patch.preferred_name = updates.preferredName
+          ? String(updates.preferredName).trim()
+          : `${firstName || ''} ${lastName || ''}`.trim();
+      } else if (updates.firstName !== undefined || updates.lastName !== undefined) {
         patch.preferred_name = `${firstName || ''} ${lastName || ''}`.trim();
       }
       if (updates.email !== undefined) {
@@ -6284,11 +6294,12 @@ class PlatformStore {
       ) {
         patch.gender = String(updates.gender).toLowerCase();
       }
-      if (
-        updates.dateOfBirth !== undefined &&
-        /^\d{4}-\d{2}-\d{2}$/.test(String(updates.dateOfBirth))
-      ) {
-        patch.date_of_birth = String(updates.dateOfBirth);
+      if (updates.dateOfBirth !== undefined) {
+        if (updates.dateOfBirth === '' || updates.dateOfBirth === null) {
+          patch.date_of_birth = null;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(String(updates.dateOfBirth))) {
+          patch.date_of_birth = String(updates.dateOfBirth);
+        }
       }
       if (
         updates.imageUrl !== undefined ||
@@ -6437,56 +6448,214 @@ class PlatformStore {
     organizationId: string,
     userId: string,
     email: string | undefined,
-    updates: {
-      imageUrl?: string | null;
-      dateOfBirth?: string;
-      preferredName?: string;
-      autoCheckinOptedIn?: boolean;
-      groupName?: string;
-      homeCellGroup?: string;
-      department?: string;
-    },
+    updates: Record<string, any>,
     fallbackName?: string
   ): Promise<Record<string, any>> {
-    let matched = await this.getMemberProfileForSession(organizationId, userId, email);
+    const orgId = organizationId.toLowerCase();
+    let matched = await this.getMemberProfileForSession(orgId, userId, email);
+    const cred = await this.findCredentialByContactOrMember({
+      memberId: userId,
+      email: email ? email.trim().toLowerCase() : undefined,
+    });
+
+    const deriveMonthName = (isoDate?: string): string | undefined => {
+      if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return undefined;
+      const monthIdx = Number(isoDate.slice(5, 7)) - 1;
+      const months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+      ];
+      return months[monthIdx];
+    };
+
+    const nextEmail =
+      updates.email !== undefined
+        ? updates.email
+          ? String(updates.email).trim().toLowerCase()
+          : ''
+        : undefined;
+    const rawPhoneInput = updates.phoneE164 !== undefined ? updates.phoneE164 : updates.phoneNumber;
+    const nextPhone =
+      rawPhoneInput !== undefined
+        ? rawPhoneInput
+          ? normalizePhone(String(rawPhoneInput)) || String(rawPhoneInput).trim()
+          : ''
+        : undefined;
+
+    // Prevent email or phone collisions with another user/member
+    if (nextEmail || nextPhone) {
+      const orgMembers = await this.getMembers(orgId);
+      const conflictMember = orgMembers.find((m) => {
+        if (matched && m.id === matched.id) return false;
+        const emailMatch = nextEmail && m.email && String(m.email).trim().toLowerCase() === nextEmail;
+        const phoneMatch =
+          nextPhone && m.phoneE164 && normalizePhone(String(m.phoneE164)) === nextPhone;
+        return Boolean(emailMatch || phoneMatch);
+      });
+      if (conflictMember) {
+        const err: any = new Error('That email or phone number is already associated with another member.');
+        err.code = 'CONTACT_ALREADY_IN_USE';
+        err.status = 409;
+        throw err;
+      }
+
+      if (nextEmail) {
+        const existingEmailCred = await this.findCredentialByContactOrMember({ email: nextEmail });
+        if (existingEmailCred && existingEmailCred.id !== cred?.id && existingEmailCred.id !== userId) {
+          const err: any = new Error('That email address is already linked to another account.');
+          err.code = 'CONTACT_ALREADY_IN_USE';
+          err.status = 409;
+          throw err;
+        }
+      }
+      if (nextPhone) {
+        const existingPhoneCred = await this.findCredentialByContactOrMember({ phoneE164: nextPhone });
+        if (existingPhoneCred && existingPhoneCred.id !== cred?.id && existingPhoneCred.id !== userId) {
+          const err: any = new Error('That phone number is already linked to another account.');
+          err.code = 'CONTACT_ALREADY_IN_USE';
+          err.status = 409;
+          throw err;
+        }
+      }
+    }
+
+    const safeUpdates: Record<string, any> = {};
+    const stringFields = [
+      'firstName',
+      'middleName',
+      'lastName',
+      'preferredName',
+      'dateOfBirth',
+      'monthOfBirth',
+      'placeOfResidence',
+      'specificLocation',
+      'residentialDigitalAddress',
+      'hometown',
+      'occupation',
+      'maritalStatus',
+      'spouseName',
+      'emergencyContactPerson',
+      'emergencyContactPhone',
+      'groupName',
+      'homeCellGroup',
+      'department',
+      'squads',
+      'dateOfSalvation',
+      'dateOfBaptism',
+      'dateOfMarriage',
+      'remarks',
+      'notes',
+    ];
+    for (const field of stringFields) {
+      if (updates[field] !== undefined) {
+        safeUpdates[field] = typeof updates[field] === 'string' ? updates[field].trim() : updates[field];
+      }
+    }
+    if (updates.gender !== undefined && ['male', 'female', 'other'].includes(String(updates.gender).toLowerCase())) {
+      safeUpdates.gender = String(updates.gender).toLowerCase();
+    }
+    if (updates.numberOfChildren !== undefined && Number.isFinite(Number(updates.numberOfChildren))) {
+      safeUpdates.numberOfChildren = Math.max(0, Math.min(50, Math.trunc(Number(updates.numberOfChildren))));
+    }
+    if (nextEmail !== undefined) {
+      safeUpdates.email = nextEmail;
+    }
+    if (nextPhone !== undefined) {
+      safeUpdates.phoneE164 = nextPhone;
+      safeUpdates.phoneNumber = nextPhone;
+    }
+    if (safeUpdates.dateOfBirth && !safeUpdates.monthOfBirth) {
+      const derivedMonth = deriveMonthName(safeUpdates.dateOfBirth);
+      if (derivedMonth) safeUpdates.monthOfBirth = derivedMonth;
+    }
+    if (safeUpdates.homeCellGroup && !safeUpdates.groupName) {
+      safeUpdates.groupName = safeUpdates.homeCellGroup;
+    } else if (safeUpdates.groupName && !safeUpdates.homeCellGroup) {
+      safeUpdates.homeCellGroup = safeUpdates.groupName;
+    }
+    if (updates.imageUrl !== undefined) safeUpdates.imageUrl = updates.imageUrl || '';
+    if (updates.autoCheckinOptedIn !== undefined) {
+      safeUpdates.autoCheckinOptedIn = Boolean(updates.autoCheckinOptedIn);
+    }
+
+    let resultMember: Record<string, any>;
     if (!matched) {
       const cleanName = (fallbackName || email?.split('@')[0] || 'Church Member').trim();
       const parts = cleanName.split(/\s+/).filter(Boolean);
-      const firstName = parts[0] || 'Church';
-      const lastName = parts.slice(1).join(' ') || 'Member';
-      matched = await this.createMember(
-        organizationId,
+      const fallbackFirst = parts[0] || 'Church';
+      const fallbackLast = parts.slice(1).join(' ') || 'Member';
+      resultMember = await this.createMember(
+        orgId,
         {
           id: UUID_REGEX.test(userId) ? userId : undefined,
-          firstName,
-          lastName,
-          email: email ? email.trim().toLowerCase() : undefined,
-          preferredName: updates.preferredName || cleanName,
-          dateOfBirth: updates.dateOfBirth,
-          imageUrl: updates.imageUrl || undefined,
-          autoCheckinOptedIn: updates.autoCheckinOptedIn ?? true,
-          groupName: updates.groupName || updates.homeCellGroup || 'General Congregation',
-          homeCellGroup: updates.homeCellGroup || updates.groupName || 'General Congregation',
-          department: updates.department || 'General Congregation',
+          ...safeUpdates,
+          firstName: safeUpdates.firstName || fallbackFirst,
+          lastName: safeUpdates.lastName || fallbackLast,
+          email: safeUpdates.email !== undefined ? safeUpdates.email || undefined : email ? email.trim().toLowerCase() : undefined,
+          preferredName:
+            safeUpdates.preferredName ||
+            `${safeUpdates.firstName || fallbackFirst} ${safeUpdates.lastName || fallbackLast}`.trim() ||
+            cleanName,
+          imageUrl: safeUpdates.imageUrl || undefined,
+          autoCheckinOptedIn: safeUpdates.autoCheckinOptedIn ?? true,
+          groupName: safeUpdates.groupName || safeUpdates.homeCellGroup || 'General Congregation',
+          homeCellGroup: safeUpdates.homeCellGroup || safeUpdates.groupName || 'General Congregation',
+          department: safeUpdates.department || 'General Congregation',
           status: 'member',
         },
         { skipAutoCredentials: true }
       );
-      return matched;
+    } else {
+      resultMember = await this.updateMember(orgId, String(matched.id), safeUpdates);
     }
 
-    const safeUpdates: Record<string, any> = {};
-    if (updates.imageUrl !== undefined) safeUpdates.imageUrl = updates.imageUrl || '';
-    if (updates.dateOfBirth !== undefined) safeUpdates.dateOfBirth = updates.dateOfBirth;
-    if (updates.preferredName !== undefined) safeUpdates.preferredName = updates.preferredName;
-    if (updates.autoCheckinOptedIn !== undefined) {
-      safeUpdates.autoCheckinOptedIn = Boolean(updates.autoCheckinOptedIn);
-    }
-    if (updates.groupName !== undefined) safeUpdates.groupName = updates.groupName;
-    if (updates.homeCellGroup !== undefined) safeUpdates.homeCellGroup = updates.homeCellGroup;
-    if (updates.department !== undefined) safeUpdates.department = updates.department;
+    // Sync updated display name / email / phone back to credential record
+    const updatedFullName = `${resultMember.firstName || ''} ${resultMember.lastName || ''}`.trim();
+    const sb = this.activeSupabase;
+    if (cred) {
+      const nextCredEmail =
+        safeUpdates.email !== undefined
+          ? safeUpdates.email || undefined
+          : cred.email;
+      const nextCredPhone =
+        safeUpdates.phoneE164 !== undefined
+          ? safeUpdates.phoneE164 || undefined
+          : cred.phoneE164;
+      const nextCredName = updatedFullName || cred.name;
 
-    return this.updateMember(organizationId, String(matched.id), safeUpdates);
+      if (sb && UUID_REGEX.test(cred.id)) {
+        const credPatch: Record<string, unknown> = {
+          updated_at: new Date().toISOString(),
+          full_name: nextCredName,
+          member_id: UUID_REGEX.test(String(resultMember.id)) ? String(resultMember.id) : cred.memberId || null,
+        };
+        if (safeUpdates.email !== undefined) credPatch.email = nextCredEmail || null;
+        if (safeUpdates.phoneE164 !== undefined) credPatch.phone_e164 = nextCredPhone || null;
+        await sb.from('account_credentials').update(credPatch).eq('id', cred.id);
+      }
+
+      const memCred = this.userCredentials.get(cred.id);
+      if (memCred) {
+        this.userCredentials.set(cred.id, {
+          ...memCred,
+          name: nextCredName,
+          email: nextCredEmail,
+          phoneE164: nextCredPhone,
+          memberId: String(resultMember.id),
+        });
+      }
+    }
+
+    await this.recordAuthAuditEvent({
+      organizationId: orgId,
+      accountId: cred?.id || userId,
+      identifier: resultMember.email || resultMember.phoneE164 || userId,
+      eventType: 'member_profile_updated',
+      success: true,
+      reason: 'self_service_profile_edit',
+    });
+
+    return resultMember;
   }
 
   public async deleteMember(organizationId: string, memberId: string): Promise<void> {

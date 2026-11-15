@@ -252,7 +252,7 @@ export const AppHeader: React.FC = () => {
 
               {/* Notifications Popover */}
               {isNotifDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-3 z-50 animate-in fade-in slide-in-from-top-2">
+                <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-24px))] bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-3 z-50 animate-in fade-in slide-in-from-top-2">
                   <div className="flex items-center justify-between pb-2 border-b border-[#E9EBF5] dark:border-[#2D2D55] mb-2">
                     <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Sanctuary Alerts</span>
                     <span className="text-[10px] font-semibold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">
@@ -342,7 +342,7 @@ export const AppHeader: React.FC = () => {
 
               {/* User Dropdown Menu */}
               {isUserMenuOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] py-2 z-50 animate-in fade-in zoom-in-95">
+                <div className="absolute right-0 mt-2 w-[min(16rem,calc(100vw-24px))] bg-white dark:bg-[#1D1D3D] rounded-2xl shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] py-2 z-50 animate-in fade-in zoom-in-95">
                   <div className="px-4 py-2 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
                     <div className="font-bold text-xs text-[#1D1B3A] dark:text-[#F2F2FA]">
                       {currentUser.name}

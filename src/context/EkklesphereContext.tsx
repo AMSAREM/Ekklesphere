@@ -275,6 +275,7 @@ interface EkklesphereContextType {
     options?: { duplicateMode?: ImportDuplicateMode }
   ) => Promise<Person[]>;
   updateMember: (memberId: string, updates: Partial<Person>) => Promise<Person>;
+  updateOwnProfile: (updates: Partial<Person>) => Promise<Person>;
   deleteMember: (memberId: string) => Promise<void>;
   updateMemberConsent: (autoCheckin: boolean, push: boolean, sms: boolean, email: boolean) => Promise<void>;
 
@@ -2091,6 +2092,27 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           }
           return;
         }
+      } else if (res.status === 403) {
+        const selfRes = await fetch('/api/members/me/profile', { headers: getAuthHeaders() });
+        if (handleUnauthorizedSession(selfRes.status)) return;
+        if (selfRes.ok) {
+          const selfData = await selfRes.json().catch(() => null);
+          if (selfData?.profile) {
+            const normalizedSelf = normalizePersonRecord(selfData.profile);
+            setMembers((prev) => {
+              const next = prev.some((m) => m.id === normalizedSelf.id)
+                ? prev.map((m) => (m.id === normalizedSelf.id ? normalizedSelf : m))
+                : [normalizedSelf];
+              try {
+                localStorage.setItem('ekklesphere_members', JSON.stringify(next));
+              } catch {
+                // ignore
+              }
+              return next;
+            });
+          }
+          return;
+        }
       }
     } catch (err) {
       // transient network warning
@@ -2543,6 +2565,157 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return normalizedRoster;
   };
 
+  const buildSelfProfilePayload = (updates: Partial<Person>): Record<string, unknown> => {
+    const allowedKeys: (keyof Person)[] = [
+      'firstName',
+      'middleName',
+      'lastName',
+      'preferredName',
+      'email',
+      'phoneE164',
+      'phoneNumber',
+      'gender',
+      'dateOfBirth',
+      'monthOfBirth',
+      'placeOfResidence',
+      'specificLocation',
+      'residentialDigitalAddress',
+      'hometown',
+      'occupation',
+      'maritalStatus',
+      'spouseName',
+      'numberOfChildren',
+      'emergencyContactPerson',
+      'emergencyContactPhone',
+      'groupName',
+      'homeCellGroup',
+      'department',
+      'squads',
+      'dateOfSalvation',
+      'dateOfBaptism',
+      'dateOfMarriage',
+      'remarks',
+      'notes',
+      'imageUrl',
+      'autoCheckinOptedIn',
+    ];
+    const body: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      if (updates[key] !== undefined) {
+        body[key] = updates[key];
+      }
+    }
+    return body;
+  };
+
+  const syncCurrentUserWithUpdatedMember = (updatedPerson: Person, targetMemberId?: string) => {
+    setCurrentUser((prevUser) => {
+      if (!prevUser) return prevUser;
+      const matchesUser =
+        prevUser.memberId === updatedPerson.id ||
+        prevUser.id === updatedPerson.id ||
+        (targetMemberId && prevUser.memberId === targetMemberId) ||
+        (prevUser.email &&
+          updatedPerson.email &&
+          prevUser.email.toLowerCase() === updatedPerson.email.toLowerCase());
+      if (!matchesUser) return prevUser;
+
+      const nextName =
+        `${updatedPerson.firstName || ''} ${updatedPerson.lastName || ''}`.trim() || prevUser.name;
+      const nextInitials =
+        updatedPerson.avatarInitials ||
+        nextName
+          .split(' ')
+          .filter(Boolean)
+          .map((p) => p[0])
+          .slice(0, 2)
+          .join('')
+          .toUpperCase() ||
+        prevUser.initials;
+
+      const synced: AuthUser = {
+        ...prevUser,
+        name: nextName,
+        email: updatedPerson.email || prevUser.email,
+        phone: updatedPerson.phoneE164 || prevUser.phone,
+        avatar: updatedPerson.imageUrl ?? prevUser.avatar,
+        initials: nextInitials,
+        memberId: updatedPerson.id,
+      };
+      try {
+        localStorage.setItem('ekklesphere_user', JSON.stringify(synced));
+      } catch {}
+      return synced;
+    });
+  };
+
+  const upsertMemberLocally = (updatedPerson: Person, previousId?: string) => {
+    setMembers((prev) => {
+      const hasMatch = prev.some(
+        (m) => m.id === updatedPerson.id || (previousId && m.id === previousId)
+      );
+      const updated = hasMatch
+        ? prev.map((m) =>
+            m.id === updatedPerson.id || (previousId && m.id === previousId) ? updatedPerson : m
+          )
+        : [updatedPerson, ...prev];
+      try {
+        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const updateOwnProfile = async (updates: Partial<Person>): Promise<Person> => {
+    const payload = buildSelfProfilePayload(updates);
+    let updatedPerson: Person | null = null;
+    let serverErrorMessage: string | null = null;
+
+    try {
+      const selfRes = await fetch('/api/members/me/profile', {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (selfRes.ok) {
+        const rawSelfUpdated = await selfRes.json().catch(() => null);
+        if (rawSelfUpdated) updatedPerson = normalizePersonRecord(rawSelfUpdated);
+      } else {
+        const errBody = await selfRes.json().catch(() => ({}));
+        serverErrorMessage = errBody?.message || `Could not save profile update (HTTP ${selfRes.status})`;
+      }
+    } catch {
+      serverErrorMessage = 'Network error saving your profile.';
+    }
+
+    if (serverErrorMessage && !updatedPerson) {
+      showToast(serverErrorMessage);
+      throw new Error(serverErrorMessage);
+    }
+
+    if (!updatedPerson) {
+      throw new Error('Could not save profile update.');
+    }
+
+    upsertMemberLocally(updatedPerson, currentUser?.memberId);
+    syncCurrentUserWithUpdatedMember(updatedPerson, currentUser?.memberId);
+
+    setAuditLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        actor: `${updatedPerson!.firstName} ${updatedPerson!.lastName}`.trim() || currentUser?.name || 'Member',
+        action: 'Profile updated',
+        entityType: 'Person',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        details: 'Member updated personal church profile details',
+      },
+      ...prev,
+    ]);
+
+    showToast('Your member details have been saved!');
+    return updatedPerson;
+  };
+
   const updateMember = async (memberId: string, updates: Partial<Person>): Promise<Person> => {
     const existing = members.find((m) => m.id === memberId);
     const mergedPayload = existing ? { ...existing, ...updates } : updates;
@@ -2577,14 +2750,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const selfRes = await fetch('/api/members/me/profile', {
           method: 'PATCH',
           headers: getAuthHeaders(),
-          body: JSON.stringify({
-            imageUrl: updates.imageUrl,
-            dateOfBirth: updates.dateOfBirth,
-            preferredName: updates.preferredName,
-            groupName: updates.groupName,
-            homeCellGroup: updates.homeCellGroup,
-            department: updates.department,
-          }),
+          body: JSON.stringify(buildSelfProfilePayload(updates)),
         });
         if (selfRes.ok) {
           const rawSelfUpdated = await selfRes.json().catch(() => null);
@@ -2609,16 +2775,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // Direct write to Firestore as cloud backup
     try {
-      setDoc(doc(db, 'members', memberId), updatedPerson, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'members', updatedPerson.id), updatedPerson, { merge: true }).catch(() => {});
     } catch {}
 
-    setMembers((prev) => {
-      const updated = prev.map((m) => (m.id === memberId ? updatedPerson! : m));
-      try {
-        localStorage.setItem('ekklesphere_members', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
+    upsertMemberLocally(updatedPerson, memberId);
+    syncCurrentUserWithUpdatedMember(updatedPerson, memberId);
 
     setAuditLogs((prev) => [
       {
@@ -4433,6 +4594,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       validateMemberImportRemote,
       batchImportMembers,
       updateMember,
+      updateOwnProfile,
       deleteMember,
       updateMemberConsent,
       systemSettings,

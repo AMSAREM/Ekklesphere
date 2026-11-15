@@ -29,7 +29,7 @@ export const SystemSettingsModal: React.FC = () => {
         }
       }}
     >
-      <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] overflow-y-auto p-3 sm:p-6 animate-in zoom-in-95 duration-150">
+      <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-3xl max-w-5xl w-full max-h-[92dvh] flex flex-col shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] overflow-y-auto overflow-x-hidden p-3 sm:p-6 animate-in zoom-in-95 duration-150">
         <SystemSettingsPanel onClose={() => setIsSettingsModalOpen(false)} isModal />
       </div>
     </div>

@@ -150,6 +150,31 @@
       },
       "required": ["id", "key", "tier", "seatsLimit", "status", "issuedDate"]
     },
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Church congregation workspace tenant account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "campusCode": { "type": "string" },
+        "city": { "type": "string" },
+        "country": { "type": "string" },
+        "seniorPastor": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "trial", "suspended", "maintenance"] },
+        "memberCount": { "type": "number" },
+        "maxCapacity": { "type": "number" },
+        "licenseTier": { "type": "string" },
+        "renewalDate": { "type": "string" },
+        "billingCycle": { "type": "string" },
+        "geofenceRadiusMeters": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "slug", "status"]
+    },
     "ServiceEvent": {
       "title": "ServiceEvent",
       "description": "Church worship service instance, revival, or special program event",
@@ -202,6 +227,10 @@
     "/licenses/{licenseId}": {
       "schema": "License",
       "description": "Platform tenant software licenses"
+    },
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Registered church organization tenants"
     }
   }
 }

@@ -174,7 +174,7 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-      <div className="relative w-full max-w-lg bg-[#0F0E1D] text-white rounded-3xl shadow-2xl border border-white/10 flex flex-col max-h-[94vh] overflow-hidden">
+      <div className="relative w-full max-w-lg bg-[#0F0E1D] text-white rounded-3xl shadow-2xl border border-white/10 flex flex-col max-h-[94dvh] overflow-hidden">
         {/* Top Header / Mode Switcher */}
         <div className="p-4 sm:p-5 border-b border-white/10 flex items-center justify-between shrink-0 bg-white/[0.02]">
           <div className="flex items-center gap-2">

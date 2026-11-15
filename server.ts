@@ -2998,7 +2998,53 @@ app.post(
   }
 );
 
+const optionalIsoDateSchema = z
+  .string()
+  .trim()
+  .refine(
+    (v) => v === '' || /^\d{4}-\d{2}-\d{2}$/.test(v),
+    'Date must be formatted as YYYY-MM-DD'
+  )
+  .optional();
+
 const updateOwnProfileSchema = z.object({
+  firstName: z.string().trim().min(1, 'First name is required').max(80).optional(),
+  middleName: z.string().trim().max(80).optional(),
+  lastName: z.string().trim().min(1, 'Last name is required').max(80).optional(),
+  preferredName: z.string().trim().max(120).optional(),
+  email: z
+    .string()
+    .trim()
+    .max(160)
+    .refine(
+      (v) => v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
+      'Please provide a valid email address'
+    )
+    .optional(),
+  phoneE164: z.string().trim().max(32).optional(),
+  phoneNumber: z.string().trim().max(32).optional(),
+  gender: z.enum(['male', 'female', 'other']).optional(),
+  dateOfBirth: optionalIsoDateSchema,
+  monthOfBirth: z.string().trim().max(32).optional(),
+  placeOfResidence: z.string().trim().max(160).optional(),
+  specificLocation: z.string().trim().max(160).optional(),
+  residentialDigitalAddress: z.string().trim().max(64).optional(),
+  hometown: z.string().trim().max(120).optional(),
+  occupation: z.string().trim().max(120).optional(),
+  maritalStatus: z.string().trim().max(40).optional(),
+  spouseName: z.string().trim().max(120).optional(),
+  numberOfChildren: z.coerce.number().int().min(0).max(50).optional(),
+  emergencyContactPerson: z.string().trim().max(120).optional(),
+  emergencyContactPhone: z.string().trim().max(32).optional(),
+  groupName: z.string().trim().max(120).optional(),
+  homeCellGroup: z.string().trim().max(120).optional(),
+  department: z.string().trim().max(120).optional(),
+  squads: z.string().trim().max(240).optional(),
+  dateOfSalvation: optionalIsoDateSchema,
+  dateOfBaptism: optionalIsoDateSchema,
+  dateOfMarriage: optionalIsoDateSchema,
+  remarks: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional(),
   imageUrl: z
     .string()
     .trim()
@@ -3013,15 +3059,7 @@ const updateOwnProfileSchema = z.object({
     )
     .nullable()
     .optional(),
-  dateOfBirth: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be YYYY-MM-DD')
-    .optional(),
-  preferredName: z.string().trim().min(1).max(120).optional(),
   autoCheckinOptedIn: z.boolean().optional(),
-  groupName: z.string().trim().min(1).max(120).optional(),
-  homeCellGroup: z.string().trim().min(1).max(120).optional(),
-  department: z.string().trim().min(1).max(120).optional(),
 });
 
 app.get(

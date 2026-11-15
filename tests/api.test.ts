@@ -969,6 +969,89 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
       expect(res.body.error).toBe('unauthorized_cron');
     });
   });
+
+  describe('Member Self-Service Profile Editing', () => {
+    it('PERMITS a signed-in church member to edit and persist full personal, residence, family, and church details', async () => {
+      const updateRes = await request(app)
+        .patch('/api/members/me/profile')
+        .set('Authorization', `Bearer ${memberToken}`)
+        .send({
+          firstName: 'Akosua',
+          middleName: 'Abena',
+          lastName: 'Boateng',
+          preferredName: 'Sister Akosua',
+          phoneE164: '+233245556677',
+          gender: 'female',
+          dateOfBirth: '1994-06-15',
+          placeOfResidence: 'East Legon, Accra',
+          specificLocation: 'Near Okponglo Junction',
+          residentialDigitalAddress: 'GA-456-7890',
+          hometown: 'Koforidua',
+          occupation: 'Architect',
+          maritalStatus: 'Married',
+          spouseName: 'Kwame Boateng',
+          numberOfChildren: 2,
+          emergencyContactPerson: 'Kwame Boateng',
+          emergencyContactPhone: '+233207778899',
+          homeCellGroup: 'Main Sanctuary Cell',
+          department: 'Choir & Music Ministry',
+          squads: 'Worship Team, Ushering',
+          dateOfSalvation: '2012-04-08',
+          dateOfBaptism: '2013-07-21',
+          dateOfMarriage: '2020-11-14',
+          remarks: 'Available for midweek choir rehearsals.',
+          // Attempted privilege escalation fields must be ignored/stripped
+          role: 'admin',
+          isCreator: true,
+          status: 'inactive',
+        });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.firstName).toBe('Akosua');
+      expect(updateRes.body.middleName).toBe('Abena');
+      expect(updateRes.body.lastName).toBe('Boateng');
+      expect(updateRes.body.preferredName).toBe('Sister Akosua');
+      expect(updateRes.body.phoneE164).toBe('+233245556677');
+      expect(updateRes.body.gender).toBe('female');
+      expect(updateRes.body.dateOfBirth).toBe('1994-06-15');
+      expect(updateRes.body.monthOfBirth).toBe('June');
+      expect(updateRes.body.placeOfResidence).toBe('East Legon, Accra');
+      expect(updateRes.body.residentialDigitalAddress).toBe('GA-456-7890');
+      expect(updateRes.body.hometown).toBe('Koforidua');
+      expect(updateRes.body.occupation).toBe('Architect');
+      expect(updateRes.body.maritalStatus).toBe('Married');
+      expect(updateRes.body.spouseName).toBe('Kwame Boateng');
+      expect(updateRes.body.numberOfChildren).toBe(2);
+      expect(updateRes.body.emergencyContactPerson).toBe('Kwame Boateng');
+      expect(updateRes.body.emergencyContactPhone).toBe('+233207778899');
+      expect(updateRes.body.homeCellGroup).toBe('Main Sanctuary Cell');
+      expect(updateRes.body.department).toBe('Choir & Music Ministry');
+      expect(updateRes.body.dateOfBaptism).toBe('2013-07-21');
+      expect(updateRes.body.remarks).toBe('Available for midweek choir rehearsals.');
+      expect(updateRes.body.status).not.toBe('inactive');
+      expect(updateRes.body.role).not.toBe('admin');
+
+      const fetchRes = await request(app)
+        .get('/api/members/me/profile')
+        .set('Authorization', `Bearer ${memberToken}`);
+      expect(fetchRes.status).toBe(200);
+      expect(fetchRes.body.profile?.firstName).toBe('Akosua');
+      expect(fetchRes.body.profile?.placeOfResidence).toBe('East Legon, Accra');
+      expect(fetchRes.body.profile?.emergencyContactPerson).toBe('Kwame Boateng');
+    });
+
+    it('REJECTS invalid email or malformed dates on PATCH /api/members/me/profile', async () => {
+      const badEmailRes = await request(app)
+        .patch('/api/members/me/profile')
+        .set('Authorization', `Bearer ${memberToken}`)
+        .send({ email: 'not-an-email' });
+      expect(badEmailRes.status).toBe(400);
+
+      const badDateRes = await request(app)
+        .patch('/api/members/me/profile')
+        .set('Authorization', `Bearer ${memberToken}`)
+        .send({ dateOfBirth: '15-06-1994' });
+      expect(badDateRes.status).toBe(400);
+    });
+  });
 });
-
-

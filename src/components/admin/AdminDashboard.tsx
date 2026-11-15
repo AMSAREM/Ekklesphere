@@ -403,27 +403,27 @@ export const AdminDashboard: React.FC = () => {
   }, [photoPreviewMember]);
 
   return (
-    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[32px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] transition-colors duration-200">
+    <main className="relative max-w-[1360px] w-[calc(100%-12px)] sm:w-[calc(100%-24px)] lg:w-[calc(100%-32px)] mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[32px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100dvh-76px)] min-w-0 overflow-x-clip transition-colors duration-200">
       {/* Left Navigation Rail (Desktop) & Bottom Dock (Mobile) */}
       <aside
         aria-label="Admin Module Navigation"
-        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-20px)] max-w-lg lg:w-[64px] bg-[#6D5CF2] dark:bg-[#5E4EE0] rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-6 lg:flex lg:flex-col items-center justify-items-center lg:justify-start gap-1 sm:gap-1.5 lg:gap-3 px-2 py-1.5 sm:px-3 sm:py-2 lg:py-6 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-6 shadow-md border border-white/15 lg:border-none select-none touch-manipulation"
+        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-16px)] max-w-lg lg:w-[64px] bg-[#6D5CF2] dark:bg-[#5E4EE0] rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-6 lg:flex lg:flex-col items-center justify-items-center lg:justify-start gap-1 sm:gap-1.5 lg:gap-3 px-1.5 py-1.5 sm:px-3 sm:py-2 lg:py-6 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-6 shadow-md border border-white/15 lg:border-none select-none touch-manipulation"
       >
         {/* 1. Dashboard Overview */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => navigateTab('dashboard')}
             aria-label="Dashboard Overview"
             aria-current={activeTab === 'dashboard' ? 'page' : undefined}
-            className={`w-full max-w-[56px] min-h-[44px] lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-colors cursor-pointer ${
+            className={`w-full max-w-[56px] min-w-0 min-h-[44px] lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-colors cursor-pointer ${
               activeTab === 'dashboard'
                 ? 'bg-white text-[#6D5CF2] font-bold shadow-xs'
                 : 'text-white/85 hover:text-white hover:bg-white/15'
             }`}
           >
             <Grid className="w-4.5 h-4.5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-tight font-semibold">Dash</span>
+            <span className="lg:hidden text-[10px] leading-tight font-semibold truncate max-w-full">Dash</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold rounded-xl shadow-md pointer-events-none whitespace-nowrap z-50">
             Dashboard
@@ -431,7 +431,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* 2. Service History Archive */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => navigateTab('history')}
@@ -452,7 +452,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* 3. Live Attendance Insights */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => navigateTab('insights')}
@@ -473,7 +473,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* 4. Members Directory & Uploaded Photos */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => {
@@ -496,7 +496,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* 5. Proximity Radar */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => navigateTab('proximity')}
@@ -517,7 +517,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* 6. System Settings */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
             onClick={() => navigateTab('settings')}
@@ -1567,7 +1567,7 @@ export const AdminDashboard: React.FC = () => {
                         {systemSettings.campusName} · {systemSettings.innerGeofenceMeters}m inner radius
                       </em>
                     </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px] tabular-nums">
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
                       <span>{isPremiseConfigured ? '100%' : '0%'}</span>
                       <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
                         <div
@@ -1590,7 +1590,7 @@ export const AdminDashboard: React.FC = () => {
                         Supabase live member directory ({uploadedPhotoMembers.length} photos)
                       </em>
                     </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px] tabular-nums">
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
                       <span>{members.length > 0 ? '100%' : '0%'}</span>
                       <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
                         <div
@@ -1615,7 +1615,7 @@ export const AdminDashboard: React.FC = () => {
                         {currentService.startsAt}–{currentService.endsAt})
                       </em>
                     </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] min-w-[120px] tabular-nums">
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
                       <span>{liveInsightsPreview.attendancePct}%</span>
                       <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
                         <div

@@ -168,14 +168,14 @@ export const UsherTool: React.FC = () => {
   const attendancePercentage = Math.min(Math.round((totalCheckedInCount / (expectedAttendance || 1)) * 100), 100);
 
   return (
-    <main className="relative max-w-[1360px] w-full mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100vh-80px)] lg:min-h-[900px] transition-all duration-200">
+    <main className="relative max-w-[1360px] w-[calc(100%-12px)] sm:w-[calc(100%-24px)] lg:w-[calc(100%-32px)] mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[36px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-lg lg:shadow-[0_20px_60px_rgba(60,50,140,0.12)] border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100dvh-76px)] min-w-0 overflow-x-clip transition-all duration-200">
       {/* Signature Purple Navigation Bar - Responsive Floating Dock on Mobile & Left Tab on Desktop */}
       <aside
         aria-label="Usher Station Navigation"
-        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-20px)] max-w-md lg:w-[64px] bg-[#6D5CF2]/95 dark:bg-[#5E4EE0]/95 backdrop-blur-xl rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-5 lg:flex lg:flex-col items-center justify-items-center sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-2 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-5 shadow-[0_12px_36px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200 select-none touch-manipulation"
+        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-16px)] max-w-md lg:w-[64px] bg-[#6D5CF2]/95 dark:bg-[#5E4EE0]/95 backdrop-blur-xl rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-5 lg:flex lg:flex-col items-center justify-items-center sm:justify-center lg:justify-start gap-1 sm:gap-2 lg:gap-2.5 px-1.5 py-1.5 sm:px-4 sm:py-2 lg:py-5 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-5 shadow-[0_12px_36px_rgba(40,30,120,0.35)] lg:shadow-[0_12px_32px_rgba(40,30,120,0.25)] border border-white/20 lg:border-none transition-all duration-200 select-none touch-manipulation"
       >
         {/* 1. Roster */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => {
               setFilterMode('all');
@@ -184,14 +184,14 @@ export const UsherTool: React.FC = () => {
             }}
             aria-label="Door Roster"
             aria-current={filterMode === 'all' && !isVisitorSheetOpen ? 'page' : undefined}
-            className={`w-full max-w-[56px] min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
+            className={`w-full max-w-[56px] min-w-0 min-h-[46px] lg:min-w-0 lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl sm:rounded-full lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 active:scale-95 ${
               filterMode === 'all' && !isVisitorSheetOpen
                 ? 'bg-white text-[#6D5CF2] shadow-[0_4px_12px_rgba(40,30,120,0.25)] font-bold'
                 : 'text-white/80 hover:text-white hover:bg-white/15'
             }`}
           >
             <Users className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
-            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight">Roster</span>
+            <span className="lg:hidden text-[10px] leading-tight font-semibold tracking-tight truncate max-w-full">Roster</span>
           </button>
           <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-slate-200 dark:border-white/10 text-xs font-bold rounded-xl shadow-xl pointer-events-none whitespace-nowrap z-50 animate-in fade-in slide-in-from-left-2 duration-150">
             <span>Roster</span>
@@ -199,7 +199,7 @@ export const UsherTool: React.FC = () => {
         </div>
 
         {/* 2. Camera Scanner */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => {
               if (!hasScheduledService && !isCameraActive) {
@@ -226,7 +226,7 @@ export const UsherTool: React.FC = () => {
         </div>
 
         {/* 3. Register Visitor */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setIsVisitorSheetOpen(true)}
             aria-label="Register Visitor"
@@ -246,7 +246,7 @@ export const UsherTool: React.FC = () => {
         </div>
 
         {/* 4. Sync Queue */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => {
               const count = syncUsherCheckins();
@@ -274,7 +274,7 @@ export const UsherTool: React.FC = () => {
         </div>
 
         {/* 5. System Settings */}
-        <div className="relative group w-full flex justify-center">
+        <div className="relative group w-full min-w-0 flex justify-center">
           <button
             onClick={() => setIsSettingsModalOpen(true)}
             aria-label="Station Settings"
