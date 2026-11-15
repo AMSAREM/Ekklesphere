@@ -103,3 +103,55 @@ if (heroSlides.length) {
   showHeroSlide(0);
   restartHeroSlider();
 }
+
+const demoModal = document.querySelector('#demo-modal');
+const demoForm = document.querySelector('#demo-form');
+const formSuccess = document.querySelector('#form-success');
+const quickPanel = document.querySelector('#quick-panel');
+const quickFeedback = document.querySelector('#quick-feedback');
+
+function openModal(modal) {
+  modal?.classList.add('is-open');
+  modal?.setAttribute('aria-hidden', 'false');
+  modal?.querySelector('input, button')?.focus();
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(modal) {
+  modal?.classList.remove('is-open');
+  modal?.setAttribute('aria-hidden', 'true');
+  if (!document.querySelector('.is-open')) document.body.style.overflow = '';
+}
+
+document.querySelectorAll('a.button[href="#demo"]').forEach((trigger) => trigger.addEventListener('click', (event) => {
+  event.preventDefault();
+  formSuccess?.setAttribute('hidden', '');
+  demoForm?.removeAttribute('hidden');
+  openModal(demoModal);
+}));
+
+document.querySelectorAll('[data-close-modal]').forEach((trigger) => trigger.addEventListener('click', () => closeModal(demoModal)));
+document.querySelectorAll('[data-close-quick]').forEach((trigger) => trigger.addEventListener('click', () => closeModal(quickPanel)));
+
+demoForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  demoForm.setAttribute('hidden', '');
+  formSuccess?.removeAttribute('hidden');
+});
+
+document.querySelector('.square-button')?.addEventListener('click', () => {
+  quickFeedback.textContent = '';
+  openModal(quickPanel);
+});
+
+document.querySelectorAll('[data-quick-action]').forEach((action) => action.addEventListener('click', () => {
+  const labels = { 'follow-up': 'New follow-up ready to add.', team: 'Team task ready to assign.', event: 'Event planner ready to open.' };
+  quickFeedback.textContent = labels[action.dataset.quickAction] || 'Action ready to add.';
+}));
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeModal(demoModal);
+    closeModal(quickPanel);
+  }
+});

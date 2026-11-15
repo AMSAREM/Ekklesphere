@@ -98,6 +98,25 @@
         <section class="demo-section section-pad" id="demo"><div class="demo-card reveal"><div class="demo-content"><div class="eyebrow eyebrow-light"><span class="eyebrow-dot"></span> Start with a conversation</div><h2>Give your team<br /><em>room to lead.</em></h2><p>See how Ekklesphere can fit the way your church already works—and the way you want to grow.</p><div class="demo-actions"><a class="button button-light" href="mailto:hello@ekklesphere.com">Book a personal demo <span>↗</span></a><a class="demo-text-link" href="mailto:hello@ekklesphere.com">hello@ekklesphere.com</a></div></div><div class="demo-orbit"><div class="demo-orbit-ring ring-one"></div><div class="demo-orbit-ring ring-two"></div><div class="demo-orbit-ring ring-three"></div><div class="demo-star">✦</div><span class="orbit-label label-one">People</span><span class="orbit-label label-two">Plans</span><span class="orbit-label label-three">Care</span></div></div></section>
       </main>
 
+      <div class="demo-modal" id="demo-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="demo-modal-title">
+        <div class="demo-modal-backdrop" data-close-modal></div>
+        <div class="demo-modal-card">
+          <button class="modal-close" type="button" data-close-modal aria-label="Close demo request">×</button>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> Start a conversation</div>
+          <h2 id="demo-modal-title">Let’s make room<br /><em>for ministry.</em></h2>
+          <p class="modal-intro">Tell us a little about your church and we’ll show you Ekklesphere in context.</p>
+          <form class="demo-form" id="demo-form">
+            <label>Work email<input type="email" name="email" placeholder="you@yourchurch.org" required /></label>
+            <label>Church name<input type="text" name="church" placeholder="Your church" required /></label>
+            <label>What are you exploring?<select name="interest"><option>People &amp; care</option><option>Teams &amp; scheduling</option><option>Church-wide operations</option></select></label>
+            <button class="button button-primary" type="submit">Request my demo <span>↗</span></button>
+          </form>
+          <div class="form-success" id="form-success" hidden><span>✓</span><strong>You’re on the list.</strong><p>We’ll follow up with a personal walkthrough soon.</p></div>
+        </div>
+      </div>
+      <div class="quick-panel" id="quick-panel" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="quick-panel-title">
+        <div class="quick-panel-card"><button class="modal-close" type="button" data-close-quick aria-label="Close quick add">×</button><span class="quick-icon">＋</span><span class="eyebrow">Quick add</span><h2 id="quick-panel-title">What needs your attention?</h2><div class="quick-actions"><button type="button" data-quick-action="follow-up"><span>◌</span><strong>New follow-up</strong><small>Keep a care note moving</small></button><button type="button" data-quick-action="team"><span>⌁</span><strong>Add a team task</strong><small>Give someone the next right thing</small></button><button type="button" data-quick-action="event"><span>□</span><strong>Plan an event</strong><small>Make the next gathering clear</small></button></div><p class="quick-feedback" id="quick-feedback" aria-live="polite"></p></div>
+      </div>
       <footer class="site-footer section-pad" id="pricing"><div class="footer-top"><a class="brand brand-footer" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="brand-word">ekklesphere</span></a><p>Church management,<br /><em>made human.</em></p><div class="footer-links"><div><strong>Explore</strong><a href="#platform">Platform</a><a href="#workflow">How it works</a><a href="#stories">Stories</a></div><div><strong>Connect</strong><a href="mailto:hello@ekklesphere.com">Contact</a><a href="#demo">Book a demo</a><a href="#top">Sign in</a></div></div></div><div class="footer-bottom"><span>© 2024 Ekklesphere, Inc.</span><span>Made for the people doing the work.</span><span><a href="#top">Privacy</a> · <a href="#top">Terms</a></span></div></footer>
     </div>
     <script type="module" src="/app.js"></script>
