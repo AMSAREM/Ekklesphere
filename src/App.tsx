@@ -12,6 +12,7 @@ import { ChurchHomePage } from './components/home/ChurchHomePage';
 import { CreatorsPanel } from './components/creator/CreatorsPanel';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
 import { KeyRound } from 'lucide-react';
+import { PublicLandingPage } from './components/landing/PublicLandingPage';
 
 const EkklesphereMain: React.FC = () => {
   const {
@@ -22,6 +23,16 @@ const EkklesphereMain: React.FC = () => {
     isChangePasswordModalOpen,
     setIsChangePasswordModalOpen,
   } = useEkklesphere();
+
+  const isPublicRoot =
+    typeof window !== 'undefined' &&
+    window.location.pathname === '/' &&
+    !new URLSearchParams(window.location.search).has('view') &&
+    !new URLSearchParams(window.location.search).has('church');
+
+  if (isPublicRoot) {
+    return <PublicLandingPage />;
+  }
 
   // If Creator Console view is active - only verified creator login can access
   if (viewMode === 'creator') {
