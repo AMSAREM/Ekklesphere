@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -26,9 +26,13 @@ import {
   Power,
   Trash2,
   ClipboardList,
+  ShieldCheck,
+  Phone,
+  X,
 } from 'lucide-react';
 import { DashboardAnalyticsResult } from '../../utils/dashboardAnalytics';
 import { ChurchGroupCategory } from '../../types/ekklesphere';
+import { SettingsGroupIntent } from '../../utils/settingsConnections';
 
 export type AnalyticsLens = 'all' | 'departments' | 'ministries' | 'demographics' | 'services';
 
@@ -40,7 +44,7 @@ interface DashboardDeepAnalyticsProps {
   onInspectDepartment: (departmentName: string) => void;
   onInspectGroup: (groupName: string) => void;
   onSelectService: (serviceId: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (groupIntent?: SettingsGroupIntent) => void;
   onAddMember: () => void;
   onAddService: () => void;
   onOpenServiceHistory?: () => void;
@@ -48,6 +52,9 @@ interface DashboardDeepAnalyticsProps {
   onToggleServiceStatus?: (serviceId: string, nextStatus: 'live' | 'closed') => void;
   onEditService?: (serviceId: string) => void;
   onDeleteService?: (serviceId: string) => void;
+  externalFilterQuery?: string;
+  externalCategoryFilter?: 'all' | ChurchGroupCategory;
+  externalFilterNonce?: number;
 }
 
 const CATEGORY_LABELS: Record<ChurchGroupCategory, string> = {
@@ -85,18 +92,38 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   onToggleServiceStatus,
   onEditService,
   onDeleteService,
+  externalFilterQuery,
+  externalCategoryFilter,
+  externalFilterNonce,
 }) => {
   const [filterQuery, setFilterQuery] = useState('');
   const [groupCategoryFilter, setGroupCategoryFilter] = useState<'all' | ChurchGroupCategory>('all');
+  const [ministryViewMode, setMinistryViewMode] = useState<'groups' | 'leaders'>('groups');
   const [deptSortKey, setDeptSortKey] = useState<'members' | 'turnout'>('members');
   const [confirmDeleteSvcId, setConfirmDeleteSvcId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!externalFilterNonce) return;
+    if (externalFilterQuery !== undefined) {
+      setFilterQuery(externalFilterQuery);
+    }
+    if (externalCategoryFilter !== undefined) {
+      setGroupCategoryFilter(externalCategoryFilter);
+    }
+    setMinistryViewMode('groups');
+  }, [externalFilterNonce, externalFilterQuery, externalCategoryFilter]);
 
   const queryLower = filterQuery.trim().toLowerCase();
 
   const filteredDepartments = useMemo(() => {
-    const base = analytics.departments.filter((d) =>
-      queryLower ? d.name.toLowerCase().includes(queryLower) : true
-    );
+    const base = analytics.departments.filter((d) => {
+      if (!queryLower) return true;
+      return (
+        d.name.toLowerCase().includes(queryLower) ||
+        (d.leaderName && d.leaderName.toLowerCase().includes(queryLower)) ||
+        (d.assistantLeader && d.assistantLeader.toLowerCase().includes(queryLower))
+      );
+    });
     return [...base].sort((a, b) =>
       deptSortKey === 'turnout'
         ? b.turnoutPct - a.turnoutPct || b.totalMembers - a.totalMembers
@@ -109,6 +136,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
       filteredDepartments.slice(0, 8).map((d) => ({
         name: d.name.length > 18 ? `${d.name.slice(0, 16)}…` : d.name,
         fullName: d.name,
+        leaderName: d.leaderName || 'Unassigned',
         present: d.presentCount,
         absent: d.absentCount,
         total: d.totalMembers,
@@ -126,10 +154,43 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
       return (
         g.name.toLowerCase().includes(queryLower) ||
         g.leaderName.toLowerCase().includes(queryLower) ||
-        (g.meetingDay && g.meetingDay.toLowerCase().includes(queryLower))
+        (g.assistantLeader && g.assistantLeader.toLowerCase().includes(queryLower)) ||
+        (g.meetingDay && g.meetingDay.toLowerCase().includes(queryLower)) ||
+        (g.meetingLocation && g.meetingLocation.toLowerCase().includes(queryLower))
       );
     });
   }, [analytics.groups, groupCategoryFilter, queryLower]);
+
+  const topGroupsChartData = useMemo(
+    () =>
+      filteredGroups
+        .filter((g) => g.totalMembers > 0 || filteredGroups.length <= 6)
+        .slice(0, 8)
+        .map((g) => ({
+          name: g.name.length > 18 ? `${g.name.slice(0, 16)}…` : g.name,
+          fullName: g.name,
+          leaderName: g.isConfiguredInDb ? g.leaderName : 'Unconfigured',
+          present: g.presentCount,
+          absent: g.absentCount,
+          total: g.totalMembers,
+          turnoutPct: g.turnoutPct,
+        })),
+    [filteredGroups]
+  );
+
+  const filteredLeaders = useMemo(() => {
+    if (!queryLower) return analytics.leadership.leaders;
+    return analytics.leadership.leaders.filter(
+      (leader) =>
+        leader.leaderName.toLowerCase().includes(queryLower) ||
+        leader.groups.some((g) => g.name.toLowerCase().includes(queryLower))
+    );
+  }, [analytics.leadership.leaders, queryLower]);
+
+  const unconfiguredRosterGroups = useMemo(
+    () => analytics.groups.filter((g) => !g.isConfiguredInDb),
+    [analytics.groups]
+  );
 
   const filteredServices = useMemo(() => {
     if (!queryLower) return analytics.serviceComparisons;
@@ -146,7 +207,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   const lensOptions: Array<{ id: AnalyticsLens; label: string }> = [
     { id: 'all', label: 'All Insights' },
     { id: 'departments', label: 'Departments' },
-    { id: 'ministries', label: 'Ministries & Groups' },
+    { id: 'ministries', label: 'Ministries & Leadership' },
     { id: 'demographics', label: 'Demographics & Health' },
     { id: 'services', label: 'Services' },
   ];
@@ -169,23 +230,33 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
             <span className="mx-1.5" aria-hidden="true">·</span>
             <span>{analytics.namedDepartmentsCount} departments</span>
             <span className="mx-1.5" aria-hidden="true">·</span>
-            <span>{analytics.groupCounts.ministries} ministries</span>
+            <span>{analytics.leadership.distinctLeadersCount} assigned leaders</span>
             <span className="mx-1.5" aria-hidden="true">·</span>
-            <span>{analytics.groupCounts.cellGroups} cell groups</span>
+            <span>{analytics.leadership.leadershipCoveragePct}% structure coverage</span>
           </p>
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
           {/* Search filter */}
-          <div className="relative min-w-[210px]">
+          <div className="relative min-w-[215px]">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
             <input
               type="text"
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              placeholder="Filter departments, ministries..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+              placeholder="Filter groups, leaders, services..."
+              className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
             />
+            {filterQuery && (
+              <button
+                type="button"
+                onClick={() => setFilterQuery('')}
+                aria-label="Clear analytics filter"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[#666A86] hover:text-[#1D1B3A] dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           {/* Segmented Lens Switcher */}
@@ -214,6 +285,98 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
         </div>
       </div>
 
+      {/* Congregational Structure & Leadership Coverage Hairline Strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-[#E9EBF5] dark:divide-[#2D2D55] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F8F9FD] dark:bg-[#14142E] tabular-nums">
+        <div className="p-3.5 sm:px-4">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+            Configured Structure
+          </span>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="font-mono text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+              {analytics.leadership.activeGroupsCount}/{analytics.leadership.configuredGroupsCount}
+            </span>
+            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+              active units
+            </span>
+          </div>
+          <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5 block">
+            {analytics.groupCounts.ministries} min · {analytics.groupCounts.fellowships} fel · {analytics.groupCounts.cellGroups} cells
+          </span>
+        </div>
+
+        <div className="p-3.5 sm:px-4">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+            Leadership Coverage
+          </span>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="font-mono text-xl font-bold text-[#6D5CF2] dark:text-[#9D90FF]">
+              {analytics.leadership.leadershipCoveragePct}%
+            </span>
+            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+              of congregation
+            </span>
+          </div>
+          <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5 block">
+            {analytics.leadership.membersUnderConfiguredLeadershipCount}/{analytics.membership.totalMembers} under assigned lead
+          </span>
+        </div>
+
+        <div className="p-3.5 sm:px-4">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+            Active Pastoral Leaders
+          </span>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="font-mono text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+              {analytics.leadership.distinctLeadersCount}
+            </span>
+            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+              {analytics.leadership.coLedGroupsCount} with co-lead
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onChangeLens('ministries');
+              setMinistryViewMode('leaders');
+            }}
+            className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline mt-0.5 inline-flex items-center gap-1 cursor-pointer"
+          >
+            <span>Inspect leader accountability</span>
+            <ArrowUpRight className="w-3 h-3" />
+          </button>
+        </div>
+
+        <div className="p-3.5 sm:px-4 flex flex-col justify-between">
+          <div>
+            <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+              Structure Gaps
+            </span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span
+                className={`font-mono text-xl font-bold ${
+                  analytics.leadership.groupsMissingLeaderCount > 0
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {analytics.leadership.groupsMissingLeaderCount}
+              </span>
+              <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                {analytics.leadership.unconfiguredGroupsCount} unconfigured
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenSettings()}
+            className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline mt-0.5 inline-flex items-center gap-1 self-start cursor-pointer"
+          >
+            <Settings className="w-3 h-3" />
+            <span>Manage Structure &amp; Leadership</span>
+          </button>
+        </div>
+      </div>
+
       {/* SECTION 1: DEPARTMENTS BREAKDOWN & LIVE TURNOUT */}
       {(activeLens === 'all' || activeLens === 'departments') && (
         <div className="space-y-4">
@@ -225,7 +388,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                   Department Roster &amp; Active Service Turnout
                 </h3>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Headcount, attendance rate for {analytics.activeService.name}, auto check-in readiness, and repeat absences by department.
+                  Headcount, assigned ministry leadership, attendance rate for {analytics.activeService.name}, and repeat absences by department.
                 </p>
               </div>
             </div>
@@ -235,7 +398,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                 <button
                   type="button"
                   onClick={() => setDeptSortKey('members')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 ${
                     deptSortKey === 'members'
                       ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
                       : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -246,7 +409,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                 <button
                   type="button"
                   onClick={() => setDeptSortKey('turnout')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 ${
                     deptSortKey === 'turnout'
                       ? 'bg-white dark:bg-[#2A2A55] text-[#1D1B3A] dark:text-white shadow-xs'
                       : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -257,7 +420,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
               </div>
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={() => onOpenSettings()}
                 className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Settings className="w-3.5 h-3.5 text-[#6D5CF2]" />
@@ -277,7 +440,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
               <button
                 type="button"
                 onClick={onAddMember}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-semibold cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>Add Member</span>
@@ -332,8 +495,11 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                           const row = payload[0]?.payload;
                           return (
                             <div className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl p-3 shadow-lg text-xs tabular-nums">
-                              <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                              <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
                                 {row.fullName}
+                              </p>
+                              <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mb-1">
+                                Lead: {row.leaderName}
                               </p>
                               <p className="text-emerald-600 dark:text-emerald-400">
                                 Present: {row.present} ({row.turnoutPct}%)
@@ -363,66 +529,125 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                   <thead className="bg-[#F6F7FC] dark:bg-[#14142E] border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
                     <tr>
                       <th className="py-2.5 px-3.5 font-semibold">Department</th>
+                      <th className="py-2.5 px-3 font-semibold">Ministry Lead</th>
                       <th className="py-2.5 px-3 font-semibold text-right">Members</th>
-                      <th className="py-2.5 px-3 font-semibold text-right">Share</th>
                       <th className="py-2.5 px-3 font-semibold text-right">Present</th>
-                      <th className="py-2.5 px-3 font-semibold min-w-[115px]">Turnout</th>
-                      <th className="py-2.5 px-3 font-semibold text-right">Auto Opt-In</th>
-                      <th className="py-2.5 px-3.5 font-semibold text-right">At-Risk</th>
+                      <th className="py-2.5 px-3 font-semibold min-w-[110px]">Turnout</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">At-Risk</th>
+                      <th className="py-2.5 px-3.5 font-semibold text-right">Structure</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
-                    {filteredDepartments.map((dept) => (
-                      <tr
-                        key={dept.name}
-                        onClick={() => onInspectDepartment(dept.name)}
-                        className="hover:bg-[#F8F9FD] dark:hover:bg-white/[0.03] transition-colors cursor-pointer group"
-                        title={`View ${dept.name} members in directory`}
-                      >
-                        <td className="py-2.5 px-3.5 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                          <span className="inline-flex items-center gap-1 group-hover:text-[#6D5CF2] dark:group-hover:text-[#9D90FF]">
-                            <span className="truncate max-w-[190px]">{dept.name}</span>
-                            <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                          {dept.totalMembers}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-[#666A86] dark:text-[#A9ACC8]">
-                          {dept.shareOfRosterPct}%
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                          {dept.presentCount}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                              <div
-                                className="h-full rounded-full bg-[#4FBF98]"
-                                style={{ width: `${dept.turnoutPct}%` }}
-                              />
-                            </div>
-                            <span className="font-mono text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] w-8 text-right">
-                              {dept.turnoutPct}%
+                    {filteredDepartments.map((dept) => {
+                      const isGeneral =
+                        dept.name.toLowerCase() === 'general' ||
+                        dept.name.toLowerCase() === 'general congregation';
+                      return (
+                        <tr
+                          key={dept.name}
+                          onClick={() => onInspectDepartment(dept.name)}
+                          className="hover:bg-[#F8F9FD] dark:hover:bg-white/[0.03] transition-colors cursor-pointer group"
+                          title={`View ${dept.name} members in directory`}
+                        >
+                          <td className="py-2.5 px-3.5 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            <span className="inline-flex items-center gap-1 group-hover:text-[#6D5CF2] dark:group-hover:text-[#9D90FF]">
+                              <span className="truncate max-w-[165px]">{dept.name}</span>
+                              <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                             </span>
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-[#666A86] dark:text-[#A9ACC8]">
-                          {dept.autoCheckinPct}%
-                        </td>
-                        <td className="py-2.5 px-3.5 text-right font-mono">
-                          <span
-                            className={
-                              dept.atRiskCount > 0
-                                ? 'font-semibold text-rose-600 dark:text-rose-400'
-                                : 'text-[#666A86] dark:text-[#A9ACC8]'
-                            }
+                            {dept.meetingDay && (
+                              <span className="block text-[10px] font-normal text-[#666A86] dark:text-[#A9ACC8]">
+                                {dept.meetingDay}
+                                {dept.meetingTime ? ` · ${dept.meetingTime}` : ''}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {dept.leaderName ? (
+                              <div className="min-w-0">
+                                <span className="font-medium text-[#1D1B3A] dark:text-[#F2F2FA] truncate block max-w-[130px]">
+                                  {dept.leaderName}
+                                </span>
+                                {dept.assistantLeader && (
+                                  <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate block max-w-[130px]">
+                                    Co: {dept.assistantLeader}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                                {isGeneral ? 'All Elders' : 'Unassigned'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            {dept.totalMembers}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                            {dept.presentCount}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-[#4FBF98]"
+                                  style={{ width: `${dept.turnoutPct}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] w-8 text-right">
+                                {dept.turnoutPct}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono">
+                            <span
+                              className={
+                                dept.atRiskCount > 0
+                                  ? 'font-semibold text-rose-600 dark:text-rose-400'
+                                  : 'text-[#666A86] dark:text-[#A9ACC8]'
+                              }
+                            >
+                              {dept.atRiskCount}
+                            </span>
+                          </td>
+                          <td
+                            className="py-2.5 px-3.5 text-right whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            {dept.atRiskCount}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                            {isGeneral ? (
+                              <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                                Base
+                              </span>
+                            ) : dept.isConfiguredInDb && dept.groupId ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenSettings({ mode: 'edit', groupId: dept.groupId })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Edit3 className="w-3 h-3 text-[#6D5CF2]" />
+                                <span>Edit Lead</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenSettings({
+                                    mode: 'create',
+                                    prefillName: dept.name,
+                                    prefillCategory: 'ministry',
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:opacity-90 cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Assign Lead</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -431,54 +656,82 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
         </div>
       )}
 
-      {/* SECTION 2: MINISTRIES, FELLOWSHIPS & HOME CELL GROUPS */}
+      {/* SECTION 2: MINISTRIES, FELLOWSHIPS, HOME CELL GROUPS & LEADERSHIP ACCOUNTABILITY */}
       {(activeLens === 'all' || activeLens === 'ministries') && (
         <div
           className={`space-y-4 ${
             activeLens === 'all' ? 'pt-6 border-t border-[#E9EBF5] dark:border-[#2D2D55]' : ''
           }`}
         >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <HeartHandshake className="w-4 h-4 text-[#6D5CF2] shrink-0" />
               <div>
                 <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                  Ministries, Fellowships &amp; Cell Groups
+                  Ministries, Fellowships &amp; Leadership Accountability
                 </h3>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Active campus ministries ({analytics.groupCounts.ministries}), fellowships ({analytics.groupCounts.fellowships}), and home cells ({analytics.groupCounts.cellGroups}).
+                  Active campus ministries ({analytics.groupCounts.ministries}), fellowships ({analytics.groupCounts.fellowships}), and home cells ({analytics.groupCounts.cellGroups}) connected to pastoral leadership.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
-                {(
-                  [
-                    { id: 'all', label: `All (${analytics.groupCounts.total})` },
-                    { id: 'ministry', label: `Ministries (${analytics.groupCounts.ministries})` },
-                    { id: 'fellowship', label: `Fellowships (${analytics.groupCounts.fellowships})` },
-                    { id: 'cell_group', label: `Cells (${analytics.groupCounts.cellGroups})` },
-                  ] as const
-                ).map((cat) => (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setGroupCategoryFilter(cat.id)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
-                      groupCategoryFilter === cat.id
-                        ? 'bg-white dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-white shadow-xs'
-                        : 'text-[#666A86] dark:text-[#A9ACC8]'
-                    }`}
-                  >
-                    {cat.label}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setMinistryViewMode('groups')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    ministryViewMode === 'groups'
+                      ? 'bg-white dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-white shadow-xs'
+                      : 'text-[#666A86] dark:text-[#A9ACC8]'
+                  }`}
+                >
+                  Groups &amp; Turnout ({filteredGroups.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMinistryViewMode('leaders')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
+                    ministryViewMode === 'leaders'
+                      ? 'bg-white dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-white shadow-xs'
+                      : 'text-[#666A86] dark:text-[#A9ACC8]'
+                  }`}
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>Leadership ({filteredLeaders.length})</span>
+                </button>
               </div>
+
+              {ministryViewMode === 'groups' && (
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                  {(
+                    [
+                      { id: 'all', label: `All (${analytics.groupCounts.total})` },
+                      { id: 'ministry', label: `Ministries (${analytics.groupCounts.ministries})` },
+                      { id: 'fellowship', label: `Fellowships (${analytics.groupCounts.fellowships})` },
+                      { id: 'cell_group', label: `Cells (${analytics.groupCounts.cellGroups})` },
+                    ] as const
+                  ).map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setGroupCategoryFilter(cat.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
+                        groupCategoryFilter === cat.id
+                          ? 'bg-white dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-white shadow-xs'
+                          : 'text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={() => onOpenSettings()}
                 className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Settings className="w-3.5 h-3.5 text-[#6D5CF2]" />
@@ -487,97 +740,405 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
             </div>
           </div>
 
-          {filteredGroups.length === 0 ? (
+          {/* Inline Callout for Roster Groups Missing Leadership Config */}
+          {unconfiguredRosterGroups.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-[#F8F9FD] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="text-xs">
+                <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                  {unconfiguredRosterGroups.length} roster group{unconfiguredRosterGroups.length === 1 ? '' : 's'} discovered without assigned leadership
+                </span>
+                <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                  Assign a leader and schedule so pastoral follow-ups, analytics rollups, and broadcasts route automatically.
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                {unconfiguredRosterGroups.slice(0, 3).map((grp) => (
+                  <button
+                    key={grp.id}
+                    type="button"
+                    onClick={() =>
+                      onOpenSettings({
+                        mode: 'create',
+                        prefillName: grp.name,
+                        prefillCategory: grp.category,
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-[11px] font-semibold hover:opacity-90 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Configure {grp.name} ({grp.totalMembers})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {ministryViewMode === 'leaders' ? (
+            filteredLeaders.length === 0 ? (
+              <div className="py-10 px-4 text-center rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
+                <p className="text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  No pastoral group leaders assigned yet
+                </p>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 mb-3">
+                  Assign leaders to your ministries, fellowships, and home cells in System Settings to track coverage and attendance accountability.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onOpenSettings({ mode: 'create', prefillCategory: 'ministry' })}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Assign Ministry Leader</span>
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-[#F6F7FC] dark:bg-[#14142E] border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
+                    <tr>
+                      <th className="py-2.5 px-3.5 font-semibold">Leader</th>
+                      <th className="py-2.5 px-3 font-semibold">Supervised Ministries &amp; Cells</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Headcount</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Present</th>
+                      <th className="py-2.5 px-3 font-semibold min-w-[115px]">Turnout</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">At-Risk</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Open Care</th>
+                      <th className="py-2.5 px-3.5 font-semibold text-right">Manage</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
+                    {filteredLeaders.map((leader) => {
+                      const primaryGroup = leader.groups[0];
+                      return (
+                        <tr
+                          key={leader.id}
+                          className="hover:bg-[#F8F9FD] dark:hover:bg-white/[0.03] transition-colors"
+                        >
+                          <td className="py-2.5 px-3.5">
+                            <div className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              {leader.leaderName}
+                            </div>
+                            <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-2 mt-0.5">
+                              <span>
+                                {leader.leadCount > 0 ? `${leader.leadCount} Lead` : ''}
+                                {leader.leadCount > 0 && leader.coLeadCount > 0 ? ' · ' : ''}
+                                {leader.coLeadCount > 0 ? `${leader.coLeadCount} Co-Lead` : ''}
+                              </span>
+                              {leader.phone && (
+                                <a
+                                  href={`tel:${leader.phone.replace(/\s+/g, '')}`}
+                                  className="inline-flex items-center gap-1 font-mono text-[#6D5CF2] dark:text-[#9D90FF] hover:underline"
+                                >
+                                  <Phone className="w-2.5 h-2.5" />
+                                  <span>{leader.phone}</span>
+                                </a>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              {leader.groups.map((grp, idx) => (
+                                <button
+                                  key={`${grp.id}-${grp.role}`}
+                                  type="button"
+                                  onClick={() => onInspectGroup(grp.name)}
+                                  className="text-[11px] font-medium text-[#1D1B3A] dark:text-[#F2F2FA] hover:text-[#6D5CF2] dark:hover:text-[#9D90FF] hover:underline cursor-pointer"
+                                  title={`Inspect ${grp.name} members in Directory`}
+                                >
+                                  {grp.name}
+                                  <span className="text-[#666A86] dark:text-[#A9ACC8]">
+                                    {' '}({grp.role === 'Co-Lead' ? 'Co' : CATEGORY_LABELS[grp.category]})
+                                  </span>
+                                  {idx < leader.groups.length - 1 ? ',' : ''}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            {leader.totalMembersSupervised}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                            {leader.presentCount}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-[#4FBF98]"
+                                  style={{ width: `${leader.turnoutPct}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] w-8 text-right">
+                                {leader.turnoutPct}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono">
+                            <span
+                              className={
+                                leader.atRiskCount > 0
+                                  ? 'font-semibold text-rose-600 dark:text-rose-400'
+                                  : 'text-[#666A86] dark:text-[#A9ACC8]'
+                              }
+                            >
+                              {leader.atRiskCount}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono">
+                            <span
+                              className={
+                                leader.openFollowupCount > 0
+                                  ? 'font-semibold text-amber-600 dark:text-amber-400'
+                                  : 'text-[#666A86] dark:text-[#A9ACC8]'
+                              }
+                            >
+                              {leader.openFollowupCount}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                            {primaryGroup && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenSettings({ mode: 'edit', groupId: primaryGroup.id })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Edit3 className="w-3 h-3 text-[#6D5CF2]" />
+                                <span>Edit Group</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : filteredGroups.length === 0 ? (
             <div className="py-10 px-4 text-center rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
               <p className="text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                No ministries or groups configured yet
+                No ministries or groups match this view
               </p>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 mb-3">
                 Create ministries, fellowships, or cell groups in System Settings to track leadership and attendance participation.
               </p>
               <button
                 type="button"
-                onClick={onOpenSettings}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-semibold cursor-pointer"
+                onClick={() => onOpenSettings({ mode: 'create', prefillCategory: 'ministry' })}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Configure Ministries</span>
               </button>
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55]">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#F6F7FC] dark:bg-[#14142E] border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
-                  <tr>
-                    <th className="py-2.5 px-3.5 font-semibold">Ministry / Group</th>
-                    <th className="py-2.5 px-3 font-semibold">Category</th>
-                    <th className="py-2.5 px-3 font-semibold">Leader</th>
-                    <th className="py-2.5 px-3 font-semibold">Schedule</th>
-                    <th className="py-2.5 px-3 font-semibold text-right">Members</th>
-                    <th className="py-2.5 px-3 font-semibold text-right">Present</th>
-                    <th className="py-2.5 px-3 font-semibold min-w-[120px]">Active Turnout</th>
-                    <th className="py-2.5 px-3.5 font-semibold text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
-                  {filteredGroups.map((group) => (
-                    <tr
-                      key={group.id}
-                      onClick={() => onInspectGroup(group.name)}
-                      className="hover:bg-[#F8F9FD] dark:hover:bg-white/[0.03] transition-colors cursor-pointer group"
-                      title={`View members in ${group.name}`}
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+              {/* Recharts Ministry / Fellowship / Cell Turnout Comparison */}
+              <div className="xl:col-span-5 bg-[#F8F9FD] dark:bg-[#14142E] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Group Attendance — Present vs Unarrived
+                  </span>
+                  <div className="flex items-center gap-3 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-xs bg-[#6D5CF2]" />
+                      Present
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-xs bg-[#CBD5E1] dark:bg-[#3A3A6A]" />
+                      Absent
+                    </span>
+                  </div>
+                </div>
+                <div className="h-[260px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={topGroupsChartData}
+                      layout="vertical"
+                      margin={{ top: 4, right: 16, left: 4, bottom: 4 }}
                     >
-                      <td className="py-2.5 px-3.5 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        <span className="inline-flex items-center gap-1 group-hover:text-[#6D5CF2] dark:group-hover:text-[#9D90FF]">
-                          <span className="truncate max-w-[180px]">{group.name}</span>
-                          <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-[#666A86] dark:text-[#A9ACC8]">
-                        {CATEGORY_LABELS[group.category]}
-                      </td>
-                      <td className="py-2.5 px-3 text-[#1D1B3A] dark:text-[#F2F2FA] truncate max-w-[140px]">
-                        {group.leaderName}
-                      </td>
-                      <td className="py-2.5 px-3 text-[#666A86] dark:text-[#A9ACC8] whitespace-nowrap">
-                        {group.meetingDay || group.meetingTime
-                          ? [group.meetingDay, group.meetingTime].filter(Boolean).join(' · ')
-                          : 'Flexible schedule'}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {group.totalMembers}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                        {group.presentCount}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-[#6D5CF2]"
-                              style={{ width: `${group.turnoutPct}%` }}
-                            />
-                          </div>
-                          <span className="font-mono text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] w-8 text-right">
-                            {group.turnoutPct}%
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3.5 text-right">
-                        <span
-                          className={`text-[11px] font-semibold ${
-                            group.active
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : 'text-[#666A86] dark:text-[#A9ACC8]'
-                          }`}
-                        >
-                          {group.active ? 'Active' : 'Paused'}
-                        </span>
-                      </td>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridStrokeColor} />
+                      <XAxis
+                        type="number"
+                        allowDecimals={false}
+                        tick={{ fontSize: 11, fill: axisTickColor }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={118}
+                        tick={{ fontSize: 11, fill: axisTickColor }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(109,92,242,0.05)' }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const row = payload[0]?.payload;
+                          return (
+                            <div className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl p-3 shadow-lg text-xs tabular-nums">
+                              <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
+                                {row.fullName}
+                              </p>
+                              <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mb-1">
+                                Lead: {row.leaderName}
+                              </p>
+                              <p className="text-[#6D5CF2] dark:text-[#9D90FF]">
+                                Present: {row.present} ({row.turnoutPct}%)
+                              </p>
+                              <p className="text-[#666A86] dark:text-[#A9ACC8]">
+                                Absent: {row.absent} · Total: {row.total}
+                              </p>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="present" stackId="grp" fill="#6D5CF2" radius={[0, 0, 0, 0]} />
+                      <Bar
+                        dataKey="absent"
+                        stackId="grp"
+                        fill={theme === 'dark' ? '#343463' : '#DCE0F0'}
+                        radius={[0, 4, 4, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Ministries & Groups Matrix Table */}
+              <div className="xl:col-span-7 overflow-x-auto rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-[#F6F7FC] dark:bg-[#14142E] border-b border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]">
+                    <tr>
+                      <th className="py-2.5 px-3.5 font-semibold">Ministry / Group</th>
+                      <th className="py-2.5 px-3 font-semibold">Leadership</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Members</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Present</th>
+                      <th className="py-2.5 px-3 font-semibold min-w-[110px]">Turnout</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">At-Risk</th>
+                      <th className="py-2.5 px-3.5 font-semibold text-right">Structure</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
+                    {filteredGroups.map((group) => (
+                      <tr
+                        key={group.id}
+                        onClick={() => onInspectGroup(group.name)}
+                        className="hover:bg-[#F8F9FD] dark:hover:bg-white/[0.03] transition-colors cursor-pointer group"
+                        title={`View members in ${group.name}`}
+                      >
+                        <td className="py-2.5 px-3.5">
+                          <div className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] inline-flex items-center gap-1 group-hover:text-[#6D5CF2] dark:group-hover:text-[#9D90FF]">
+                            <span className="truncate max-w-[165px]">{group.name}</span>
+                            <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                          </div>
+                          <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5 truncate max-w-[200px]">
+                            {CATEGORY_LABELS[group.category]}
+                            {' · '}
+                            <span className={group.active ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+                              {group.active ? 'Active' : 'Paused'}
+                            </span>
+                            {(group.meetingDay || group.meetingTime) && (
+                              <span>
+                                {' · '}
+                                {[group.meetingDay, group.meetingTime].filter(Boolean).join(' ')}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {group.isConfiguredInDb ? (
+                            <div className="min-w-0">
+                              <span className="font-medium text-[#1D1B3A] dark:text-[#F2F2FA] truncate block max-w-[140px]">
+                                {group.leaderName}
+                              </span>
+                              {group.assistantLeader && (
+                                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate block max-w-[140px]">
+                                  Co: {group.assistantLeader}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                              Unconfigured
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          {group.totalMembers}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                          {group.presentCount}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-[#6D5CF2]"
+                                style={{ width: `${group.turnoutPct}%` }}
+                              />
+                            </div>
+                            <span className="font-mono text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] w-8 text-right">
+                              {group.turnoutPct}%
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          <span
+                            className={
+                              group.atRiskCount > 0
+                                ? 'font-semibold text-rose-600 dark:text-rose-400'
+                                : 'text-[#666A86] dark:text-[#A9ACC8]'
+                            }
+                          >
+                            {group.atRiskCount}
+                          </span>
+                          {group.openFollowupCount > 0 && (
+                            <span className="block text-[10px] text-amber-600 dark:text-amber-400">
+                              {group.openFollowupCount} care
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className="py-2.5 px-3.5 text-right whitespace-nowrap"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {group.isConfiguredInDb ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenSettings({ mode: 'edit', groupId: group.id })}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              <Edit3 className="w-3 h-3 text-[#6D5CF2]" />
+                              <span>Edit</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenSettings({
+                                  mode: 'create',
+                                  prefillName: group.name,
+                                  prefillCategory: group.category,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:opacity-90 cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              <Plus className="w-3 h-3" />
+                              <span>Assign Lead</span>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

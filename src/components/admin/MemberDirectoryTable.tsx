@@ -27,6 +27,7 @@ import {
   Copy,
   Check,
   Settings,
+  KeyRound,
 } from 'lucide-react';
 import { Person, MEMBERSHIP_TABLE_HEADERS } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
@@ -34,6 +35,7 @@ import { useEkklesphere } from '../../context/EkklesphereContext';
 import {
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
+  normalizeSettingLabel,
 } from '../../utils/settingsConnections';
 import {
   getExternalImageOpenUrl,
@@ -71,7 +73,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   initialGroupFilter,
   initialDisplayMode,
 }) => {
-  const { churchGroups, requestOpenSettings } = useEkklesphere();
+  const { churchGroups, requestOpenSettings, requestOpenUserManagement } = useEkklesphere();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>(
@@ -227,10 +229,10 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
 
       // Cell Group / Ministry filter
       if (selectedGroupFilter !== 'all') {
-        const needle = selectedGroupFilter.trim().toLowerCase();
-        const homeCell = (m.homeCellGroup || '').trim().toLowerCase();
-        const grp = (m.groupName || '').trim().toLowerCase();
-        const dept = (m.department || '').trim().toLowerCase();
+        const needle = normalizeSettingLabel(selectedGroupFilter).toLowerCase();
+        const homeCell = normalizeSettingLabel(m.homeCellGroup).toLowerCase();
+        const grp = normalizeSettingLabel(m.groupName).toLowerCase();
+        const dept = normalizeSettingLabel(m.department).toLowerCase();
         if (
           !homeCell.includes(needle) &&
           !grp.includes(needle) &&
@@ -242,8 +244,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
 
       // Department filter
       if (selectedDepartmentFilter !== 'all') {
-        const dept = (m.department || '').trim().toLowerCase();
-        const needle = selectedDepartmentFilter.trim().toLowerCase();
+        const dept = normalizeSettingLabel(m.department).toLowerCase();
+        const needle = normalizeSettingLabel(selectedDepartmentFilter).toLowerCase();
         if (needle === 'general congregation') {
           if (dept && dept !== 'general congregation' && dept !== 'general') {
             return false;
@@ -338,6 +340,16 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
           >
             <UserPlus className="w-3.5 h-3.5" />
             <span>Add Member</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => requestOpenUserManagement({ filter: 'all' })}
+            className="bg-[#EFEDFF] dark:bg-[#2A2A55] border border-[#6D5CF2]/25 text-[#6D5CF2] dark:text-[#9D90FF] hover:bg-[#E2DEFF] dark:hover:bg-[#35356B] rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer whitespace-nowrap"
+            title="Manage member & staff login credentials and roles"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Users &amp; Credentials</span>
           </button>
 
           <button
@@ -619,13 +631,29 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       <span className="text-[10px] font-mono text-[#6D5CF2] dark:text-[#8C7DFF]">
                         {member.memberId || 'ID Pending'}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => onEditMember(member)}
-                        className="text-[10px] font-bold text-[#666A86] hover:text-[#6D5CF2] dark:text-[#A9ACC8] cursor-pointer"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            requestOpenUserManagement({
+                              memberId: member.id,
+                              searchQuery: `${member.firstName} ${member.lastName}`.trim(),
+                            })
+                          }
+                          className="text-[10px] font-bold text-[#6D5CF2] hover:underline dark:text-[#9D90FF] cursor-pointer flex items-center gap-0.5"
+                          title="Manage login & credentials"
+                        >
+                          <KeyRound className="w-3 h-3" />
+                          <span>Login</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onEditMember(member)}
+                          className="text-[10px] font-bold text-[#666A86] hover:text-[#6D5CF2] dark:text-[#A9ACC8] cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1035,6 +1063,20 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                             }
                           >
                             <CheckSquare className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              requestOpenUserManagement({
+                                memberId: member.id,
+                                searchQuery: `${member.firstName} ${member.lastName}`.trim(),
+                              })
+                            }
+                            className="p-1.5 rounded-lg text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
+                            title="Manage login & credentials"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
                           </button>
 
                           <button

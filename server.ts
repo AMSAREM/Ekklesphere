@@ -1106,18 +1106,22 @@ const ChurchGroupCreateSchema = z.object({
   name: z.string().trim().min(1, 'Group name is required.').max(160),
   category: z.enum(['ministry', 'fellowship', 'cell_group']),
   leaderName: z.string().trim().min(1, 'Primary leader name is required.').max(160),
-  leaderPhone: z.string().trim().max(64).optional(),
-  leaderEmail: z.string().trim().max(160).optional(),
-  assistantLeader: z.string().trim().max(160).optional(),
-  meetingDay: z.string().trim().max(100).optional(),
-  meetingTime: z.string().trim().max(100).optional(),
-  meetingLocation: z.string().trim().max(240).optional(),
-  targetDemographic: z.string().trim().max(160).optional(),
+  leaderMemberId: z.string().trim().max(120).optional().nullable(),
+  leaderPhone: z.string().trim().max(64).optional().nullable(),
+  leaderEmail: z.string().trim().max(160).optional().nullable(),
+  assistantLeader: z.string().trim().max(160).optional().nullable(),
+  assistantLeaderMemberId: z.string().trim().max(120).optional().nullable(),
+  meetingDay: z.string().trim().max(100).optional().nullable(),
+  meetingTime: z.string().trim().max(100).optional().nullable(),
+  meetingLocation: z.string().trim().max(240).optional().nullable(),
+  targetDemographic: z.string().trim().max(160).optional().nullable(),
   description: z.string().trim().max(1000).optional().default(''),
   active: z.boolean().optional().default(true),
 });
 
-const ChurchGroupUpdateSchema = ChurchGroupCreateSchema.partial();
+const ChurchGroupUpdateSchema = ChurchGroupCreateSchema.partial().extend({
+  leadershipChangeReason: z.string().trim().max(300).optional().nullable(),
+});
 
 app.get(
   '/api/system-settings',
@@ -1351,6 +1355,44 @@ app.get(
   }
 );
 
+app.get(
+  '/api/church-groups/leadership-history',
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const rawCategory = typeof req.query.category === 'string' ? req.query.category.trim() : 'all';
+      const category =
+        rawCategory === 'ministry' || rawCategory === 'fellowship' || rawCategory === 'cell_group'
+          ? rawCategory
+          : 'all';
+      const rawRole = typeof req.query.role === 'string' ? req.query.role.trim() : 'all';
+      const role =
+        rawRole === 'primary_leader' || rawRole === 'assistant_leader' ? rawRole : 'all';
+      const groupId = typeof req.query.groupId === 'string' ? req.query.groupId.trim() : undefined;
+      const parsedLimit = Number.parseInt(String(req.query.limit || '200'), 10);
+      const limit = Number.isFinite(parsedLimit) ? parsedLimit : 200;
+
+      const history = await platformStore.listChurchGroupLeadershipHistory(req.organizationId!, {
+        category,
+        groupId,
+        role,
+        limit,
+      });
+
+      return res.status(200).json({
+        success: true,
+        history,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'leadership_history_fetch_failed',
+        message: err?.message || 'Failed to load leadership change history.',
+      });
+    }
+  }
+);
+
 app.post(
   '/api/church-groups',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
@@ -1365,104 +1407,209 @@ app.post(
     }
 
     try {
-      const group = await platformStore.createChurchGroup(req.organizationId!, parsed.data, {
-        id: req.user?.id,
-        email: req.user?.email,
-        role: req.user?.role,
-        name: req.user?.name,
-        ipAddress: getClientIpKey(req),
-      });
+      const primaryLeader = await platformStore.resolveOrganizationLeaderMember(
+        req.organizationId!,
+        {
+          memberId: parsed.data.leaderMemberId,
+          leaderName: parsed.data.leaderName,
+          fieldLabel: 'leader',
+        }
+      );
+
+      let resolvedAssistant: { id: string; fullName: string } | null = null;
+      const assistantNameRaw = (parsed.data.assistantLeader || '').trim();
+      const assistantIdRaw = (parsed.data.assistantLeaderMemberId || '').trim();
+      if (assistantNameRaw || assistantIdRaw) {
+        resolvedAssistant = await platformStore.resolveOrganizationLeaderMember(
+          req.organizationId!,
+          {
+            memberId: assistantIdRaw || undefined,
+            leaderName: assistantNameRaw || undefined,
+            fieldLabel: 'assistantLeader',
+          }
+        );
+        if (resolvedAssistant.id === primaryLeader.id) {
+          return res.status(400).json({
+            error: 'invalid_leader_member',
+            field: 'assistantLeader',
+            message: 'Assistant / Co-Leader must be a different member from the Primary Leader.',
+          });
+        }
+      }
+
+      const group = await platformStore.createChurchGroup(
+        req.organizationId!,
+        {
+          name: parsed.data.name,
+          category: parsed.data.category,
+          leaderName: primaryLeader.fullName,
+          leaderMemberId: primaryLeader.id,
+          leaderPhone: parsed.data.leaderPhone?.trim() || primaryLeader.phoneE164 || undefined,
+          leaderEmail: parsed.data.leaderEmail?.trim() || primaryLeader.email || undefined,
+          assistantLeader: resolvedAssistant ? resolvedAssistant.fullName : undefined,
+          assistantLeaderMemberId: resolvedAssistant ? resolvedAssistant.id : undefined,
+          meetingDay: parsed.data.meetingDay?.trim() || undefined,
+          meetingTime: parsed.data.meetingTime?.trim() || undefined,
+          meetingLocation: parsed.data.meetingLocation?.trim() || undefined,
+          targetDemographic: parsed.data.targetDemographic?.trim() || undefined,
+          description: parsed.data.description ?? '',
+          active: parsed.data.active ?? true,
+        },
+        {
+          id: req.user?.id,
+          email: req.user?.email,
+          role: req.user?.role,
+          name: req.user?.name,
+          ipAddress: getClientIpKey(req),
+        }
+      );
       return res.status(201).json({
         success: true,
         group,
       });
     } catch (err: any) {
-      return res.status(500).json({
-        error: 'church_group_create_failed',
+      const status = typeof err?.status === 'number' ? err.status : 500;
+      const code =
+        err?.code === 'INVALID_LEADER_MEMBER' || err?.code === 'AMBIGUOUS_LEADER_MEMBER'
+          ? 'invalid_leader_member'
+          : 'church_group_create_failed';
+      return res.status(status).json({
+        error: code,
+        field: err?.field,
         message: err?.message || 'Failed to create church group.',
       });
     }
   }
 );
 
+async function handleUpdateChurchGroupRequest(req: Request, res: Response) {
+  const parsed = ChurchGroupUpdateSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'validation_error',
+      message: parsed.error.issues[0]?.message || 'Valid group update fields are required.',
+    });
+  }
+
+  try {
+    const existingList = await platformStore.listChurchGroups(req.organizationId!);
+    const existingGroup = existingList.find((g) => g.id === req.params.id);
+
+    const patch: Record<string, any> = {};
+    if (parsed.data.name !== undefined) patch.name = parsed.data.name;
+    if (parsed.data.category !== undefined) patch.category = parsed.data.category;
+    if (parsed.data.leaderPhone !== undefined) patch.leaderPhone = parsed.data.leaderPhone ?? '';
+    if (parsed.data.leaderEmail !== undefined) patch.leaderEmail = parsed.data.leaderEmail ?? '';
+    if (parsed.data.meetingDay !== undefined) patch.meetingDay = parsed.data.meetingDay ?? '';
+    if (parsed.data.meetingTime !== undefined) patch.meetingTime = parsed.data.meetingTime ?? '';
+    if (parsed.data.meetingLocation !== undefined) {
+      patch.meetingLocation = parsed.data.meetingLocation ?? '';
+    }
+    if (parsed.data.targetDemographic !== undefined) {
+      patch.targetDemographic = parsed.data.targetDemographic ?? '';
+    }
+    if (parsed.data.description !== undefined) patch.description = parsed.data.description;
+    if (parsed.data.active !== undefined) patch.active = parsed.data.active;
+    if (parsed.data.leadershipChangeReason !== undefined) {
+      patch.leadershipChangeReason = parsed.data.leadershipChangeReason ?? null;
+    }
+
+    let resolvedPrimaryId = existingGroup?.leaderMemberId;
+
+    if (parsed.data.leaderName !== undefined || parsed.data.leaderMemberId !== undefined) {
+      const primaryLeader = await platformStore.resolveOrganizationLeaderMember(
+        req.organizationId!,
+        {
+          memberId: parsed.data.leaderMemberId ?? undefined,
+          leaderName: parsed.data.leaderName ?? undefined,
+          fieldLabel: 'leader',
+        }
+      );
+      patch.leaderName = primaryLeader.fullName;
+      patch.leaderMemberId = primaryLeader.id;
+      resolvedPrimaryId = primaryLeader.id;
+      if (parsed.data.leaderPhone === undefined && !existingGroup?.leaderPhone && primaryLeader.phoneE164) {
+        patch.leaderPhone = primaryLeader.phoneE164;
+      }
+      if (parsed.data.leaderEmail === undefined && !existingGroup?.leaderEmail && primaryLeader.email) {
+        patch.leaderEmail = primaryLeader.email;
+      }
+    }
+
+    if (
+      parsed.data.assistantLeader !== undefined ||
+      parsed.data.assistantLeaderMemberId !== undefined
+    ) {
+      const assistantNameRaw = (parsed.data.assistantLeader || '').trim();
+      const assistantIdRaw = (parsed.data.assistantLeaderMemberId || '').trim();
+      if (!assistantNameRaw && !assistantIdRaw) {
+        patch.assistantLeader = '';
+        patch.assistantLeaderMemberId = null;
+      } else {
+        const resolvedAssistant = await platformStore.resolveOrganizationLeaderMember(
+          req.organizationId!,
+          {
+            memberId: assistantIdRaw || undefined,
+            leaderName: assistantNameRaw || undefined,
+            fieldLabel: 'assistantLeader',
+          }
+        );
+        if (resolvedPrimaryId && resolvedAssistant.id === resolvedPrimaryId) {
+          return res.status(400).json({
+            error: 'invalid_leader_member',
+            field: 'assistantLeader',
+            message: 'Assistant / Co-Leader must be a different member from the Primary Leader.',
+          });
+        }
+        patch.assistantLeader = resolvedAssistant.fullName;
+        patch.assistantLeaderMemberId = resolvedAssistant.id;
+      }
+    }
+
+    const group = await platformStore.updateChurchGroup(
+      req.organizationId!,
+      req.params.id,
+      patch,
+      {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      }
+    );
+    return res.status(200).json({
+      success: true,
+      group,
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 500;
+    const errorCode =
+      status === 404
+        ? 'not_found'
+        : err?.code === 'INVALID_LEADER_MEMBER' || err?.code === 'AMBIGUOUS_LEADER_MEMBER'
+        ? 'invalid_leader_member'
+        : 'church_group_update_failed';
+    return res.status(status).json({
+      error: errorCode,
+      field: err?.field,
+      message: err?.message || 'Failed to update church group.',
+    });
+  }
+}
+
 app.put(
   '/api/church-groups/:id',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   requireActiveLicense,
-  async (req: Request, res: Response) => {
-    const parsed = ChurchGroupUpdateSchema.safeParse(req.body || {});
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'validation_error',
-        message: parsed.error.issues[0]?.message || 'Valid group update fields are required.',
-      });
-    }
-
-    try {
-      const group = await platformStore.updateChurchGroup(
-        req.organizationId!,
-        req.params.id,
-        parsed.data,
-        {
-          id: req.user?.id,
-          email: req.user?.email,
-          role: req.user?.role,
-          name: req.user?.name,
-          ipAddress: getClientIpKey(req),
-        }
-      );
-      return res.status(200).json({
-        success: true,
-        group,
-      });
-    } catch (err: any) {
-      const status = typeof err?.status === 'number' ? err.status : 500;
-      return res.status(status).json({
-        error: status === 404 ? 'not_found' : 'church_group_update_failed',
-        message: err?.message || 'Failed to update church group.',
-      });
-    }
-  }
+  handleUpdateChurchGroupRequest
 );
 
 app.patch(
   '/api/church-groups/:id',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   requireActiveLicense,
-  async (req: Request, res: Response) => {
-    const parsed = ChurchGroupUpdateSchema.safeParse(req.body || {});
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'validation_error',
-        message: parsed.error.issues[0]?.message || 'Valid group update fields are required.',
-      });
-    }
-
-    try {
-      const group = await platformStore.updateChurchGroup(
-        req.organizationId!,
-        req.params.id,
-        parsed.data,
-        {
-          id: req.user?.id,
-          email: req.user?.email,
-          role: req.user?.role,
-          name: req.user?.name,
-          ipAddress: getClientIpKey(req),
-        }
-      );
-      return res.status(200).json({
-        success: true,
-        group,
-      });
-    } catch (err: any) {
-      const status = typeof err?.status === 'number' ? err.status : 500;
-      return res.status(status).json({
-        error: status === 404 ? 'not_found' : 'church_group_update_failed',
-        message: err?.message || 'Failed to update church group.',
-      });
-    }
-  }
+  handleUpdateChurchGroupRequest
 );
 
 app.delete(
@@ -3634,6 +3781,162 @@ app.post(
       return res.status(err?.status || 400).json({
         error: err?.code || 'staff_provision_failed',
         message: err?.message || 'Failed to provision staff account.',
+      });
+    }
+  }
+);
+
+// =========================================================================
+// UNIFIED MEMBER & STAFF USER CREDENTIALS + ROLE MANAGEMENT
+// =========================================================================
+
+const optionalTrimmedText = (maxLen: number) =>
+  z.preprocess(
+    (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
+    z.string().trim().max(maxLen).optional()
+  );
+
+const optionalEmailField = z.preprocess(
+  (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
+  z.string().trim().email('Valid email address is required').optional()
+);
+
+const optionalPasswordField = z.preprocess(
+  (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
+  z.string().min(8, 'Password must be at least 8 characters').optional()
+);
+
+const USER_ROLES_ENUM = [
+  'member',
+  'usher',
+  'group_leader',
+  'pastor',
+  'finance',
+  'admin',
+  'super_admin',
+] as const;
+
+const manageUserCredentialsSchema = z
+  .object({
+    memberId: optionalTrimmedText(120),
+    fullName: optionalTrimmedText(150),
+    email: optionalEmailField,
+    phone: optionalTrimmedText(40),
+    role: z.enum(USER_ROLES_ENUM).default('member'),
+    password: optionalPasswordField,
+    requirePasswordChange: z.boolean().optional(),
+  })
+  .refine((data) => Boolean(data.memberId || data.email || data.phone), {
+    message: 'Select an enrolled member or provide an email address or phone number.',
+  });
+
+const updateUserAccountSchema = z
+  .object({
+    role: z.enum(USER_ROLES_ENUM).optional(),
+    status: z.enum(['active', 'suspended']).optional(),
+  })
+  .refine((data) => Boolean(data.role || data.status), {
+    message: 'Provide at least a role or account status update.',
+  });
+
+app.get(
+  '/api/users',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  async (req: Request, res: Response) => {
+    try {
+      const users = await platformStore.listOrganizationUsers(req.organizationId!);
+      return res.status(200).json({ users });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'users_fetch_failed',
+        message: err?.message || 'Failed to load organisation user and member accounts.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/users/credentials',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = manageUserCredentialsSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid user credentials payload.',
+      });
+    }
+
+    const callerIsCreator =
+      req.user?.role === 'creator' ||
+      req.user?.role === 'super_admin' ||
+      Boolean(req.user?.is_creator);
+    if (parsed.data.role === 'super_admin' && !callerIsCreator) {
+      return res.status(403).json({
+        error: 'forbidden',
+        message: 'Only platform creators or super admins may assign Platform Super Admin privileges.',
+      });
+    }
+
+    try {
+      const result = await platformStore.provisionOrganizationMemberCredentials({
+        organizationId: req.organizationId!,
+        memberId: parsed.data.memberId,
+        fullName: parsed.data.fullName,
+        email: parsed.data.email,
+        phone: parsed.data.phone,
+        role: parsed.data.role,
+        password: parsed.data.password,
+        requirePasswordChange: parsed.data.requirePasswordChange,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || null,
+        ipAddress: req.ip,
+      });
+      return res.status(201).json(result);
+    } catch (err: any) {
+      return res.status(err?.status || 400).json({
+        error: err?.code || 'user_credential_provision_failed',
+        message: err?.message || 'Failed to save user login credentials.',
+      });
+    }
+  }
+);
+
+app.patch(
+  '/api/users/:id',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = updateUserAccountSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid user account update payload.',
+      });
+    }
+
+    const callerIsCreator =
+      req.user?.role === 'creator' ||
+      req.user?.role === 'super_admin' ||
+      Boolean(req.user?.is_creator);
+
+    try {
+      const user = await platformStore.updateOrganizationUserAccount({
+        organizationId: req.organizationId!,
+        targetId: String(req.params.id || ''),
+        role: parsed.data.role,
+        status: parsed.data.status,
+        actorUserId: req.user?.id || null,
+        actorEmail: req.user?.email || null,
+        callerIsCreator,
+        ipAddress: req.ip,
+      });
+      return res.status(200).json({ user });
+    } catch (err: any) {
+      return res.status(err?.status || 400).json({
+        error: err?.code || 'user_account_update_failed',
+        message: err?.message || 'Failed to update user account.',
       });
     }
   }

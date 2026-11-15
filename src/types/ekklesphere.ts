@@ -375,14 +375,20 @@ export interface SystemSettings {
 
 export type ChurchGroupCategory = 'ministry' | 'fellowship' | 'cell_group';
 
+export type ChurchGroupLeadershipRole = 'primary_leader' | 'assistant_leader';
+
+export type ChurchGroupLeadershipAction = 'assigned' | 'changed' | 'removed' | 'group_deleted';
+
 export interface ChurchGroup {
   id: string;
   name: string;
   category: ChurchGroupCategory;
   leaderName: string;
+  leaderMemberId?: string;
   leaderPhone?: string;
   leaderEmail?: string;
   assistantLeader?: string;
+  assistantLeaderMemberId?: string;
   meetingDay?: string;
   meetingTime?: string;
   meetingLocation?: string;
@@ -391,6 +397,26 @@ export interface ChurchGroup {
   active: boolean;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface ChurchGroupLeadershipHistoryEntry {
+  id: string;
+  organizationId?: string;
+  groupId: string;
+  groupName: string;
+  category: ChurchGroupCategory;
+  role: ChurchGroupLeadershipRole;
+  action: ChurchGroupLeadershipAction;
+  previousLeaderName?: string | null;
+  previousLeaderMemberId?: string | null;
+  newLeaderName?: string | null;
+  newLeaderMemberId?: string | null;
+  changedById?: string | null;
+  changedByName?: string | null;
+  changedByEmail?: string | null;
+  changedByRole?: string | null;
+  reason?: string | null;
+  createdAt: string;
 }
 
 // ==========================================

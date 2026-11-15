@@ -22,6 +22,9 @@ import type {
   BillingCycle,
   ChurchGroup,
   ChurchGroupCategory,
+  ChurchGroupLeadershipAction,
+  ChurchGroupLeadershipHistoryEntry,
+  ChurchGroupLeadershipRole,
   ConsoleAlert,
   ConsoleAlertType,
   ConsoleAuditLogRecord,
@@ -129,6 +132,28 @@ export interface UserCredentialRecord {
   failedAttempts?: number;
   lockedUntil?: string | null;
   createdAt?: string;
+}
+
+export interface OrganizationUserAccount {
+  id: string;
+  memberId?: string;
+  memberCode?: string;
+  organizationId: string;
+  fullName: string;
+  email?: string;
+  username?: string;
+  phoneE164?: string;
+  role: ChurchRole;
+  accountCategory: 'member' | 'staff';
+  hasCredentials: boolean;
+  credentialStatus: 'active' | 'temp_password' | 'suspended' | 'locked' | 'unprovisioned';
+  status: 'active' | 'suspended';
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  createdAt?: string;
+  homeCellGroup?: string;
+  department?: string;
+  designation?: string;
 }
 
 const MAX_FAILED_LOGIN_ATTEMPTS = 5;
@@ -404,6 +429,7 @@ class PlatformStore {
   private premiseByOrg = new Map<string, PremiseSettingsRecord>();
   private systemSettingsByOrg = new Map<string, SystemSettings>();
   private churchGroupsByOrg = new Map<string, ChurchGroup[]>();
+  private churchGroupLeadershipHistoryByOrg = new Map<string, ChurchGroupLeadershipHistoryEntry[]>();
   private checkinsByOrg = new Map<string, LiveCheckinItem[]>();
   private rawEventsByOrg = new Map<string, StoredGeofenceEvent[]>();
   private membersByOrg = new Map<string, Record<string, any>[]>();
@@ -520,6 +546,7 @@ class PlatformStore {
     this.premiseByOrg.clear();
     this.systemSettingsByOrg.clear();
     this.churchGroupsByOrg.clear();
+    this.churchGroupLeadershipHistoryByOrg.clear();
     this.checkinsByOrg.clear();
     this.rawEventsByOrg.clear();
     this.membersByOrg.clear();
@@ -4225,9 +4252,13 @@ class PlatformStore {
       name: String(row.name),
       category: (row.category || 'cell_group') as ChurchGroupCategory,
       leaderName: String(row.leader_name || ''),
+      leaderMemberId: row.leader_member_id ? String(row.leader_member_id) : undefined,
       leaderPhone: row.leader_phone || undefined,
       leaderEmail: row.leader_email || undefined,
       assistantLeader: row.assistant_leader || undefined,
+      assistantLeaderMemberId: row.assistant_leader_member_id
+        ? String(row.assistant_leader_member_id)
+        : undefined,
       meetingDay: row.meeting_day || undefined,
       meetingTime: row.meeting_time || undefined,
       meetingLocation: row.meeting_location || undefined,
@@ -4239,11 +4270,437 @@ class PlatformStore {
     };
   }
 
+  private mapSupabaseLeadershipHistoryRow(
+    row: Record<string, any>
+  ): ChurchGroupLeadershipHistoryEntry {
+    return {
+      id: String(row.id),
+      organizationId: row.organization_id ? String(row.organization_id) : undefined,
+      groupId: String(row.group_id),
+      groupName: String(row.group_name),
+      category: (row.category || 'cell_group') as ChurchGroupCategory,
+      role: (row.role || 'primary_leader') as ChurchGroupLeadershipRole,
+      action: (row.action || 'changed') as ChurchGroupLeadershipAction,
+      previousLeaderName: row.previous_leader_name ?? null,
+      previousLeaderMemberId: row.previous_leader_member_id ?? null,
+      newLeaderName: row.new_leader_name ?? null,
+      newLeaderMemberId: row.new_leader_member_id ?? null,
+      changedById: row.changed_by_id ?? null,
+      changedByName: row.changed_by_name ?? null,
+      changedByEmail: row.changed_by_email ?? null,
+      changedByRole: row.changed_by_role ?? null,
+      reason: row.reason ?? null,
+      createdAt: String(row.created_at || new Date().toISOString()),
+    };
+  }
+
+  private mapAuditLogRowToLeadershipHistoryEntry(
+    row: Record<string, any>
+  ): ChurchGroupLeadershipHistoryEntry | null {
+    const meta = (row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<
+      string,
+      any
+    >;
+    const groupId = meta.groupId ?? row.target_id;
+    const groupName = meta.groupName;
+    if (!groupId || !groupName) return null;
+    return {
+      id: String(row.id || randomUUID()),
+      organizationId: row.organization_id ? String(row.organization_id) : undefined,
+      groupId: String(groupId),
+      groupName: String(groupName),
+      category: (meta.category || 'cell_group') as ChurchGroupCategory,
+      role: (meta.role || 'primary_leader') as ChurchGroupLeadershipRole,
+      action: (meta.action || 'changed') as ChurchGroupLeadershipAction,
+      previousLeaderName: meta.previousLeaderName ?? null,
+      previousLeaderMemberId: meta.previousLeaderMemberId ?? null,
+      newLeaderName: meta.newLeaderName ?? null,
+      newLeaderMemberId: meta.newLeaderMemberId ?? null,
+      changedById: meta.changedById ?? row.actor_id ?? null,
+      changedByName: meta.changedByName ?? row.actor_email ?? null,
+      changedByEmail: meta.changedByEmail ?? row.actor_email ?? null,
+      changedByRole: meta.changedByRole ?? row.actor_role ?? null,
+      reason: meta.reason ?? row.reason ?? null,
+      createdAt: String(meta.createdAt || row.created_at || new Date().toISOString()),
+    };
+  }
+
+  private isMissingChurchGroupColumnError(
+    err: { message?: string; code?: string } | null | undefined
+  ): boolean {
+    if (!err) return false;
+    const msg = String(err.message || '');
+    const code = String(err.code || '');
+    return (
+      code === 'PGRST204' ||
+      code === '42703' ||
+      /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(msg)
+    );
+  }
+
+  private isMissingLeadershipHistoryTableError(
+    err: { message?: string; code?: string } | null | undefined
+  ): boolean {
+    if (!err) return false;
+    const msg = String(err.message || '');
+    const code = String(err.code || '');
+    return (
+      code === 'PGRST205' ||
+      code === '42P01' ||
+      /relation "?(?:public\.)?church_group_leadership_history"? does not exist|Could not find the table '?(?:public\.)?church_group_leadership_history'?|does not exist|schema cache/i.test(
+        msg
+      )
+    );
+  }
+
+  private normalizeLeaderNameForCompare(value?: string | null): string {
+    return String(value || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  private isDifferentLeader(
+    prevName?: string | null,
+    prevMemberId?: string | null,
+    nextName?: string | null,
+    nextMemberId?: string | null
+  ): boolean {
+    const cleanPrevName = this.normalizeLeaderNameForCompare(prevName);
+    const cleanNextName = this.normalizeLeaderNameForCompare(nextName);
+    if (!cleanPrevName && !cleanNextName) return false;
+    if (Boolean(cleanPrevName) !== Boolean(cleanNextName)) return true;
+    const cleanPrevId = (prevMemberId || '').trim();
+    const cleanNextId = (nextMemberId || '').trim();
+    if (cleanPrevId && cleanNextId) {
+      return cleanPrevId !== cleanNextId;
+    }
+    return cleanPrevName !== cleanNextName;
+  }
+
+  public async resolveOrganizationLeaderMember(
+    organizationId: string,
+    opts: {
+      memberId?: string | null;
+      leaderName?: string | null;
+      fieldLabel?: 'leader' | 'assistantLeader';
+    }
+  ): Promise<{
+    id: string;
+    fullName: string;
+    phoneE164?: string;
+    email?: string;
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = organizationId.toLowerCase();
+    const field = opts.fieldLabel || 'leader';
+    const rawId = String(opts.memberId || '').trim();
+    const rawName = String(opts.leaderName || '')
+      .trim()
+      .replace(/\s+/g, ' ');
+
+    const members = await this.getMembers(orgId);
+    const buildResult = (m: Record<string, any>) => ({
+      id: String(m.id),
+      fullName: `${String(m.firstName || '').trim()} ${String(m.lastName || '').trim()}`.trim(),
+      phoneE164: m.phoneE164 ? String(m.phoneE164) : undefined,
+      email: m.email ? String(m.email) : undefined,
+    });
+
+    if (rawId) {
+      const byId = members.find(
+        (m) => String(m.id) === rawId || (m.memberId && String(m.memberId) === rawId)
+      );
+      if (byId) {
+        const res = buildResult(byId);
+        const preferred = String(byId.preferredName || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLowerCase();
+        if (
+          !rawName ||
+          res.fullName.toLowerCase() === rawName.toLowerCase() ||
+          (preferred && preferred === rawName.toLowerCase()) ||
+          String(byId.id).toLowerCase() === rawName.toLowerCase() ||
+          (byId.memberId && String(byId.memberId).toLowerCase() === rawName.toLowerCase())
+        ) {
+          return res;
+        }
+      }
+    }
+
+    if (!rawName) {
+      const err: any = new Error(
+        field === 'assistantLeader'
+          ? 'Assistant leader must match an enrolled member or be left blank.'
+          : 'Primary leader must be selected from the enrolled members list.'
+      );
+      err.status = 400;
+      err.code = 'INVALID_LEADER_MEMBER';
+      err.field = field;
+      throw err;
+    }
+
+    if (members.length === 0) {
+      const err: any = new Error(
+        'Cannot assign a group leader because no members are enrolled in this organisation yet.'
+      );
+      err.status = 400;
+      err.code = 'INVALID_LEADER_MEMBER';
+      err.field = field;
+      throw err;
+    }
+
+    const targetLower = rawName.toLowerCase();
+    const exactFullMatches = members.filter((m) => {
+      const fullName = `${String(m.firstName || '').trim()} ${String(m.lastName || '').trim()}`
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+      return fullName === targetLower;
+    });
+
+    if (exactFullMatches.length === 1) {
+      return buildResult(exactFullMatches[0]);
+    }
+    if (exactFullMatches.length > 1) {
+      const err: any = new Error(
+        `Multiple members match "${rawName}". Please select the specific member from the directory list.`
+      );
+      err.status = 400;
+      err.code = 'AMBIGUOUS_LEADER_MEMBER';
+      err.field = field;
+      throw err;
+    }
+
+    const secondaryMatches = members.filter((m) => {
+      const preferred = String(m.preferredName || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+      const memberCode = String(m.memberId || '').trim().toLowerCase();
+      const email = String(m.email || '').trim().toLowerCase();
+      return (
+        (preferred && preferred === targetLower) ||
+        (memberCode && memberCode === targetLower) ||
+        (email && email === targetLower)
+      );
+    });
+
+    if (secondaryMatches.length === 1) {
+      return buildResult(secondaryMatches[0]);
+    }
+
+    const err: any = new Error(
+      `"${rawName}" was not found in the organisation's enrolled members directory.`
+    );
+    err.status = 400;
+    err.code = 'INVALID_LEADER_MEMBER';
+    err.field = field;
+    throw err;
+  }
+
+  private async appendChurchGroupLeadershipHistory(
+    organizationId: string,
+    entries: Array<{
+      groupId: string;
+      groupName: string;
+      category: ChurchGroupCategory;
+      role: ChurchGroupLeadershipRole;
+      action: ChurchGroupLeadershipAction;
+      previousLeaderName?: string | null;
+      previousLeaderMemberId?: string | null;
+      newLeaderName?: string | null;
+      newLeaderMemberId?: string | null;
+      changedById?: string | null;
+      changedByName?: string | null;
+      changedByEmail?: string | null;
+      changedByRole?: string | null;
+      reason?: string | null;
+    }>
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const orgId = organizationId.toLowerCase();
+    const baseMs = Date.now();
+    const sb = this.activeSupabase;
+
+    const normalizedEntries: ChurchGroupLeadershipHistoryEntry[] = entries.map((e, index) => ({
+      id: randomUUID(),
+      organizationId: orgId,
+      groupId: String(e.groupId),
+      groupName: String(e.groupName),
+      category: e.category,
+      role: e.role,
+      action: e.action,
+      previousLeaderName: e.previousLeaderName ?? null,
+      previousLeaderMemberId: e.previousLeaderMemberId ?? null,
+      newLeaderName: e.newLeaderName ?? null,
+      newLeaderMemberId: e.newLeaderMemberId ?? null,
+      changedById: e.changedById ?? null,
+      changedByName: e.changedByName ?? null,
+      changedByEmail: e.changedByEmail ?? null,
+      changedByRole: e.changedByRole ?? null,
+      reason: e.reason ?? null,
+      createdAt: new Date(baseMs + index).toISOString(),
+    }));
+
+    if (sb) {
+      const dbRows = normalizedEntries.map((e) => ({
+        organization_id: orgId,
+        group_id: e.groupId,
+        group_name: e.groupName,
+        category: e.category,
+        role: e.role,
+        action: e.action,
+        previous_leader_name: e.previousLeaderName ?? null,
+        previous_leader_member_id: e.previousLeaderMemberId ?? null,
+        new_leader_name: e.newLeaderName ?? null,
+        new_leader_member_id: e.newLeaderMemberId ?? null,
+        changed_by_id: e.changedById ?? null,
+        changed_by_name: e.changedByName ?? null,
+        changed_by_email: e.changedByEmail ?? null,
+        changed_by_role: e.changedByRole ?? null,
+        reason: e.reason ?? null,
+        created_at: e.createdAt,
+      }));
+      const { error } = await sb
+        .from('church_group_leadership_history')
+        .insert(dbRows);
+      if (error) {
+        if (this.isMissingLeadershipHistoryTableError(error)) {
+          console.warn(
+            '[Ekklesphere] church_group_leadership_history table not yet in Supabase schema cache; persisting transitions to audit_log fallback:',
+            error.message
+          );
+          for (const entry of normalizedEntries) {
+            await this.appendAuditLog({
+              organizationId: orgId,
+              actorId: entry.changedById ?? null,
+              actorEmail: entry.changedByEmail || 'system@ekklesphere.local',
+              actorRole: entry.changedByRole || 'admin',
+              action: 'church_group.leadership_transition',
+              targetType: 'church_group',
+              targetId: entry.groupId,
+              reason: entry.reason ?? null,
+              metadata: {
+                groupId: entry.groupId,
+                groupName: entry.groupName,
+                category: entry.category,
+                role: entry.role,
+                action: entry.action,
+                previousLeaderName: entry.previousLeaderName ?? null,
+                previousLeaderMemberId: entry.previousLeaderMemberId ?? null,
+                newLeaderName: entry.newLeaderName ?? null,
+                newLeaderMemberId: entry.newLeaderMemberId ?? null,
+                changedById: entry.changedById ?? null,
+                changedByName: entry.changedByName ?? null,
+                changedByEmail: entry.changedByEmail ?? null,
+                changedByRole: entry.changedByRole ?? null,
+                reason: entry.reason ?? null,
+                createdAt: entry.createdAt,
+              },
+            });
+          }
+          const existing = this.churchGroupLeadershipHistoryByOrg.get(orgId) || [];
+          this.churchGroupLeadershipHistoryByOrg.set(orgId, [
+            ...[...normalizedEntries].reverse(),
+            ...existing,
+          ]);
+          return;
+        }
+        throw new Error(`Failed to record leadership history in Supabase: ${error.message}`);
+      }
+      return;
+    }
+
+    const existing = this.churchGroupLeadershipHistoryByOrg.get(orgId) || [];
+    this.churchGroupLeadershipHistoryByOrg.set(orgId, [
+      ...[...normalizedEntries].reverse(),
+      ...existing,
+    ]);
+  }
+
+  public async listChurchGroupLeadershipHistory(
+    organizationId: string,
+    options?: {
+      category?: ChurchGroupCategory | 'all';
+      groupId?: string;
+      role?: ChurchGroupLeadershipRole | 'all';
+      limit?: number;
+    }
+  ): Promise<ChurchGroupLeadershipHistoryEntry[]> {
+    this.assertDatabaseAvailable();
+    const orgId = organizationId.toLowerCase();
+    const limit = Math.min(Math.max(options?.limit ?? 200, 1), 500);
+    const category = options?.category && options.category !== 'all' ? options.category : undefined;
+    const groupId = options?.groupId?.trim() || undefined;
+    const role = options?.role && options.role !== 'all' ? options.role : undefined;
+    const sb = this.activeSupabase;
+
+    const filterAndSort = (items: ChurchGroupLeadershipHistoryEntry[]) =>
+      items
+        .filter((entry) => {
+          if (category && entry.category !== category) return false;
+          if (groupId && entry.groupId !== groupId) return false;
+          if (role && entry.role !== role) return false;
+          return true;
+        })
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, limit);
+
+    if (sb) {
+      let query = sb
+        .from('church_group_leadership_history')
+        .select('*')
+        .eq('organization_id', orgId);
+
+      if (category) query = query.eq('category', category);
+      if (groupId) query = query.eq('group_id', groupId);
+      if (role) query = query.eq('role', role);
+
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) {
+        if (this.isMissingLeadershipHistoryTableError(error)) {
+          const fallbackEntries: ChurchGroupLeadershipHistoryEntry[] = [];
+          const { data: auditRows, error: auditErr } = await sb
+            .from('audit_log')
+            .select('*')
+            .eq('organization_id', orgId)
+            .eq('action', 'church_group.leadership_transition')
+            .order('created_at', { ascending: false })
+            .limit(Math.min(limit * 3, 500));
+          if (!auditErr && Array.isArray(auditRows)) {
+            for (const row of auditRows) {
+              const mapped = this.mapAuditLogRowToLeadershipHistoryEntry(row);
+              if (mapped) fallbackEntries.push(mapped);
+            }
+          }
+          const inMem = this.churchGroupLeadershipHistoryByOrg.get(orgId) || [];
+          const seen = new Set(fallbackEntries.map((e) => e.id));
+          for (const item of inMem) {
+            if (!seen.has(item.id)) {
+              fallbackEntries.push(item);
+            }
+          }
+          return filterAndSort(fallbackEntries);
+        }
+        throw new Error(`Failed to fetch leadership change history: ${error.message}`);
+      }
+      return (data || []).map((row) => this.mapSupabaseLeadershipHistoryRow(row));
+    }
+
+    const list = this.churchGroupLeadershipHistoryByOrg.get(orgId) || [];
+    return filterAndSort(list);
+  }
+
   public async listChurchGroups(organizationId: string): Promise<ChurchGroup[]> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
-    if (this.supabase) {
-      const { data, error } = await this.supabase
+    const sb = this.activeSupabase;
+    if (sb) {
+      const { data, error } = await sb
         .from('church_groups')
         .select('*')
         .eq('organization_id', orgId)
@@ -4267,41 +4724,79 @@ class PlatformStore {
     const orgId = organizationId.toLowerCase();
     const nowIso = new Date().toISOString();
     let created: ChurchGroup | null = null;
+    const sb = this.activeSupabase;
+    const leaderMemberUuid =
+      payload.leaderMemberId && UUID_REGEX.test(payload.leaderMemberId)
+        ? payload.leaderMemberId
+        : null;
+    const assistantMemberUuid =
+      payload.assistantLeaderMemberId && UUID_REGEX.test(payload.assistantLeaderMemberId)
+        ? payload.assistantLeaderMemberId
+        : null;
 
-    if (this.supabase) {
-      const { data, error } = await this.supabase
+    if (sb) {
+      const baseInsertPayload = {
+        organization_id: orgId,
+        name: payload.name.trim(),
+        category: payload.category,
+        leader_name: payload.leaderName.trim(),
+        leader_phone: payload.leaderPhone?.trim() || null,
+        leader_email: payload.leaderEmail?.trim() || null,
+        assistant_leader: payload.assistantLeader?.trim() || null,
+        meeting_day: payload.meetingDay?.trim() || null,
+        meeting_time: payload.meetingTime?.trim() || null,
+        meeting_location: payload.meetingLocation?.trim() || null,
+        target_demographic: payload.targetDemographic?.trim() || null,
+        description: (payload.description || '').trim(),
+        active: payload.active ?? true,
+      };
+      const extendedInsertPayload = {
+        ...baseInsertPayload,
+        leader_member_id: leaderMemberUuid,
+        assistant_leader_member_id: assistantMemberUuid,
+      };
+
+      let { data, error } = await sb
         .from('church_groups')
-        .insert({
-          organization_id: orgId,
-          name: payload.name.trim(),
-          category: payload.category,
-          leader_name: payload.leaderName.trim(),
-          leader_phone: payload.leaderPhone?.trim() || null,
-          leader_email: payload.leaderEmail?.trim() || null,
-          assistant_leader: payload.assistantLeader?.trim() || null,
-          meeting_day: payload.meetingDay?.trim() || null,
-          meeting_time: payload.meetingTime?.trim() || null,
-          meeting_location: payload.meetingLocation?.trim() || null,
-          target_demographic: payload.targetDemographic?.trim() || null,
-          description: (payload.description || '').trim(),
-          active: payload.active ?? true,
-        })
+        .insert(extendedInsertPayload)
         .select('*')
         .single();
+
+      if (error && this.isMissingChurchGroupColumnError(error)) {
+        console.warn(
+          '[Ekklesphere] church_groups member-link columns not yet in Supabase schema cache; retrying insert without leader_member_id / assistant_leader_member_id:',
+          error.message
+        );
+        const retry = await sb
+          .from('church_groups')
+          .insert(baseInsertPayload)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error || !data) {
         throw new Error(`Failed to create church group in Supabase: ${error?.message || 'Unknown error'}`);
       }
       created = this.mapSupabaseChurchGroupRow(data);
+      if (!created.leaderMemberId && payload.leaderMemberId?.trim()) {
+        created.leaderMemberId = payload.leaderMemberId.trim();
+      }
+      if (!created.assistantLeaderMemberId && payload.assistantLeaderMemberId?.trim()) {
+        created.assistantLeaderMemberId = payload.assistantLeaderMemberId.trim();
+      }
     } else {
       created = {
         id: randomUUID(),
         name: payload.name.trim(),
         category: payload.category,
         leaderName: payload.leaderName.trim(),
+        leaderMemberId: payload.leaderMemberId?.trim() || undefined,
         leaderPhone: payload.leaderPhone?.trim() || undefined,
         leaderEmail: payload.leaderEmail?.trim() || undefined,
         assistantLeader: payload.assistantLeader?.trim() || undefined,
+        assistantLeaderMemberId: payload.assistantLeaderMemberId?.trim() || undefined,
         meetingDay: payload.meetingDay?.trim() || undefined,
         meetingTime: payload.meetingTime?.trim() || undefined,
         meetingLocation: payload.meetingLocation?.trim() || undefined,
@@ -4316,6 +4811,45 @@ class PlatformStore {
       this.churchGroupsByOrg.set(orgId, list);
     }
 
+    const historyEntries: Parameters<PlatformStore['appendChurchGroupLeadershipHistory']>[1] = [];
+    if (created.leaderName.trim()) {
+      historyEntries.push({
+        groupId: created.id,
+        groupName: created.name,
+        category: created.category,
+        role: 'primary_leader',
+        action: 'assigned',
+        previousLeaderName: null,
+        previousLeaderMemberId: null,
+        newLeaderName: created.leaderName,
+        newLeaderMemberId: created.leaderMemberId || null,
+        changedById: actor?.id || null,
+        changedByName: actor?.name || actor?.email || 'Administrator',
+        changedByEmail: actor?.email || null,
+        changedByRole: actor?.role || 'admin',
+        reason: 'Initial group leadership appointment',
+      });
+    }
+    if (created.assistantLeader && created.assistantLeader.trim()) {
+      historyEntries.push({
+        groupId: created.id,
+        groupName: created.name,
+        category: created.category,
+        role: 'assistant_leader',
+        action: 'assigned',
+        previousLeaderName: null,
+        previousLeaderMemberId: null,
+        newLeaderName: created.assistantLeader,
+        newLeaderMemberId: created.assistantLeaderMemberId || null,
+        changedById: actor?.id || null,
+        changedByName: actor?.name || actor?.email || 'Administrator',
+        changedByEmail: actor?.email || null,
+        changedByRole: actor?.role || 'admin',
+        reason: 'Initial assistant leader appointment',
+      });
+    }
+    await this.appendChurchGroupLeadershipHistory(orgId, historyEntries);
+
     await this.appendAuditLog({
       organizationId: orgId,
       actorId: actor?.id || null,
@@ -4328,6 +4862,8 @@ class PlatformStore {
         name: created.name,
         category: created.category,
         leaderName: created.leaderName,
+        leaderMemberId: created.leaderMemberId || null,
+        assistantLeader: created.assistantLeader || null,
       },
       ipAddress: actor?.ipAddress || null,
     });
@@ -4338,27 +4874,59 @@ class PlatformStore {
   public async updateChurchGroup(
     organizationId: string,
     groupId: string,
-    updates: Partial<ChurchGroup>,
+    updates: Partial<ChurchGroup> & { leadershipChangeReason?: string | null },
     actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
   ): Promise<ChurchGroup> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
     const nowIso = new Date().toISOString();
+    let existingGroup: ChurchGroup | null = null;
     let updated: ChurchGroup | null = null;
+    const sb = this.activeSupabase;
 
-    if (this.supabase) {
+    if (sb) {
       if (!UUID_REGEX.test(groupId)) {
         const notFound: any = new Error('Church group not found.');
         notFound.status = 404;
         throw notFound;
       }
+
+      const { data: existingRow, error: existingErr } = await sb
+        .from('church_groups')
+        .select('*')
+        .eq('organization_id', orgId)
+        .eq('id', groupId)
+        .maybeSingle();
+
+      if (existingErr) {
+        throw new Error(`Failed to fetch existing church group: ${existingErr.message}`);
+      }
+      if (!existingRow) {
+        const notFound: any = new Error('Church group not found.');
+        notFound.status = 404;
+        throw notFound;
+      }
+      existingGroup = this.mapSupabaseChurchGroupRow(existingRow);
+
       const dbPatch: Record<string, unknown> = { updated_at: nowIso };
       if (updates.name !== undefined) dbPatch.name = updates.name.trim();
       if (updates.category !== undefined) dbPatch.category = updates.category;
       if (updates.leaderName !== undefined) dbPatch.leader_name = updates.leaderName.trim();
+      if (updates.leaderMemberId !== undefined) {
+        dbPatch.leader_member_id =
+          updates.leaderMemberId && UUID_REGEX.test(updates.leaderMemberId)
+            ? updates.leaderMemberId
+            : null;
+      }
       if (updates.leaderPhone !== undefined) dbPatch.leader_phone = updates.leaderPhone?.trim() || null;
       if (updates.leaderEmail !== undefined) dbPatch.leader_email = updates.leaderEmail?.trim() || null;
       if (updates.assistantLeader !== undefined) dbPatch.assistant_leader = updates.assistantLeader?.trim() || null;
+      if (updates.assistantLeaderMemberId !== undefined) {
+        dbPatch.assistant_leader_member_id =
+          updates.assistantLeaderMemberId && UUID_REGEX.test(updates.assistantLeaderMemberId)
+            ? updates.assistantLeaderMemberId
+            : null;
+      }
       if (updates.meetingDay !== undefined) dbPatch.meeting_day = updates.meetingDay?.trim() || null;
       if (updates.meetingTime !== undefined) dbPatch.meeting_time = updates.meetingTime?.trim() || null;
       if (updates.meetingLocation !== undefined) dbPatch.meeting_location = updates.meetingLocation?.trim() || null;
@@ -4366,13 +4934,38 @@ class PlatformStore {
       if (updates.description !== undefined) dbPatch.description = updates.description.trim();
       if (updates.active !== undefined) dbPatch.active = Boolean(updates.active);
 
-      const { data, error } = await this.supabase
+      let { data, error } = await sb
         .from('church_groups')
         .update(dbPatch)
         .eq('organization_id', orgId)
         .eq('id', groupId)
         .select('*')
         .maybeSingle();
+
+      if (
+        error &&
+        this.isMissingChurchGroupColumnError(error) &&
+        ('leader_member_id' in dbPatch || 'assistant_leader_member_id' in dbPatch)
+      ) {
+        console.warn(
+          '[Ekklesphere] church_groups member-link columns not yet in Supabase schema cache; retrying update without leader_member_id / assistant_leader_member_id:',
+          error.message
+        );
+        const {
+          leader_member_id: _dropLeaderMemberId,
+          assistant_leader_member_id: _dropAssistantMemberId,
+          ...legacyPatch
+        } = dbPatch;
+        const retry = await sb
+          .from('church_groups')
+          .update(legacyPatch)
+          .eq('organization_id', orgId)
+          .eq('id', groupId)
+          .select('*')
+          .maybeSingle();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error) {
         throw new Error(`Failed to update church group in Supabase: ${error.message}`);
@@ -4383,6 +4976,17 @@ class PlatformStore {
         throw notFound;
       }
       updated = this.mapSupabaseChurchGroupRow(data);
+      if (updates.leaderMemberId !== undefined && !updated.leaderMemberId && updates.leaderMemberId?.trim()) {
+        updated.leaderMemberId = updates.leaderMemberId.trim();
+      }
+      if (
+        updates.assistantLeaderMemberId !== undefined &&
+        !updated.assistantLeaderMemberId &&
+        updates.assistantLeaderMemberId?.trim() &&
+        updated.assistantLeader
+      ) {
+        updated.assistantLeaderMemberId = updates.assistantLeaderMemberId.trim();
+      }
     } else {
       const list = this.churchGroupsByOrg.get(orgId) || [];
       const idx = list.findIndex((g) => g.id === groupId);
@@ -4391,15 +4995,84 @@ class PlatformStore {
         notFound.status = 404;
         throw notFound;
       }
+      existingGroup = { ...list[idx] };
+      const { leadershipChangeReason: _ignoredReason, ...restUpdates } = updates;
       updated = {
         ...list[idx],
-        ...updates,
+        ...restUpdates,
         id: list[idx].id,
         updatedAt: nowIso.slice(0, 10),
       };
+      if (updates.assistantLeader !== undefined && !updates.assistantLeader?.trim()) {
+        updated.assistantLeader = undefined;
+        updated.assistantLeaderMemberId = undefined;
+      }
       list[idx] = updated;
       this.churchGroupsByOrg.set(orgId, list);
     }
+
+    const reasonText = updates.leadershipChangeReason?.trim() || null;
+    const historyEntries: Parameters<PlatformStore['appendChurchGroupLeadershipHistory']>[1] = [];
+
+    if (
+      existingGroup &&
+      this.isDifferentLeader(
+        existingGroup.leaderName,
+        existingGroup.leaderMemberId,
+        updated.leaderName,
+        updated.leaderMemberId
+      )
+    ) {
+      const hasPrev = Boolean(this.normalizeLeaderNameForCompare(existingGroup.leaderName));
+      const hasNext = Boolean(this.normalizeLeaderNameForCompare(updated.leaderName));
+      historyEntries.push({
+        groupId: updated.id,
+        groupName: updated.name,
+        category: updated.category,
+        role: 'primary_leader',
+        action: !hasPrev && hasNext ? 'assigned' : hasPrev && !hasNext ? 'removed' : 'changed',
+        previousLeaderName: existingGroup.leaderName || null,
+        previousLeaderMemberId: existingGroup.leaderMemberId || null,
+        newLeaderName: updated.leaderName || null,
+        newLeaderMemberId: updated.leaderMemberId || null,
+        changedById: actor?.id || null,
+        changedByName: actor?.name || actor?.email || 'Administrator',
+        changedByEmail: actor?.email || null,
+        changedByRole: actor?.role || 'admin',
+        reason: reasonText,
+      });
+    }
+
+    if (
+      existingGroup &&
+      this.isDifferentLeader(
+        existingGroup.assistantLeader,
+        existingGroup.assistantLeaderMemberId,
+        updated.assistantLeader,
+        updated.assistantLeaderMemberId
+      )
+    ) {
+      const hasPrev = Boolean(this.normalizeLeaderNameForCompare(existingGroup.assistantLeader));
+      const hasNext = Boolean(this.normalizeLeaderNameForCompare(updated.assistantLeader));
+      historyEntries.push({
+        groupId: updated.id,
+        groupName: updated.name,
+        category: updated.category,
+        role: 'assistant_leader',
+        action: !hasPrev && hasNext ? 'assigned' : hasPrev && !hasNext ? 'removed' : 'changed',
+        previousLeaderName: existingGroup.assistantLeader || null,
+        previousLeaderMemberId: existingGroup.assistantLeaderMemberId || null,
+        newLeaderName: updated.assistantLeader || null,
+        newLeaderMemberId: updated.assistantLeaderMemberId || null,
+        changedById: actor?.id || null,
+        changedByName: actor?.name || actor?.email || 'Administrator',
+        changedByEmail: actor?.email || null,
+        changedByRole: actor?.role || 'admin',
+        reason: reasonText,
+      });
+    }
+
+    await this.appendChurchGroupLeadershipHistory(orgId, historyEntries);
 
     await this.appendAuditLog({
       organizationId: orgId,
@@ -4413,6 +5086,7 @@ class PlatformStore {
         name: updated.name,
         category: updated.category,
         active: updated.active,
+        leadershipChanged: historyEntries.length > 0,
       },
       ipAddress: actor?.ipAddress || null,
     });
@@ -4427,20 +5101,22 @@ class PlatformStore {
   ): Promise<void> {
     this.assertDatabaseAvailable();
     const orgId = organizationId.toLowerCase();
-    let deletedName = groupId;
+    let deletedGroup: ChurchGroup | null = null;
 
-    if (this.supabase) {
+    const sb = this.activeSupabase;
+
+    if (sb) {
       if (!UUID_REGEX.test(groupId)) {
         const notFound: any = new Error('Church group not found.');
         notFound.status = 404;
         throw notFound;
       }
-      const { data, error } = await this.supabase
+      const { data, error } = await sb
         .from('church_groups')
         .delete()
         .eq('organization_id', orgId)
         .eq('id', groupId)
-        .select('id, name')
+        .select('*')
         .maybeSingle();
 
       if (error) {
@@ -4451,7 +5127,7 @@ class PlatformStore {
         notFound.status = 404;
         throw notFound;
       }
-      deletedName = String(data.name || groupId);
+      deletedGroup = this.mapSupabaseChurchGroupRow(data);
     } else {
       const list = this.churchGroupsByOrg.get(orgId) || [];
       const target = list.find((g) => g.id === groupId);
@@ -4460,11 +5136,52 @@ class PlatformStore {
         notFound.status = 404;
         throw notFound;
       }
-      deletedName = target.name;
+      deletedGroup = { ...target };
       this.churchGroupsByOrg.set(
         orgId,
         list.filter((g) => g.id !== groupId)
       );
+    }
+
+    if (deletedGroup) {
+      const historyEntries: Parameters<PlatformStore['appendChurchGroupLeadershipHistory']>[1] = [];
+      if (deletedGroup.leaderName.trim()) {
+        historyEntries.push({
+          groupId: deletedGroup.id,
+          groupName: deletedGroup.name,
+          category: deletedGroup.category,
+          role: 'primary_leader',
+          action: 'group_deleted',
+          previousLeaderName: deletedGroup.leaderName,
+          previousLeaderMemberId: deletedGroup.leaderMemberId || null,
+          newLeaderName: null,
+          newLeaderMemberId: null,
+          changedById: actor?.id || null,
+          changedByName: actor?.name || actor?.email || 'Administrator',
+          changedByEmail: actor?.email || null,
+          changedByRole: actor?.role || 'admin',
+          reason: 'Group removed from congregation structure',
+        });
+      }
+      if (deletedGroup.assistantLeader && deletedGroup.assistantLeader.trim()) {
+        historyEntries.push({
+          groupId: deletedGroup.id,
+          groupName: deletedGroup.name,
+          category: deletedGroup.category,
+          role: 'assistant_leader',
+          action: 'group_deleted',
+          previousLeaderName: deletedGroup.assistantLeader,
+          previousLeaderMemberId: deletedGroup.assistantLeaderMemberId || null,
+          newLeaderName: null,
+          newLeaderMemberId: null,
+          changedById: actor?.id || null,
+          changedByName: actor?.name || actor?.email || 'Administrator',
+          changedByEmail: actor?.email || null,
+          changedByRole: actor?.role || 'admin',
+          reason: 'Group removed from congregation structure',
+        });
+      }
+      await this.appendChurchGroupLeadershipHistory(orgId, historyEntries);
     }
 
     await this.appendAuditLog({
@@ -4475,7 +5192,7 @@ class PlatformStore {
       action: 'church_group.deleted',
       targetType: 'church_group',
       targetId: groupId,
-      metadata: { name: deletedName },
+      metadata: { name: deletedGroup?.name || groupId },
       ipAddress: actor?.ipAddress || null,
     });
   }
@@ -6613,8 +7330,9 @@ class PlatformStore {
       createdAt: new Date().toISOString(),
     };
 
-    if (this.supabase) {
-      const { error } = await this.supabase.from('audit_log').insert({
+    const sb = this.activeSupabase;
+    if (sb) {
+      const { error } = await sb.from('audit_log').insert({
         id: record.id,
         actor_id: record.actorId && UUID_REGEX.test(record.actorId) ? record.actorId : null,
         actor_email: record.actorEmail,
@@ -7452,6 +8170,7 @@ class PlatformStore {
     this.premiseByOrg.delete(orgId);
     this.systemSettingsByOrg.delete(orgId);
     this.churchGroupsByOrg.delete(orgId);
+    this.churchGroupLeadershipHistoryByOrg.delete(orgId);
     this.checkinsByOrg.delete(orgId);
     this.rawEventsByOrg.delete(orgId);
     this.membersByOrg.delete(orgId);
@@ -10123,6 +10842,670 @@ class PlatformStore {
       ...(generatedTempPassword ? { temporaryPassword: generatedTempPassword } : {}),
       resetExisting: Boolean(existingSameOrg),
     };
+  }
+
+  public async listOrganizationUsers(organizationId: string): Promise<OrganizationUserAccount[]> {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (organizationId || '').trim().toLowerCase();
+    if (!cleanOrgId) return [];
+
+    const sb = this.activeSupabase;
+    const orgMembers = await this.getMembers(cleanOrgId);
+
+    const resolveCredentialStatus = (
+      status: string,
+      mustChangePassword: boolean,
+      lockedUntil?: string | null
+    ): OrganizationUserAccount['credentialStatus'] => {
+      if (status === 'suspended') return 'suspended';
+      if (
+        status === 'locked' ||
+        (lockedUntil && !Number.isNaN(Date.parse(lockedUntil)) && Date.parse(lockedUntil) > Date.now())
+      ) {
+        return 'locked';
+      }
+      return mustChangePassword ? 'temp_password' : 'active';
+    };
+
+    const credRows: Array<{
+      id: string;
+      memberId?: string;
+      email?: string;
+      username?: string;
+      phoneE164?: string;
+      fullName: string;
+      role: ChurchRole;
+      status: string;
+      mustChangePassword: boolean;
+      lockedUntil: string | null;
+      lastLoginAt: string | null;
+      createdAt?: string;
+    }> = [];
+
+    if (sb) {
+      if (UUID_REGEX.test(cleanOrgId)) {
+        const { data, error } = await sb
+          .from('account_credentials')
+          .select(
+            'id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password'
+          )
+          .eq('organization_id', cleanOrgId)
+          .eq('is_creator', false)
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          throw new Error(`Failed to load organisation user accounts: ${error.message}`);
+        }
+
+        for (const row of data || []) {
+          credRows.push({
+            id: String(row.id),
+            memberId: row.member_id ? String(row.member_id) : undefined,
+            email: row.email ? String(row.email).toLowerCase() : undefined,
+            username: row.username ? String(row.username).toLowerCase() : undefined,
+            phoneE164: row.phone_e164 ? String(row.phone_e164) : undefined,
+            fullName: String(row.full_name || 'Church User'),
+            role:
+              String(row.role || '').toLowerCase() === 'super_admin'
+                ? 'super_admin'
+                : mapSupabaseRoleToChurchRole(row.role),
+            status: String(row.status || 'active'),
+            mustChangePassword: Boolean(row.must_change_password),
+            lockedUntil: row.locked_until ? String(row.locked_until) : null,
+            lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+            createdAt: row.created_at ? String(row.created_at) : undefined,
+          });
+        }
+      }
+    } else {
+      for (const c of this.userCredentials.values()) {
+        if (c.organizationId.toLowerCase() === cleanOrgId && !c.isCreator) {
+          credRows.push({
+            id: c.id,
+            memberId: c.memberId,
+            email: c.email,
+            username: c.username,
+            phoneE164: c.phoneE164,
+            fullName: c.name,
+            role: c.role,
+            status: c.status,
+            mustChangePassword: Boolean(c.mustChangePassword),
+            lockedUntil: c.lockedUntil || null,
+            lastLoginAt: null,
+            createdAt: c.createdAt,
+          });
+        }
+      }
+    }
+
+    const matchedMemberIds = new Set<string>();
+    const results: OrganizationUserAccount[] = [];
+
+    const matchMemberForCred = (c: (typeof credRows)[number]) => {
+      if (c.memberId) {
+        const byId = orgMembers.find(
+          (m) => String(m.id) === c.memberId || String(m.id) === c.id
+        );
+        if (byId) return byId;
+      }
+      const cleanEmail = (c.email || '').trim().toLowerCase();
+      const cleanPhone = c.phoneE164 ? normalizePhone(c.phoneE164) : '';
+      return orgMembers.find((m) => {
+        const mEmail = String(m.email || '').trim().toLowerCase();
+        const mPhone = m.phoneE164 || m.phone ? normalizePhone(m.phoneE164 || m.phone) : '';
+        return (cleanEmail && mEmail === cleanEmail) || (cleanPhone && mPhone === cleanPhone);
+      });
+    };
+
+    for (const c of credRows) {
+      const linkedMember = matchMemberForCred(c);
+      if (linkedMember) {
+        matchedMemberIds.add(String(linkedMember.id));
+      }
+      const memberDisplayName = linkedMember
+        ? `${String(linkedMember.firstName || '').trim()} ${String(linkedMember.lastName || '').trim()}`.trim()
+        : '';
+      const role = c.role;
+      results.push({
+        id: c.id,
+        memberId: linkedMember ? String(linkedMember.id) : c.memberId,
+        memberCode: linkedMember?.memberId ? String(linkedMember.memberId) : undefined,
+        organizationId: cleanOrgId,
+        fullName: c.fullName || memberDisplayName || 'Church User',
+        email: c.email || (linkedMember?.email ? String(linkedMember.email).toLowerCase() : undefined),
+        username: c.username,
+        phoneE164:
+          c.phoneE164 ||
+          (linkedMember?.phoneE164 ? normalizePhone(String(linkedMember.phoneE164)) : undefined),
+        role,
+        accountCategory: role === 'member' ? 'member' : 'staff',
+        hasCredentials: true,
+        credentialStatus: resolveCredentialStatus(c.status, c.mustChangePassword, c.lockedUntil),
+        status: c.status === 'suspended' ? 'suspended' : 'active',
+        mustChangePassword: Boolean(c.mustChangePassword),
+        lastLoginAt: c.lastLoginAt,
+        createdAt: c.createdAt,
+        homeCellGroup: linkedMember?.homeCellGroup || linkedMember?.groupName || undefined,
+        department: linkedMember?.department || undefined,
+        designation: linkedMember?.designation || undefined,
+      });
+    }
+
+    for (const m of orgMembers) {
+      const mId = String(m.id);
+      if (matchedMemberIds.has(mId)) continue;
+      const memberDisplayName =
+        `${String(m.firstName || '').trim()} ${String(m.lastName || '').trim()}`.trim() ||
+        'Congregation Member';
+      const role = mapSupabaseRoleToChurchRole(m.role || 'member');
+      results.push({
+        id: mId,
+        memberId: mId,
+        memberCode: m.memberId ? String(m.memberId) : undefined,
+        organizationId: cleanOrgId,
+        fullName: memberDisplayName,
+        email: m.email ? String(m.email).trim().toLowerCase() : undefined,
+        phoneE164: m.phoneE164 ? normalizePhone(String(m.phoneE164)) : undefined,
+        role,
+        accountCategory: role === 'member' ? 'member' : 'staff',
+        hasCredentials: false,
+        credentialStatus: 'unprovisioned',
+        status: 'active',
+        mustChangePassword: false,
+        lastLoginAt: null,
+        createdAt: m.joinedOn ? String(m.joinedOn) : undefined,
+        homeCellGroup: m.homeCellGroup || m.groupName || undefined,
+        department: m.department || undefined,
+        designation: m.designation || undefined,
+      });
+    }
+
+    return results;
+  }
+
+  public async provisionOrganizationMemberCredentials(params: {
+    organizationId: string;
+    memberId?: string;
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    role: ChurchRole;
+    password?: string;
+    requirePasswordChange?: boolean;
+    actorId?: string | null;
+    actorEmail?: string | null;
+    ipAddress?: string;
+  }): Promise<{
+    user: OrganizationUserAccount;
+    temporaryPassword?: string;
+    resetExisting: boolean;
+  }> {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (params.organizationId || '').trim().toLowerCase();
+    const org = await this.getOrganisationById(cleanOrgId);
+    if (!org) {
+      const err: any = new Error('Target organisation not found.');
+      err.code = 'NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    const orgMembers = await this.getMembers(cleanOrgId);
+    let targetMember: Record<string, any> | undefined;
+    const requestedMemberId = params.memberId?.trim() || '';
+    if (requestedMemberId) {
+      targetMember = orgMembers.find(
+        (m) => String(m.id) === requestedMemberId || String(m.memberId || '') === requestedMemberId
+      );
+      if (!targetMember) {
+        const err: any = new Error('Selected member was not found in this organisation.');
+        err.code = 'MEMBER_NOT_FOUND';
+        err.status = 404;
+        throw err;
+      }
+    }
+
+    const email = (params.email ?? targetMember?.email ?? '').trim().toLowerCase();
+    const rawPhone = (params.phone ?? targetMember?.phoneE164 ?? '').trim();
+    const phoneE164 = rawPhone ? normalizePhone(rawPhone) : '';
+    const memberFullName = targetMember
+      ? `${String(targetMember.firstName || '').trim()} ${String(targetMember.lastName || '').trim()}`.trim()
+      : '';
+    const fullName = (params.fullName || memberFullName || '').trim();
+
+    if (!fullName) {
+      const err: any = new Error('Full name is required to provision user credentials.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+    if (!email && !phoneE164) {
+      const err: any = new Error(
+        'An email address or phone number is required to create or reset login credentials.'
+      );
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    const suppliedPassword = (params.password || '').trim();
+    if (suppliedPassword && suppliedPassword.length < 8) {
+      const err: any = new Error('Password must be at least 8 characters long.');
+      err.code = 'WEAK_PASSWORD';
+      err.status = 400;
+      throw err;
+    }
+    const generatedTempPassword = suppliedPassword
+      ? undefined
+      : `Ek!${randomBytes(6).toString('base64url')}9`;
+    const effectivePassword = suppliedPassword || generatedTempPassword!;
+    const mustChangePassword = suppliedPassword
+      ? Boolean(params.requirePasswordChange)
+      : params.requirePasswordChange !== false;
+
+    const sb = this.activeSupabase;
+    let existingSameOrg: UserCredentialRecord | undefined;
+
+    if (sb) {
+      const orFilters: string[] = [];
+      if (targetMember?.id && UUID_REGEX.test(String(targetMember.id))) {
+        orFilters.push(`member_id.eq.${targetMember.id}`, `id.eq.${targetMember.id}`);
+      }
+      if (email) orFilters.push(`email.ilike.${email}`);
+      if (phoneE164) orFilters.push(`phone_e164.eq.${phoneE164}`);
+
+      if (orFilters.length > 0) {
+        const { data: rows, error } = await sb
+          .from('account_credentials')
+          .select('*')
+          .or(orFilters.join(','))
+          .limit(10);
+        if (error) {
+          throw new Error(`Failed querying user credentials in Supabase: ${error.message}`);
+        }
+        if (Array.isArray(rows) && rows.length > 0) {
+          for (const row of rows) {
+            const rowOrgId = String(row.organization_id || '').toLowerCase();
+            if (row.is_creator || (rowOrgId && rowOrgId !== cleanOrgId)) {
+              const err: any = new Error(
+                'This email or phone already belongs to another organisation or platform creator.'
+              );
+              err.code = 'DUPLICATE_CREDENTIAL';
+              err.status = 409;
+              throw err;
+            }
+          }
+          const sameRow =
+            rows.find((r) => targetMember && String(r.member_id || '') === String(targetMember.id)) ||
+            rows[0];
+          existingSameOrg = {
+            id: String(sameRow.id),
+            memberId: sameRow.member_id ? String(sameRow.member_id) : undefined,
+            organizationId: cleanOrgId,
+            email: sameRow.email ? String(sameRow.email).toLowerCase() : undefined,
+            username: sameRow.username ? String(sameRow.username).toLowerCase() : undefined,
+            phoneE164: sameRow.phone_e164 ? String(sameRow.phone_e164) : undefined,
+            name: String(sameRow.full_name || fullName),
+            role: mapSupabaseRoleToChurchRole(sameRow.role),
+            isCreator: false,
+            passwordHash: '',
+            passwordSalt: '',
+            status: 'active',
+          };
+        }
+      }
+    } else {
+      for (const c of this.userCredentials.values()) {
+        const sameTargetMember =
+          targetMember && (c.memberId === String(targetMember.id) || c.id === String(targetMember.id));
+        const sameContact =
+          (email && c.email && c.email.toLowerCase() === email) ||
+          (phoneE164 && c.phoneE164 && c.phoneE164 === phoneE164);
+        if (sameTargetMember || sameContact) {
+          if (c.isCreator || (c.organizationId && c.organizationId.toLowerCase() !== cleanOrgId)) {
+            const err: any = new Error(
+              'This email or phone is already assigned to another organisation or platform creator.'
+            );
+            err.code = 'DUPLICATE_CREDENTIAL';
+            err.status = 409;
+            throw err;
+          }
+          existingSameOrg = c;
+          break;
+        }
+      }
+    }
+
+    let targetMemberId = targetMember ? String(targetMember.id) : existingSameOrg?.memberId;
+    if (!targetMemberId) {
+      const matched = orgMembers.find(
+        (m) =>
+          (email && String(m.email || '').toLowerCase() === email) ||
+          (phoneE164 && m.phoneE164 && normalizePhone(String(m.phoneE164)) === phoneE164)
+      );
+      if (matched) {
+        targetMember = matched;
+        targetMemberId = String(matched.id);
+      }
+    }
+
+    const mappedMemberRole = params.role === 'super_admin' ? 'admin' : params.role;
+    if (targetMemberId) {
+      await this.updateMember(cleanOrgId, targetMemberId, {
+        role: mappedMemberRole,
+        ...(email ? { email } : {}),
+        ...(phoneE164 ? { phoneE164 } : {}),
+      });
+    } else {
+      const nameParts = fullName.split(/\s+/).filter(Boolean);
+      const firstName = nameParts[0] || 'Church';
+      const lastName = nameParts.slice(1).join(' ') || 'Member';
+      const createdMember = await this.createMember(
+        cleanOrgId,
+        {
+          firstName,
+          lastName,
+          email: email || undefined,
+          phoneE164: phoneE164 || undefined,
+          groupName: params.role === 'member' ? 'General Congregation' : 'Church Leadership',
+          autoCheckinOptedIn: params.role === 'member',
+          role: mappedMemberRole,
+          status: params.role === 'member' ? 'member' : 'active',
+        },
+        { skipAutoCredentials: true }
+      );
+      targetMember = createdMember;
+      targetMemberId = String(createdMember.id);
+    }
+
+    const credId =
+      existingSameOrg?.id ||
+      (targetMemberId && UUID_REGEX.test(targetMemberId) ? targetMemberId : randomUUID());
+    const nowIso = new Date().toISOString();
+
+    const record = await this.provisionCredentialRecord({
+      id: credId,
+      memberId: targetMemberId,
+      organizationId: cleanOrgId,
+      email: email || undefined,
+      phoneE164: phoneE164 || undefined,
+      name: fullName,
+      role: params.role,
+      isCreator: params.role === 'super_admin',
+      password: effectivePassword,
+      mustChangePassword,
+      passwordUpdatedAt: nowIso,
+    });
+
+    await this.resetDistributedAuthRateLimit(`login:${record.id}`);
+    await this.recordAuthAuditEvent({
+      organizationId: cleanOrgId,
+      accountId: record.id,
+      identifier: email || phoneE164 || fullName,
+      eventType: existingSameOrg ? 'password_changed' : 'account_auto_provisioned',
+      ipAddress: params.ipAddress,
+      success: true,
+      reason: `user_credentials_managed:${params.role}`,
+    });
+
+    await this.appendAuditLog({
+      organizationId: cleanOrgId,
+      actorId: params.actorId ?? null,
+      actorEmail: params.actorEmail || 'admin@ekklesphere.local',
+      actorRole: 'admin',
+      action: existingSameOrg ? 'user_credentials.reset' : 'user_credentials.provisioned',
+      targetType: 'account_credentials',
+      targetId: record.id,
+      metadata: {
+        memberId: targetMemberId,
+        fullName,
+        email: email || null,
+        phoneE164: phoneE164 || null,
+        role: params.role,
+        mustChangePassword,
+      },
+      ipAddress: params.ipAddress || null,
+    });
+
+    return {
+      user: {
+        id: record.id,
+        memberId: record.memberId,
+        memberCode: targetMember?.memberId ? String(targetMember.memberId) : undefined,
+        organizationId: cleanOrgId,
+        fullName: record.name,
+        email: record.email,
+        phoneE164: record.phoneE164,
+        role: record.role,
+        accountCategory: record.role === 'member' ? 'member' : 'staff',
+        hasCredentials: true,
+        credentialStatus: record.mustChangePassword ? 'temp_password' : 'active',
+        status: 'active',
+        mustChangePassword: Boolean(record.mustChangePassword),
+        lastLoginAt: null,
+        createdAt: record.createdAt || nowIso,
+        homeCellGroup: targetMember?.homeCellGroup || targetMember?.groupName || undefined,
+        department: targetMember?.department || undefined,
+        designation: targetMember?.designation || undefined,
+      },
+      ...(generatedTempPassword ? { temporaryPassword: generatedTempPassword } : {}),
+      resetExisting: Boolean(existingSameOrg),
+    };
+  }
+
+  public async updateOrganizationUserAccount(params: {
+    organizationId: string;
+    targetId: string;
+    role?: ChurchRole;
+    status?: 'active' | 'suspended';
+    actorUserId?: string | null;
+    actorEmail?: string | null;
+    callerIsCreator?: boolean;
+    ipAddress?: string;
+  }): Promise<OrganizationUserAccount> {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (params.organizationId || '').trim().toLowerCase();
+    const targetId = (params.targetId || '').trim();
+    if (!cleanOrgId || !targetId) {
+      const err: any = new Error('Target user account ID is required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    if (params.role === 'super_admin' && !params.callerIsCreator) {
+      const err: any = new Error('Only platform creators may assign super admin privileges.');
+      err.code = 'FORBIDDEN';
+      err.status = 403;
+      throw err;
+    }
+
+    if (params.status === 'suspended' && params.actorUserId && params.actorUserId === targetId) {
+      const err: any = new Error('You cannot suspend your own active signed-in account.');
+      err.code = 'SELF_SUSPEND_BLOCKED';
+      err.status = 400;
+      throw err;
+    }
+
+    const sb = this.activeSupabase;
+    const nowIso = new Date().toISOString();
+
+    if (sb) {
+      let credRow: Record<string, any> | null = null;
+      if (UUID_REGEX.test(targetId) && UUID_REGEX.test(cleanOrgId)) {
+        const { data, error } = await sb
+          .from('account_credentials')
+          .select('*')
+          .eq('organization_id', cleanOrgId)
+          .or(`id.eq.${targetId},member_id.eq.${targetId}`)
+          .limit(1)
+          .maybeSingle();
+        if (error) {
+          throw new Error(`Failed querying user account in Supabase: ${error.message}`);
+        }
+        credRow = data || null;
+      }
+
+      if (credRow) {
+        if (credRow.is_creator && !params.callerIsCreator) {
+          const err: any = new Error('Platform creator accounts cannot be modified here.');
+          err.code = 'FORBIDDEN';
+          err.status = 403;
+          throw err;
+        }
+        if (
+          params.status === 'suspended' &&
+          params.actorUserId &&
+          (credRow.id === params.actorUserId || credRow.member_id === params.actorUserId)
+        ) {
+          const err: any = new Error('You cannot suspend your own active signed-in account.');
+          err.code = 'SELF_SUSPEND_BLOCKED';
+          err.status = 400;
+          throw err;
+        }
+
+        const patch: Record<string, unknown> = { updated_at: nowIso };
+        if (params.role) patch.role = params.role;
+        if (params.status) {
+          patch.status = params.status;
+          if (params.status === 'active') {
+            patch.locked_until = null;
+            patch.failed_attempts = 0;
+          }
+        }
+
+        const { error: updErr } = await sb
+          .from('account_credentials')
+          .update(patch)
+          .eq('organization_id', cleanOrgId)
+          .eq('id', credRow.id);
+        if (updErr) {
+          throw new Error(`Failed updating user account in Supabase: ${updErr.message}`);
+        }
+
+        const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
+        if (params.role && linkedMemberId) {
+          await this.updateMember(cleanOrgId, linkedMemberId, {
+            role: params.role === 'super_admin' ? 'admin' : params.role,
+          }).catch(() => {});
+        }
+        if (params.status === 'active') {
+          await this.resetDistributedAuthRateLimit(`login:${credRow.id}`);
+        }
+      } else {
+        // No credential row yet: allow updating member's role if only role was supplied
+        if (params.status === 'suspended') {
+          const err: any = new Error(
+            'This member does not have login credentials yet. Issue credentials before suspending login.'
+          );
+          err.code = 'NO_CREDENTIALS';
+          err.status = 400;
+          throw err;
+        }
+        const orgMembers = await this.getMembers(cleanOrgId);
+        const foundMember = orgMembers.find((m) => String(m.id) === targetId);
+        if (!foundMember) {
+          const err: any = new Error('User or member account not found in this organisation.');
+          err.code = 'NOT_FOUND';
+          err.status = 404;
+          throw err;
+        }
+        if (params.role) {
+          await this.updateMember(cleanOrgId, targetId, {
+            role: params.role === 'super_admin' ? 'admin' : params.role,
+          });
+        }
+      }
+    } else {
+      let cred: UserCredentialRecord | undefined;
+      for (const c of this.userCredentials.values()) {
+        if (
+          c.organizationId.toLowerCase() === cleanOrgId &&
+          (c.id === targetId || c.memberId === targetId)
+        ) {
+          cred = c;
+          break;
+        }
+      }
+      if (cred) {
+        if (cred.isCreator && !params.callerIsCreator) {
+          const err: any = new Error('Platform creator accounts cannot be modified here.');
+          err.code = 'FORBIDDEN';
+          err.status = 403;
+          throw err;
+        }
+        if (
+          params.status === 'suspended' &&
+          params.actorUserId &&
+          (cred.id === params.actorUserId || cred.memberId === params.actorUserId)
+        ) {
+          const err: any = new Error('You cannot suspend your own active signed-in account.');
+          err.code = 'SELF_SUSPEND_BLOCKED';
+          err.status = 400;
+          throw err;
+        }
+        if (params.role) cred.role = params.role;
+        if (params.status) {
+          cred.status = params.status;
+          if (params.status === 'active') {
+            cred.lockedUntil = null;
+            cred.failedAttempts = 0;
+          }
+        }
+        if (params.role && cred.memberId) {
+          await this.updateMember(cleanOrgId, cred.memberId, {
+            role: params.role === 'super_admin' ? 'admin' : params.role,
+          }).catch(() => {});
+        }
+      } else {
+        if (params.status === 'suspended') {
+          const err: any = new Error(
+            'This member does not have login credentials yet. Issue credentials before suspending login.'
+          );
+          err.code = 'NO_CREDENTIALS';
+          err.status = 400;
+          throw err;
+        }
+        const orgMembers = await this.getMembers(cleanOrgId);
+        const foundMember = orgMembers.find((m) => String(m.id) === targetId);
+        if (!foundMember) {
+          const err: any = new Error('User or member account not found in this organisation.');
+          err.code = 'NOT_FOUND';
+          err.status = 404;
+          throw err;
+        }
+        if (params.role) {
+          await this.updateMember(cleanOrgId, targetId, {
+            role: params.role === 'super_admin' ? 'admin' : params.role,
+          });
+        }
+      }
+    }
+
+    await this.appendAuditLog({
+      organizationId: cleanOrgId,
+      actorId: params.actorUserId ?? null,
+      actorEmail: params.actorEmail || 'admin@ekklesphere.local',
+      actorRole: 'admin',
+      action: 'user_account.updated',
+      targetType: 'account_credentials',
+      targetId,
+      metadata: {
+        ...(params.role ? { role: params.role } : {}),
+        ...(params.status ? { status: params.status } : {}),
+      },
+      ipAddress: params.ipAddress || null,
+    });
+
+    const refreshed = await this.listOrganizationUsers(cleanOrgId);
+    const updatedUser = refreshed.find((u) => u.id === targetId || u.memberId === targetId);
+    if (!updatedUser) {
+      const err: any = new Error('Updated user account could not be loaded.');
+      err.code = 'NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+    return updatedUser;
   }
 }
 

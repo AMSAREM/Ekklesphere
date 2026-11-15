@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { ProximitySimulator } from '../simulator/ProximitySimulator';
+import { UserManagement } from '../UserManagement';
 import { AddMemberModal } from './AddMemberModal';
 import { SystemSettingsPanel } from './SystemSettingsPanel';
 import { MemberDirectoryTable } from './MemberDirectoryTable';
@@ -56,6 +57,7 @@ type AdminNavTab =
   | 'history'
   | 'insights'
   | 'workflows'
+  | 'users'
   | 'members'
   | 'integrations'
   | 'proximity'
@@ -89,6 +91,7 @@ export const AdminDashboard: React.FC = () => {
     adminSubTab,
     setAdminSubTab,
     requestOpenSettings,
+    requestedAnalyticsTarget,
     isAddServiceOpen,
     setIsAddServiceOpen,
     isFollowupModalOpen,
@@ -129,6 +132,11 @@ export const AdminDashboard: React.FC = () => {
   >('checked_in');
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [analyticsLens, setAnalyticsLens] = useState<AnalyticsLens>('all');
+  const [externalAnalyticsQuery, setExternalAnalyticsQuery] = useState<string | undefined>(undefined);
+  const [externalAnalyticsCategory, setExternalAnalyticsCategory] = useState<
+    'all' | 'ministry' | 'fellowship' | 'cell_group' | undefined
+  >(undefined);
+  const [externalAnalyticsNonce, setExternalAnalyticsNonce] = useState<number>(0);
   const analyticsSectionRef = useRef<HTMLDivElement>(null);
 
   const [directoryDeptFilter, setDirectoryDeptFilter] = useState<string | null>(null);
@@ -160,8 +168,33 @@ export const AdminDashboard: React.FC = () => {
     }
   }, [adminSubTab]);
 
+  useEffect(() => {
+    if (!requestedAnalyticsTarget) return;
+    setActiveTab('dashboard');
+    setSectionFilter((prev) => (prev === 'operations' ? 'all' : prev));
+    setAnalyticsLens(requestedAnalyticsTarget.lens);
+    setExternalAnalyticsQuery(requestedAnalyticsTarget.searchQuery ?? '');
+    setExternalAnalyticsCategory(requestedAnalyticsTarget.categoryFilter ?? 'all');
+    setExternalAnalyticsNonce(requestedAnalyticsTarget.nonce);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        analyticsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }, [requestedAnalyticsTarget]);
+
   const navigateTab = useCallback(
-    (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => {
+    (
+      tab:
+        | 'dashboard'
+        | 'history'
+        | 'insights'
+        | 'workflows'
+        | 'users'
+        | 'integrations'
+        | 'proximity'
+        | 'settings'
+    ) => {
       setActiveTab(tab);
       setAdminSubTab(tab);
     },
@@ -779,7 +812,11 @@ export const AdminDashboard: React.FC = () => {
                 <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
                   <span className="truncate">
                     {dashboardAnalytics.topDepartment
-                      ? `Top: ${dashboardAnalytics.topDepartment.name} (${dashboardAnalytics.topDepartment.totalMembers})`
+                      ? `${dashboardAnalytics.topDepartment.name} (${dashboardAnalytics.topDepartment.totalMembers}) · ${
+                          dashboardAnalytics.topDepartment.leaderName
+                            ? `Lead: ${dashboardAnalytics.topDepartment.leaderName}`
+                            : 'No lead assigned'
+                        }`
                       : 'No departments assigned'}
                   </span>
                   <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
@@ -793,22 +830,22 @@ export const AdminDashboard: React.FC = () => {
               >
                 <div className="flex items-center justify-between gap-2 w-full">
                   <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    Ministries &amp; Groups
+                    Ministries &amp; Leadership
                   </span>
                   <HeartHandshake className="w-4 h-4 text-[#6D5CF2] shrink-0" />
                 </div>
                 <div className="my-2 flex items-baseline gap-2">
                   <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-none">
-                    {dashboardAnalytics.groupCounts.ministries}
+                    {dashboardAnalytics.groupCounts.total}
                   </span>
                   <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    ministries ({dashboardAnalytics.groupCounts.total} total)
+                    groups · {dashboardAnalytics.leadership.distinctLeadersCount} leaders
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
                   <span className="truncate">
-                    {dashboardAnalytics.groupCounts.fellowships} fellowships ·{' '}
-                    {dashboardAnalytics.groupCounts.cellGroups} cell groups
+                    {dashboardAnalytics.leadership.leadershipCoveragePct}% roster covered ·{' '}
+                    {dashboardAnalytics.groupCounts.cellGroups} cells
                   </span>
                   <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
                 </div>
@@ -1031,7 +1068,10 @@ export const AdminDashboard: React.FC = () => {
                       openFilteredDirectory({ group: grp, department: 'all', displayMode: 'table' })
                     }
                     onSelectService={handleSelectServiceFromChild}
-                    onOpenSettings={() => requestOpenSettings('groups')}
+                    onOpenSettings={(groupIntent) => requestOpenSettings('groups', groupIntent)}
+                    externalFilterQuery={externalAnalyticsQuery}
+                    externalCategoryFilter={externalAnalyticsCategory}
+                    externalFilterNonce={externalAnalyticsNonce}
                     onAddMember={() => {
                       setEditingMember(null);
                       setIsAddMemberOpen(true);
@@ -1742,6 +1782,13 @@ export const AdminDashboard: React.FC = () => {
               initialGroupFilter={directoryGroupFilter}
               initialDisplayMode={directoryDisplayMode}
             />
+          </div>
+        )}
+
+        {/* Users & Member Credentials Tab */}
+        {activeTab === 'users' && (
+          <div className="mt-4">
+            <UserManagement />
           </div>
         )}
 

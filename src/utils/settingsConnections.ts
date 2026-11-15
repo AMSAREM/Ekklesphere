@@ -1,5 +1,6 @@
 import {
   ChurchGroup,
+  ChurchGroupCategory,
   FollowupTask,
   Person,
   SystemSettings,
@@ -15,10 +16,199 @@ export type SettingsTabId =
   | 'staff'
   | 'billing';
 
+export type AnalyticsLensId =
+  | 'all'
+  | 'departments'
+  | 'ministries'
+  | 'demographics'
+  | 'services';
+
+export interface SettingsGroupIntent {
+  mode: 'create' | 'edit';
+  groupId?: string;
+  prefillName?: string;
+  prefillCategory?: ChurchGroupCategory;
+}
+
+export interface AnalyticsJumpTarget {
+  lens: AnalyticsLensId;
+  searchQuery?: string;
+  categoryFilter?: 'all' | ChurchGroupCategory;
+  nonce: number;
+}
+
 export function normalizeSettingLabel(value?: string | null): string {
   return String(value || '')
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+export function isAssignedLeaderName(leaderName?: string | null): boolean {
+  const clean = normalizeSettingLabel(leaderName).toLowerCase();
+  return (
+    Boolean(clean) &&
+    clean !== 'unassigned' &&
+    clean !== 'directory group' &&
+    clean !== 'tbd' &&
+    clean !== 'none'
+  );
+}
+
+export function getMemberFullName(member: Pick<Person, 'firstName' | 'lastName'>): string {
+  return normalizeSettingLabel(`${member.firstName || ''} ${member.lastName || ''}`);
+}
+
+export interface MemberLeaderResolution {
+  status: 'matched' | 'empty' | 'ambiguous' | 'not_found';
+  member?: Person;
+  canonicalName?: string;
+  matches?: Person[];
+  error?: string;
+}
+
+export function resolveMemberLeaderInput(
+  members: Person[],
+  opts: {
+    memberId?: string | null;
+    inputName?: string | null;
+    requireMatch?: boolean;
+  }
+): MemberLeaderResolution {
+  const cleanInput = normalizeSettingLabel(opts.inputName);
+  const cleanId = normalizeSettingLabel(opts.memberId);
+
+  if (cleanId) {
+    const byId = members.find((m) => m.id === cleanId || m.memberId === cleanId);
+    if (byId) {
+      const fullName = getMemberFullName(byId);
+      const preferred = normalizeSettingLabel(byId.preferredName);
+      if (
+        !cleanInput ||
+        fullName.toLowerCase() === cleanInput.toLowerCase() ||
+        (preferred && preferred.toLowerCase() === cleanInput.toLowerCase()) ||
+        byId.id.toLowerCase() === cleanInput.toLowerCase() ||
+        (byId.memberId && byId.memberId.toLowerCase() === cleanInput.toLowerCase())
+      ) {
+        return {
+          status: 'matched',
+          member: byId,
+          canonicalName: fullName,
+        };
+      }
+    }
+  }
+
+  if (!cleanInput) {
+    return {
+      status: 'empty',
+      ...(opts.requireMatch
+        ? { error: 'Primary leader must be selected from your members list.' }
+        : {}),
+    };
+  }
+
+  if (members.length === 0) {
+    return {
+      status: 'not_found',
+      error: 'No enrolled members found yet. Add members in the directory first before assigning a leader.',
+    };
+  }
+
+  const targetLower = cleanInput.toLowerCase();
+  const fullNameMatches = members.filter(
+    (m) => getMemberFullName(m).toLowerCase() === targetLower
+  );
+
+  if (fullNameMatches.length === 1) {
+    return {
+      status: 'matched',
+      member: fullNameMatches[0],
+      canonicalName: getMemberFullName(fullNameMatches[0]),
+    };
+  }
+  if (fullNameMatches.length > 1) {
+    return {
+      status: 'ambiguous',
+      matches: fullNameMatches,
+      error: 'Multiple members share this name. Click the specific member from the dropdown list.',
+    };
+  }
+
+  const secondaryMatches = members.filter((m) => {
+    const preferred = normalizeSettingLabel(m.preferredName).toLowerCase();
+    const code = normalizeSettingLabel(m.memberId).toLowerCase();
+    const email = normalizeSettingLabel(m.email).toLowerCase();
+    return (
+      (preferred && preferred === targetLower) ||
+      (code && code === targetLower) ||
+      (email && email === targetLower)
+    );
+  });
+
+  if (secondaryMatches.length === 1) {
+    return {
+      status: 'matched',
+      member: secondaryMatches[0],
+      canonicalName: getMemberFullName(secondaryMatches[0]),
+    };
+  }
+  if (secondaryMatches.length > 1) {
+    return {
+      status: 'ambiguous',
+      matches: secondaryMatches,
+      error: 'Multiple members match this entry. Select one from the members dropdown.',
+    };
+  }
+
+  return {
+    status: 'not_found',
+    error: 'Leader must match an enrolled member from your congregation members list.',
+  };
+}
+
+export function filterMembersForLeaderPicker(
+  members: Person[],
+  query: string,
+  options?: { excludeMemberId?: string | null; limit?: number }
+): Person[] {
+  const q = normalizeSettingLabel(query).toLowerCase();
+  const excluded = normalizeSettingLabel(options?.excludeMemberId);
+  const limit = options?.limit ?? 12;
+
+  const eligible = members.filter((m) => !excluded || m.id !== excluded);
+
+  const ranked = eligible
+    .map((m) => {
+      const fullName = getMemberFullName(m);
+      const fullLower = fullName.toLowerCase();
+      const preferred = normalizeSettingLabel(m.preferredName).toLowerCase();
+      const phone = normalizeSettingLabel(m.phoneE164).toLowerCase();
+      const email = normalizeSettingLabel(m.email).toLowerCase();
+      const code = normalizeSettingLabel(m.memberId).toLowerCase();
+      const dept = normalizeSettingLabel(m.department || m.homeCellGroup || m.groupName).toLowerCase();
+
+      if (!q) {
+        return { member: m, score: m.status === 'member' ? 2 : 1, fullLower };
+      }
+
+      if (fullLower === q || code === q) return { member: m, score: 100, fullLower };
+      if (fullLower.startsWith(q)) return { member: m, score: 80, fullLower };
+      if (
+        fullLower.includes(q) ||
+        preferred.includes(q) ||
+        code.includes(q) ||
+        phone.includes(q) ||
+        email.includes(q) ||
+        dept.includes(q)
+      ) {
+        return { member: m, score: 50, fullLower };
+      }
+      return null;
+    })
+    .filter((entry): entry is { member: Person; score: number; fullLower: string } => Boolean(entry))
+    .sort((a, b) => b.score - a.score || a.fullLower.localeCompare(b.fullLower));
+
+  return ranked.slice(0, limit).map((entry) => entry.member);
 }
 
 export function getActiveGroupsByCategory(churchGroups: ChurchGroup[]) {

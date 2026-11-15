@@ -10,7 +10,8 @@ import {
   Calendar as CalendarIcon,
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
-import { AttendanceRecord, CheckinMethod, Person } from '../../types/ekklesphere';
+import { AttendanceRecord, CheckinMethod, ChurchGroup, ChurchGroupCategory, Person } from '../../types/ekklesphere';
+import { isAssignedLeaderName, normalizeSettingLabel } from '../../utils/settingsConnections';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 import { MemberAvatar } from '../common/MemberAvatar';
 
@@ -104,6 +105,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     hasScheduledService,
     checkInEligibility,
     members,
+    churchGroups,
     attendanceRecords,
     telemetrySummary,
     systemSettings,
@@ -114,6 +116,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     addFollowupTask,
     refreshLivePremise,
     setIsAddServiceOpen,
+    requestOpenSettings,
+    requestOpenAnalytics,
     showToast,
   } = useEkklesphere();
 
@@ -297,7 +301,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     });
   }, [enrichedRecords, totalCheckedIn]);
 
-  // Group / Department / Demographics turnout breakdown
+  // Group / Department / Demographics turnout breakdown (synced with Congregational Structure & Leadership)
   const segmentTurnout = useMemo(() => {
     if (groupDimension === 'demographics') {
       const categories = [
@@ -323,34 +327,102 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
         const total = c.membersList.length;
         const present = c.membersList.filter((m) => checkedInPersonIds.has(m.id)).length;
         const pct = total > 0 ? Math.round((present / total) * 100) : 0;
-        return { name: c.name, present, total, pct };
+        return {
+          name: c.name,
+          present,
+          total,
+          pct,
+          leaderName: null as string | null,
+          assistantLeader: null as string | null,
+          schedule: null as string | null,
+          isConfigured: true,
+          groupId: null as string | null,
+          category: 'fellowship' as ChurchGroupCategory,
+        };
       });
     }
 
-    const map = new Map<string, { present: number; total: number }>();
-    for (const m of members) {
-      const rawKey =
-        groupDimension === 'group'
-          ? m.groupName || m.homeCellGroup || 'Unassigned Cell'
-          : m.department || 'General Congregation';
-      const key = rawKey.trim() || 'Unassigned';
-      const entry = map.get(key) || { present: 0, total: 0 };
-      entry.total += 1;
-      if (checkedInPersonIds.has(m.id)) {
-        entry.present += 1;
-      }
-      map.set(key, entry);
+    type SegmentAccumulator = {
+      name: string;
+      memberIds: Set<string>;
+      presentIds: Set<string>;
+      configuredGroup?: ChurchGroup;
+      category: ChurchGroupCategory;
+    };
+
+    const map = new Map<string, SegmentAccumulator>();
+    const targetGroups = churchGroups.filter((g) =>
+      groupDimension === 'department'
+        ? g.category === 'ministry'
+        : g.category === 'cell_group' || g.category === 'fellowship'
+    );
+
+    for (const grp of targetGroups) {
+      const cleanName = normalizeSettingLabel(grp.name);
+      if (!cleanName) continue;
+      map.set(cleanName.toLowerCase(), {
+        name: cleanName,
+        memberIds: new Set<string>(),
+        presentIds: new Set<string>(),
+        configuredGroup: grp,
+        category: grp.category,
+      });
     }
 
-    return Array.from(map.entries())
-      .map(([name, val]) => ({
-        name,
-        present: val.present,
-        total: val.total,
-        pct: val.total > 0 ? Math.round((val.present / val.total) * 100) : 0,
-      }))
-      .sort((a, b) => b.present - a.present || b.total - a.total);
-  }, [members, checkedInPersonIds, groupDimension]);
+    for (const m of members) {
+      const rawLabels =
+        groupDimension === 'department'
+          ? [normalizeSettingLabel(m.department) || 'General Congregation']
+          : Array.from(
+              new Set(
+                [normalizeSettingLabel(m.homeCellGroup), normalizeSettingLabel(m.groupName)].filter(Boolean)
+              )
+            );
+
+      const effectiveLabels =
+        rawLabels.length > 0
+          ? rawLabels
+          : [groupDimension === 'department' ? 'General Congregation' : 'Unassigned Cell'];
+
+      for (const label of effectiveLabels) {
+        const key = label.toLowerCase();
+        const existing = map.get(key) || {
+          name: label,
+          memberIds: new Set<string>(),
+          presentIds: new Set<string>(),
+          category: groupDimension === 'department' ? 'ministry' : 'cell_group',
+        };
+        existing.memberIds.add(m.id);
+        if (checkedInPersonIds.has(m.id)) {
+          existing.presentIds.add(m.id);
+        }
+        map.set(key, existing);
+      }
+    }
+
+    return Array.from(map.values())
+      .map((val) => {
+        const total = val.memberIds.size;
+        const present = val.presentIds.size;
+        const pct = total > 0 ? Math.round((present / total) * 100) : 0;
+        const grp = val.configuredGroup;
+        const assignedLead = grp && isAssignedLeaderName(grp.leaderName) ? grp.leaderName.trim() : null;
+        const scheduleParts = [grp?.meetingDay, grp?.meetingTime].filter(Boolean);
+        return {
+          name: val.name,
+          present,
+          total,
+          pct,
+          leaderName: assignedLead,
+          assistantLeader: grp?.assistantLeader?.trim() || null,
+          schedule: scheduleParts.length > 0 ? scheduleParts.join(' · ') : null,
+          isConfigured: Boolean(grp),
+          groupId: grp?.id || null,
+          category: val.category,
+        };
+      })
+      .sort((a, b) => b.present - a.present || b.total - a.total || a.name.localeCompare(b.name));
+  }, [members, churchGroups, checkedInPersonIds, groupDimension]);
 
   // Mean verification confidence & GPS distance
   const avgConfidence = useMemo(() => {
@@ -1007,17 +1079,46 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                   No roster segments available yet
                 </p>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                  Register members with their cell group and department to compare live turnout rates.
+                  Configure Ministries or Cell Groups in Structure &amp; Leadership or register members to compare live turnout rates.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] max-h-64 overflow-y-auto pr-1">
                 {segmentTurnout.map((seg) => (
                   <div key={seg.name} className="py-2.5 first:pt-0 last:pb-0">
-                    <div className="flex items-center justify-between gap-2 text-xs mb-1.5">
-                      <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                        {seg.name}
-                      </span>
+                    <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                      <div className="min-w-0 flex items-center gap-2">
+                        <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {seg.name}
+                        </span>
+                        {groupDimension !== 'demographics' && (
+                          seg.leaderName ? (
+                            <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] truncate hidden sm:inline">
+                              · Lead: {seg.leaderName}
+                              {seg.assistantLeader ? ` (+${seg.assistantLeader})` : ''}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                requestOpenSettings(
+                                  'groups',
+                                  seg.groupId
+                                    ? { mode: 'edit', groupId: seg.groupId }
+                                    : {
+                                        mode: 'create',
+                                        prefillName: seg.name,
+                                        prefillCategory: seg.category,
+                                      }
+                                )
+                              }
+                              className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 hover:underline shrink-0 cursor-pointer"
+                            >
+                              Assign Lead
+                            </button>
+                          )
+                        )}
+                      </div>
                       <span className="font-mono text-[#666A86] dark:text-[#A9ACC8] tabular-nums shrink-0">
                         {seg.present}/{seg.total} ({seg.pct}%)
                       </span>
@@ -1034,9 +1135,28 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             )}
           </div>
 
-          <div className="mt-4 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+          <div className="mt-4 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2 text-xs text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
             <span>Active segments tracked: {segmentTurnout.length}</span>
-            <span>Unarrived roster: {unarrivedMembers.length}</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => requestOpenSettings('groups')}
+                className="font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+              >
+                Structure &amp; Leadership
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  requestOpenAnalytics({
+                    lens: groupDimension === 'department' ? 'departments' : 'ministries',
+                  })
+                }
+                className="font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+              >
+                Ministry Analytics
+              </button>
+            </div>
           </div>
         </div>
 

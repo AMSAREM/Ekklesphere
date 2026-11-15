@@ -287,7 +287,7 @@ describe('computeDashboardAnalytics', () => {
     expect(result.activeService.atRiskCount).toBe(2); // p2 (3) and p4 (2)
     expect(result.activeService.channels).toHaveLength(2);
 
-    // Departments
+    // Departments enriched with Congregational Structure & Leadership metadata
     expect(result.namedDepartmentsCount).toBe(2); // Choir Ministry, Ushering Protocol (excludes General Congregation)
     expect(result.topDepartment?.name).toBe('Choir Ministry');
     const choirDept = result.departments.find((d) => d.name === 'Choir Ministry');
@@ -295,6 +295,16 @@ describe('computeDashboardAnalytics', () => {
     expect(choirDept?.presentCount).toBe(1);
     expect(choirDept?.turnoutPct).toBe(50);
     expect(choirDept?.atRiskCount).toBe(1);
+    expect(choirDept?.groupId).toBe('g1');
+    expect(choirDept?.isConfiguredInDb).toBe(true);
+    expect(choirDept?.leaderName).toBe('Deaconess Boateng');
+    expect(choirDept?.meetingDay).toBe('Saturday');
+    expect(choirDept?.meetingTime).toBe('16:00');
+    expect(choirDept?.openFollowupCount).toBe(1); // p2 (Abena) belongs to Choir Ministry and has open task f1
+
+    const usherDept = result.departments.find((d) => d.name === 'Ushering Protocol');
+    expect(usherDept?.isConfiguredInDb).toBe(false);
+    expect(usherDept?.leaderName).toBeNull();
 
     // Ministries, Fellowships & Cell Groups (3 configured + Ushering Protocol discovered ministry + Victory Cell discovered cell group)
     expect(result.groupCounts.ministries).toBe(2);
@@ -305,6 +315,23 @@ describe('computeDashboardAnalytics', () => {
     expect(graceCell?.totalMembers).toBe(2);
     expect(graceCell?.presentCount).toBe(1);
     expect(graceCell?.leaderName).toBe('Brother Kofi');
+    expect(graceCell?.atRiskCount).toBe(1);
+    expect(graceCell?.openFollowupCount).toBe(1);
+
+    const victoryCell = result.groups.find((g) => g.name === 'Victory Cell');
+    expect(victoryCell?.isConfiguredInDb).toBe(false);
+    expect(victoryCell?.totalMembers).toBe(2);
+    expect(victoryCell?.atRiskCount).toBe(1);
+
+    // Leadership Coverage & Rollup
+    expect(result.leadership.configuredGroupsCount).toBe(3);
+    expect(result.leadership.activeGroupsCount).toBe(3);
+    expect(result.leadership.assignedPrimaryLeadersCount).toBe(3);
+    expect(result.leadership.distinctLeadersCount).toBe(3);
+    expect(result.leadership.unconfiguredGroupsCount).toBe(2); // Ushering Protocol & Victory Cell
+    expect(result.leadership.unconfiguredDepartmentsCount).toBe(1); // Ushering Protocol
+    expect(result.leadership.membersUnderConfiguredLeadershipCount).toBe(2); // p1 & p2 are covered
+    expect(result.leadership.leadershipCoveragePct).toBe(50);
 
     // Membership & Directory completeness
     expect(result.membership.totalMembers).toBe(4);
@@ -325,6 +352,149 @@ describe('computeDashboardAnalytics', () => {
     expect(result.serviceComparisons).toHaveLength(2);
     expect(result.serviceComparisons[0].isActive).toBe(true);
     expect(result.serviceComparisons[1].checkedInCount).toBe(1);
+  });
+
+  it('deduplicates overlapping members and follow-up tasks when a leader leads or co-leads multiple groups', () => {
+    const svc: ServiceInstance = {
+      id: 'svc-1',
+      serviceId: 'def-1',
+      campusId: 'campus-1',
+      name: 'Sunday Service',
+      date: '2026-11-15',
+      startsAt: '08:00',
+      endsAt: '10:00',
+      expectedAttendance: 3,
+      status: 'open',
+    };
+
+    const members: Person[] = [
+      makePerson({
+        id: 'm1',
+        firstName: 'Kofi',
+        department: 'Media Crew',
+        homeCellGroup: 'Alpha Cell',
+        groupName: 'Alpha Cell',
+        consecutiveAbsences: 0,
+      }),
+      makePerson({
+        id: 'm2',
+        firstName: 'Ama',
+        department: 'Media Crew',
+        homeCellGroup: 'Beta Cell',
+        groupName: 'Beta Cell',
+        consecutiveAbsences: 3,
+      }),
+      makePerson({
+        id: 'm3',
+        firstName: 'Esi',
+        department: 'Choir',
+        homeCellGroup: 'Beta Cell',
+        groupName: 'Beta Cell',
+        consecutiveAbsences: 0,
+      }),
+    ];
+
+    const attendanceRecords: AttendanceRecord[] = [
+      {
+        id: 'rec-1',
+        tenantId: 'tenant-1',
+        campusId: 'campus-1',
+        personId: 'm1',
+        serviceInstanceId: 'svc-1',
+        checkedInAt: '07:55',
+        method: 'geofence',
+        confidence: 98,
+        late: false,
+      },
+      {
+        id: 'rec-2',
+        tenantId: 'tenant-1',
+        campusId: 'campus-1',
+        personId: 'm3',
+        serviceInstanceId: 'svc-1',
+        checkedInAt: '08:05',
+        method: 'usher',
+        confidence: 95,
+        late: false,
+      },
+    ];
+
+    // Pastor Daniel leads Media Crew AND co-leads Alpha Cell, so m1 is in both groups!
+    const churchGroups: ChurchGroup[] = [
+      {
+        id: 'grp-media',
+        name: 'Media Crew',
+        category: 'ministry',
+        leaderName: 'Pastor Daniel',
+        leaderPhone: '+233240001111',
+        assistantLeader: 'Sister Grace',
+        description: 'Audio & livestreaming',
+        active: true,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'grp-alpha',
+        name: 'Alpha Cell',
+        category: 'cell_group',
+        leaderName: 'Elder Thomas',
+        assistantLeader: 'Pastor Daniel',
+        description: 'East Legon cell',
+        active: true,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'grp-beta',
+        name: 'Beta Cell',
+        category: 'cell_group',
+        leaderName: 'Unassigned',
+        description: 'Airport Residential cell',
+        active: true,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ];
+
+    const followupTasks: FollowupTask[] = [
+      {
+        id: 'ft-1',
+        personId: 'm2',
+        personName: 'Ama Member',
+        groupName: 'Beta Cell',
+        reason: 'absent_3',
+        assignedToName: 'Pastor Daniel',
+        status: 'open',
+        dueOn: '2026-11-18',
+        createdAt: '2026-11-15T10:00:00Z',
+      },
+    ];
+
+    const result = computeDashboardAnalytics({
+      members,
+      attendanceRecords,
+      services: [svc],
+      currentService: svc,
+      churchGroups,
+      followupTasks,
+      donations: [],
+      systemSettings: baseSettings,
+    });
+
+    const daniel = result.leadership.leaders.find((l) => l.leaderName === 'Pastor Daniel');
+    expect(daniel).toBeDefined();
+    expect(daniel?.rolesCount).toBe(2);
+    expect(daniel?.leadCount).toBe(1);
+    expect(daniel?.coLeadCount).toBe(1);
+    // m1 (Media Crew + Alpha Cell) and m2 (Media Crew) -> 2 unique members, NOT 3
+    expect(daniel?.totalMembersSupervised).toBe(2);
+    expect(daniel?.presentCount).toBe(1); // only m1 present
+    expect(daniel?.turnoutPct).toBe(50);
+    expect(daniel?.atRiskCount).toBe(1); // m2
+    expect(daniel?.openFollowupCount).toBe(1); // ft-1 for m2
+    expect(daniel?.phone).toBe('+233240001111');
+
+    // Beta Cell has leaderName 'Unassigned' (configured missing leader) + Choir is an unconfigured roster department -> 2
+    expect(result.leadership.unconfiguredGroupsCount).toBe(1);
+    expect(result.leadership.groupsMissingLeaderCount).toBe(2);
+    expect(result.leadership.coLedGroupsCount).toBe(2); // grp-media & grp-alpha have assistantLeader
   });
 
   it('handles empty congregation and no check-ins gracefully without division-by-zero', () => {
@@ -357,6 +527,8 @@ describe('computeDashboardAnalytics', () => {
     expect(result.namedDepartmentsCount).toBe(0);
     expect(result.topDepartment).toBeNull();
     expect(result.groupCounts.total).toBe(0);
+    expect(result.leadership.distinctLeadersCount).toBe(0);
+    expect(result.leadership.leadershipCoveragePct).toBe(0);
     expect(result.giving.totalPaidGhs).toBe(0);
   });
 });

@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { ChurchGroup, Person, SystemSettings } from '../types/ekklesphere';
 import {
+  filterMembersForLeaderPicker,
   findMatchingChurchGroup,
   formatFollowupDueDateLabel,
   getActiveGroupsByCategory,
   getCurrencyDisplay,
+  isAssignedLeaderName,
   memberMatchesChurchGroup,
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
   resolveFollowupAssignee,
+  resolveMemberLeaderInput,
 } from '../utils/settingsConnections';
 
 const baseSettings: SystemSettings = {
@@ -190,5 +193,38 @@ describe('settingsConnections helpers', () => {
     expect(getCurrencyDisplay('USD ($ Dollar)').presetAmounts).toEqual([10, 25, 50, 100]);
     expect(getCurrencyDisplay('GBP (£ Pound)').code).toBe('GBP');
     expect(getCurrencyDisplay('NGN (₦ Naira)').presetAmounts[0]).toBe(1000);
+  });
+
+  it('distinguishes real assigned leaders from placeholder labels', () => {
+    expect(isAssignedLeaderName('Deaconess Ama Serwaa')).toBe(true);
+    expect(isAssignedLeaderName('')).toBe(false);
+    expect(isAssignedLeaderName('   ')).toBe(false);
+    expect(isAssignedLeaderName('Unassigned')).toBe(false);
+    expect(isAssignedLeaderName('Directory Group')).toBe(false);
+    expect(isAssignedLeaderName('TBD')).toBe(false);
+    expect(isAssignedLeaderName('none')).toBe(false);
+    expect(isAssignedLeaderName(null)).toBe(false);
+  });
+
+  it('validates group leaders strictly against the members list and filters picker candidates', () => {
+    const matched = resolveMemberLeaderInput(sampleMembers, {
+      inputName: 'abena osei',
+      requireMatch: true,
+    });
+    expect(matched.status).toBe('matched');
+    expect(matched.member?.id).toBe('m1');
+    expect(matched.canonicalName).toBe('Abena Osei');
+
+    const missing = resolveMemberLeaderInput(sampleMembers, {
+      inputName: 'Unregistered Visitor',
+      requireMatch: true,
+    });
+    expect(missing.status).toBe('not_found');
+    expect(missing.error).toBeDefined();
+
+    const filteredExcludingPrimary = filterMembersForLeaderPicker(sampleMembers, '', {
+      excludeMemberId: 'm1',
+    });
+    expect(filteredExcludingPrimary.map((m) => m.id)).toEqual(['m2']);
   });
 });

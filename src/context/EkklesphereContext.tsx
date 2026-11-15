@@ -20,6 +20,7 @@ import {
   SystemSettings,
   ChurchGroup,
   ChurchGroupCategory,
+  ChurchGroupLeadershipHistoryEntry,
   AppViewMode,
   TenantChurch,
   SystemLicense,
@@ -49,6 +50,8 @@ import {
   getCurrencyDisplay,
   memberMatchesChurchGroup,
   resolveFollowupAssignee,
+  type AnalyticsJumpTarget,
+  type SettingsGroupIntent,
   type SettingsTabId,
 } from '../utils/settingsConnections';
 
@@ -181,10 +184,23 @@ interface EkklesphereContextType {
   toggleSidebar: () => void;
   isMobileNavOpen: boolean;
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings';
-  setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings') => void;
-  requestedSettingsTab: { tab: SettingsTabId; nonce: number } | null;
-  requestOpenSettings: (tab: SettingsTabId) => void;
+  adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings';
+  setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings') => void;
+  requestedSettingsTab: { tab: SettingsTabId; groupIntent?: SettingsGroupIntent; nonce: number } | null;
+  requestOpenSettings: (tab: SettingsTabId, groupIntent?: SettingsGroupIntent) => void;
+  requestedUserTarget: {
+    memberId?: string;
+    searchQuery?: string;
+    filter?: 'all' | 'members' | 'staff' | 'has_login' | 'unprovisioned' | 'temp_password' | 'suspended';
+    nonce: number;
+  } | null;
+  requestOpenUserManagement: (target?: {
+    memberId?: string;
+    searchQuery?: string;
+    filter?: 'all' | 'members' | 'staff' | 'has_login' | 'unprovisioned' | 'temp_password' | 'suspended';
+  }) => void;
+  requestedAnalyticsTarget: AnalyticsJumpTarget | null;
+  requestOpenAnalytics: (target?: Omit<AnalyticsJumpTarget, 'nonce'>) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   isAddServiceOpen: boolean;
@@ -286,9 +302,17 @@ interface EkklesphereContextType {
 
   // Ministries, Fellowships & Cell Groups Management (Supabase Postgres RLS)
   churchGroups: ChurchGroup[];
+  leadershipHistory: ChurchGroupLeadershipHistoryEntry[];
+  isLoadingLeadershipHistory: boolean;
   refreshChurchGroups: () => Promise<void>;
-  addChurchGroup: (group: Omit<ChurchGroup, 'id' | 'createdAt'>) => ChurchGroup;
-  updateChurchGroup: (id: string, updates: Partial<ChurchGroup>) => void;
+  refreshLeadershipHistory: () => Promise<void>;
+  addChurchGroup: (
+    group: Omit<ChurchGroup, 'id' | 'createdAt'>
+  ) => Promise<{ ok: boolean; group?: ChurchGroup; field?: string; message?: string }>;
+  updateChurchGroup: (
+    id: string,
+    updates: Partial<ChurchGroup> & { leadershipChangeReason?: string }
+  ) => Promise<{ ok: boolean; group?: ChurchGroup; field?: string; message?: string }>;
   deleteChurchGroup: (id: string) => void;
   toggleChurchGroupStatus: (id: string) => void;
   getGroupMembers: (groupName: string) => Person[];
@@ -535,12 +559,47 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return false;
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
-  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'integrations' | 'proximity' | 'settings'>('dashboard');
-  const [requestedSettingsTab, setRequestedSettingsTab] = useState<{ tab: SettingsTabId; nonce: number } | null>(null);
-  const requestOpenSettings = (tab: SettingsTabId) => {
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [requestedSettingsTab, setRequestedSettingsTab] = useState<{
+    tab: SettingsTabId;
+    groupIntent?: SettingsGroupIntent;
+    nonce: number;
+  } | null>(null);
+  const requestOpenSettings = (tab: SettingsTabId, groupIntent?: SettingsGroupIntent) => {
     setActivePortal('admin');
     setAdminSubTab('settings');
-    setRequestedSettingsTab({ tab, nonce: Date.now() });
+    setRequestedSettingsTab({ tab, groupIntent, nonce: Date.now() });
+  };
+  const [requestedUserTarget, setRequestedUserTarget] = useState<{
+    memberId?: string;
+    searchQuery?: string;
+    filter?: 'all' | 'members' | 'staff' | 'has_login' | 'unprovisioned' | 'temp_password' | 'suspended';
+    nonce: number;
+  } | null>(null);
+  const requestOpenUserManagement = (target?: {
+    memberId?: string;
+    searchQuery?: string;
+    filter?: 'all' | 'members' | 'staff' | 'has_login' | 'unprovisioned' | 'temp_password' | 'suspended';
+  }) => {
+    setActivePortal('admin');
+    setAdminSubTab('users');
+    setRequestedUserTarget({
+      memberId: target?.memberId,
+      searchQuery: target?.searchQuery,
+      filter: target?.filter,
+      nonce: Date.now(),
+    });
+  };
+  const [requestedAnalyticsTarget, setRequestedAnalyticsTarget] = useState<AnalyticsJumpTarget | null>(null);
+  const requestOpenAnalytics = (target?: Omit<AnalyticsJumpTarget, 'nonce'>) => {
+    setActivePortal('admin');
+    setAdminSubTab('dashboard');
+    setRequestedAnalyticsTarget({
+      lens: target?.lens || 'ministries',
+      searchQuery: target?.searchQuery,
+      categoryFilter: target?.categoryFilter,
+      nonce: Date.now(),
+    });
   };
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAddServiceOpen, setIsAddServiceOpen] = useState<boolean>(false);
@@ -1026,6 +1085,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setIsChangePasswordModalOpen(false);
     setSystemSettings(DEFAULT_SYSTEM_SETTINGS);
     setChurchGroups([]);
+    setLeadershipHistory([]);
     setMembers([]);
     setRawServices([]);
     setAttendanceRecords([]);
@@ -1512,6 +1572,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setMembers([]);
       setRawServices([]);
       setChurchGroups([]);
+      setLeadershipHistory([]);
       setAttendanceRecords([]);
       setDonations([]);
       setFollowupTasks([]);
@@ -1564,6 +1625,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     return [];
   });
+
+  const [leadershipHistory, setLeadershipHistory] = useState<ChurchGroupLeadershipHistoryEntry[]>([]);
+  const [isLoadingLeadershipHistory, setIsLoadingLeadershipHistory] = useState(false);
   const [visitorsCount, setVisitorsCount] = useState<number>(0);
   const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>([]);
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
@@ -2671,6 +2735,30 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const refreshLeadershipHistory = async (): Promise<void> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return;
+
+    setIsLoadingLeadershipHistory(true);
+    try {
+      const res = await fetch('/api/church-groups/leadership-history?limit=250', {
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return;
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.history)) {
+        setLeadershipHistory(data.history);
+      }
+    } catch {
+      // ignore transient network errors
+    } finally {
+      setIsLoadingLeadershipHistory(false);
+    }
+  };
+
   const refreshAuditLogs = async (): Promise<void> => {
     const token =
       currentUser?.token ||
@@ -3434,6 +3522,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     refreshSystemSettings();
     refreshChurchGroups();
+    refreshLeadershipHistory();
     refreshAuditLogs();
     refreshLivePremise();
     refreshMembers();
@@ -3694,120 +3783,107 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  const addChurchGroup = (groupData: Omit<ChurchGroup, 'id' | 'createdAt'>): ChurchGroup => {
-    const tempId = `temp-grp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    const optimisticGroup: ChurchGroup = {
-      ...groupData,
-      id: tempId,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    setChurchGroups((prev) => {
-      const updated = [optimisticGroup, ...prev];
-      try {
-        localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    fetch('/api/church-groups', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(groupData),
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data?.group) {
-          showToast(data?.message || 'Could not save church group to database.');
-          refreshChurchGroups().catch(() => {});
-          return;
-        }
-        setChurchGroups((prev) => {
-          const replaced = prev.map((g) => (g.id === tempId ? data.group : g));
-          try {
-            localStorage.setItem('ekklesphere_church_groups', JSON.stringify(replaced));
-          } catch {}
-          return replaced;
-        });
-        refreshAuditLogs().catch(() => {});
-        showToast(`${data.group.name} saved to Supabase`);
-      })
-      .catch(() => {
-        showToast('Network error saving church group.');
-        refreshChurchGroups().catch(() => {});
+  const addChurchGroup = async (
+    groupData: Omit<ChurchGroup, 'id' | 'createdAt'>
+  ): Promise<{ ok: boolean; group?: ChurchGroup; field?: string; message?: string }> => {
+    try {
+      const res = await fetch('/api/church-groups', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(groupData),
       });
-
-    return optimisticGroup;
+      if (handleUnauthorizedSession(res.status)) {
+        return { ok: false, message: 'Your session expired. Please sign in again.' };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.group) {
+        const msg = data?.message || 'Could not save church group to database.';
+        showToast(msg);
+        return { ok: false, field: data?.field, message: msg };
+      }
+      setChurchGroups((prev) => {
+        const updated = [data.group, ...prev.filter((g) => g.id !== data.group.id)];
+        try {
+          localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      refreshLeadershipHistory().catch(() => {});
+      refreshAuditLogs().catch(() => {});
+      showToast(`${data.group.name} saved to Supabase`);
+      return { ok: true, group: data.group };
+    } catch {
+      const msg = 'Network error saving church group.';
+      showToast(msg);
+      return { ok: false, message: msg };
+    }
   };
 
-  const updateChurchGroup = (id: string, updates: Partial<ChurchGroup>) => {
+  const updateChurchGroup = async (
+    id: string,
+    updates: Partial<ChurchGroup> & { leadershipChangeReason?: string }
+  ): Promise<{ ok: boolean; group?: ChurchGroup; field?: string; message?: string }> => {
     const existingGroup = churchGroups.find((g) => g.id === id);
     const oldName = existingGroup?.name?.trim() || '';
     const nextName = updates.name?.trim() || '';
-    let groupName = nextName || oldName;
 
-    setChurchGroups((prev) => {
-      const updated = prev.map((g) => {
-        if (g.id === id) {
-          groupName = updates.name || g.name;
-          return { ...g, ...updates, updatedAt: new Date().toISOString().split('T')[0] };
-        }
-        return g;
+    try {
+      const res = await fetch(`/api/church-groups/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(updates),
       });
-      try {
-        localStorage.setItem('ekklesphere_church_groups', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
+      if (handleUnauthorizedSession(res.status)) {
+        return { ok: false, message: 'Your session expired. Please sign in again.' };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.group) {
+        const msg = data?.message || 'Could not update church group.';
+        showToast(msg);
+        return { ok: false, field: data?.field, message: msg };
+      }
 
-    if (oldName && nextName && oldName.toLowerCase() !== nextName.toLowerCase()) {
-      const oldLower = oldName.toLowerCase();
-      setMembers((prev) => {
-        const syncedMembers = prev.map((m) => {
-          const matchesGroup = (m.groupName || '').trim().toLowerCase() === oldLower;
-          const matchesCell = (m.homeCellGroup || '').trim().toLowerCase() === oldLower;
-          const matchesDept = (m.department || '').trim().toLowerCase() === oldLower;
-          if (!matchesGroup && !matchesCell && !matchesDept) return m;
-          return {
-            ...m,
-            ...(matchesGroup ? { groupName: nextName } : {}),
-            ...(matchesCell ? { homeCellGroup: nextName } : {}),
-            ...(matchesDept ? { department: nextName } : {}),
-          };
-        });
+      const savedGroup: ChurchGroup = data.group;
+      setChurchGroups((prev) => {
+        const synced = prev.map((g) => (g.id === id ? savedGroup : g));
         try {
-          localStorage.setItem('ekklesphere_members', JSON.stringify(syncedMembers));
+          localStorage.setItem('ekklesphere_church_groups', JSON.stringify(synced));
         } catch {}
-        return syncedMembers;
+        return synced;
       });
-    }
 
-    fetch(`/api/church-groups/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data?.group) {
-          showToast(data?.message || 'Could not update church group.');
-          refreshChurchGroups().catch(() => {});
-          return;
-        }
-        setChurchGroups((prev) => {
-          const synced = prev.map((g) => (g.id === id ? data.group : g));
+      const resolvedNextName = (savedGroup.name || nextName).trim();
+      if (oldName && resolvedNextName && oldName.toLowerCase() !== resolvedNextName.toLowerCase()) {
+        const oldLower = oldName.toLowerCase();
+        setMembers((prev) => {
+          const syncedMembers = prev.map((m) => {
+            const matchesGroup = (m.groupName || '').trim().toLowerCase() === oldLower;
+            const matchesCell = (m.homeCellGroup || '').trim().toLowerCase() === oldLower;
+            const matchesDept = (m.department || '').trim().toLowerCase() === oldLower;
+            if (!matchesGroup && !matchesCell && !matchesDept) return m;
+            return {
+              ...m,
+              ...(matchesGroup ? { groupName: resolvedNextName } : {}),
+              ...(matchesCell ? { homeCellGroup: resolvedNextName } : {}),
+              ...(matchesDept ? { department: resolvedNextName } : {}),
+            };
+          });
           try {
-            localStorage.setItem('ekklesphere_church_groups', JSON.stringify(synced));
+            localStorage.setItem('ekklesphere_members', JSON.stringify(syncedMembers));
           } catch {}
-          return synced;
+          return syncedMembers;
         });
-        refreshAuditLogs().catch(() => {});
-        showToast(`${data.group.name || groupName || 'Group'} updated`);
-      })
-      .catch(() => {
-        showToast('Network error updating church group.');
-        refreshChurchGroups().catch(() => {});
-      });
+      }
+
+      refreshLeadershipHistory().catch(() => {});
+      refreshAuditLogs().catch(() => {});
+      showToast(`${savedGroup.name || 'Group'} updated`);
+      return { ok: true, group: savedGroup };
+    } catch {
+      const msg = 'Network error updating church group.';
+      showToast(msg);
+      return { ok: false, message: msg };
+    }
   };
 
   const deleteChurchGroup = (id: string) => {
@@ -3831,6 +3907,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           refreshChurchGroups().catch(() => {});
           return;
         }
+        refreshLeadershipHistory().catch(() => {});
         refreshAuditLogs().catch(() => {});
         showToast(`Removed "${groupToDelete?.name || 'Group'}"`);
       })
@@ -4319,6 +4396,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setAdminSubTab,
       requestedSettingsTab,
       requestOpenSettings,
+      requestedUserTarget,
+      requestOpenUserManagement,
+      requestedAnalyticsTarget,
+      requestOpenAnalytics,
       searchQuery,
       setSearchQuery,
       isAddServiceOpen,
@@ -4365,7 +4446,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       clearChurchPremiseLocation,
       refreshLivePremise,
       churchGroups,
+      leadershipHistory,
+      isLoadingLeadershipHistory,
       refreshChurchGroups,
+      refreshLeadershipHistory,
       addChurchGroup,
       updateChurchGroup,
       deleteChurchGroup,
@@ -4441,6 +4525,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isMobileNavOpen,
       adminSubTab,
       requestedSettingsTab,
+      requestedUserTarget,
+      requestedAnalyticsTarget,
       searchQuery,
       isAddServiceOpen,
       isFollowupModalOpen,

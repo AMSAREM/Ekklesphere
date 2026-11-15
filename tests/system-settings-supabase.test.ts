@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
-import { signToken } from '../lib/auth';
+import { signToken, TEST_ANCHOR_ORGANIZATION_ID } from '../lib/auth';
 import { platformStore } from '../src/server/platformStore';
 
 describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Supabase API)', () => {
@@ -295,14 +295,55 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
       expect(orgBGet.body.settings.smsSenderId).toBe('EKKLESPHERE');
       expect(orgBGet.body.settings.absenteeThresholdServices).toBe(2);
 
-      // Org A creates a Cell Group
+      // Org A enrolls members first so group leaders are validated from the members list
+      const member1Res = await request(app)
+        .post('/api/members')
+        .set('Authorization', `Bearer ${orgAToken}`)
+        .send({
+          firstName: 'Kojo',
+          lastName: 'Appiah',
+          phoneE164: '+233244112233',
+          email: 'kojo.appiah@bethel-accra.org',
+          status: 'member',
+        });
+      expect(member1Res.status).toBe(201);
+      const kojoMemberId = member1Res.body.id;
+
+      const member2Res = await request(app)
+        .post('/api/members')
+        .set('Authorization', `Bearer ${orgAToken}`)
+        .send({
+          firstName: 'Akosua',
+          lastName: 'Boadu',
+          phoneE164: '+233244998877',
+          email: 'akosua.boadu@bethel-accra.org',
+          status: 'member',
+        });
+      expect(member2Res.status).toBe(201);
+      const akosuaMemberId = member2Res.body.id;
+
+      // Org A rejects creating a group with a leader who is NOT in the members directory
+      const invalidLeaderRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${orgAToken}`)
+        .send({
+          name: 'Unlisted Leader Cell',
+          category: 'cell_group',
+          leaderName: 'Strangers Not In Directory',
+        });
+      expect(invalidLeaderRes.status).toBe(400);
+      expect(invalidLeaderRes.body.error).toBe('invalid_leader_member');
+      expect(invalidLeaderRes.body.field).toBe('leader');
+
+      // Org A creates a Cell Group with a validated member leader
       const createGroupRes = await request(app)
         .post('/api/church-groups')
         .set('Authorization', `Bearer ${orgAToken}`)
         .send({
           name: 'Airport Residential Cell',
           category: 'cell_group',
-          leaderName: 'Elder Kojo Appiah',
+          leaderName: 'Kojo Appiah',
+          leaderMemberId: kojoMemberId,
           leaderPhone: '+233244112233',
           meetingDay: 'Wednesdays',
           meetingTime: '18:30 - 19:30',
@@ -313,13 +354,20 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
       expect(createGroupRes.status).toBe(201);
       const createdGroupId = createGroupRes.body.group.id;
       expect(createGroupRes.body.group.name).toBe('Airport Residential Cell');
+      expect(createGroupRes.body.group.leaderMemberId).toBe(kojoMemberId);
 
-      // Org B cannot see, update, or delete Org A's group
+      // Org B cannot see, update, or delete Org A's group (or Org A's leadership history)
       const orgBGroups = await request(app)
         .get('/api/church-groups')
         .set('Authorization', `Bearer ${orgBToken}`);
       expect(orgBGroups.status).toBe(200);
       expect(orgBGroups.body.groups).toHaveLength(0);
+
+      const orgBHistory = await request(app)
+        .get('/api/church-groups/leadership-history')
+        .set('Authorization', `Bearer ${orgBToken}`);
+      expect(orgBHistory.status).toBe(200);
+      expect(orgBHistory.body.history).toHaveLength(0);
 
       const crossUpdate = await request(app)
         .put(`/api/church-groups/${createdGroupId}`)
@@ -332,19 +380,36 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
         .set('Authorization', `Bearer ${orgBToken}`);
       expect(crossDelete.status).toBe(404);
 
-      // Org A updates and toggles status cleanly
+      // Org A rejects setting same member as both Primary & Assistant leader
+      const sameAssistantRes = await request(app)
+        .put(`/api/church-groups/${createdGroupId}`)
+        .set('Authorization', `Bearer ${orgAToken}`)
+        .send({
+          leaderName: 'Kojo Appiah',
+          leaderMemberId: kojoMemberId,
+          assistantLeader: 'Kojo Appiah',
+          assistantLeaderMemberId: kojoMemberId,
+        });
+      expect(sameAssistantRes.status).toBe(400);
+      expect(sameAssistantRes.body.error).toBe('invalid_leader_member');
+      expect(sameAssistantRes.body.field).toBe('assistantLeader');
+
+      // Org A updates and toggles status cleanly (and assigns assistant leader)
       const orgAUpdate = await request(app)
         .put(`/api/church-groups/${createdGroupId}`)
         .set('Authorization', `Bearer ${orgAToken}`)
         .send({
           active: false,
           meetingTime: '19:00 - 20:00',
+          assistantLeader: 'Akosua Boadu',
+          assistantLeaderMemberId: akosuaMemberId,
         });
       expect(orgAUpdate.status).toBe(200);
       expect(orgAUpdate.body.group.active).toBe(false);
       expect(orgAUpdate.body.group.meetingTime).toBe('19:00 - 20:00');
+      expect(orgAUpdate.body.group.assistantLeader).toBe('Akosua Boadu');
 
-      // Org A deletes the group cleanly
+      // Org A deletes the group cleanly (still preserves leadership history)
       const orgADelete = await request(app)
         .delete(`/api/church-groups/${createdGroupId}`)
         .set('Authorization', `Bearer ${orgAToken}`);
@@ -356,6 +421,12 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
       expect(orgAGroupsAfter.status).toBe(200);
       expect(orgAGroupsAfter.body.groups).toHaveLength(0);
 
+      const orgAHistoryAfterDelete = await request(app)
+        .get('/api/church-groups/leadership-history')
+        .set('Authorization', `Bearer ${orgAToken}`);
+      expect(orgAHistoryAfterDelete.status).toBe(200);
+      expect(orgAHistoryAfterDelete.body.history.length).toBeGreaterThanOrEqual(4);
+
       // Org B's audit logs never include Org A's group actions
       const orgBAudit = await request(app)
         .get('/api/system-settings/audit-logs')
@@ -365,6 +436,160 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
         (l: any) => l.targetId === createdGroupId
       );
       expect(leaked).toBeUndefined();
+    });
+
+    it('records leadership change history across all categories (ministry, fellowship, cell_group) for handovers and removals', async () => {
+      // Seed three members in default org
+      const [m1, m2, m3] = await Promise.all([
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+          .send({ firstName: 'Yaw', lastName: 'Mensah', phoneE164: '+233201110001', status: 'member' }),
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+          .send({ firstName: 'Efua', lastName: 'Boateng', phoneE164: '+233201110002', status: 'member' }),
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+          .send({ firstName: 'Kwesi', lastName: 'Darko', phoneE164: '+233201110003', status: 'member' }),
+      ]);
+      expect(m1.status).toBe(201);
+      expect(m2.status).toBe(201);
+      expect(m3.status).toBe(201);
+
+      // Create one group in EACH category
+      const minRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          name: 'Sanctuary Choir',
+          category: 'ministry',
+          leaderName: 'Yaw Mensah',
+          leaderMemberId: m1.body.id,
+          assistantLeader: 'Efua Boateng',
+          assistantLeaderMemberId: m2.body.id,
+        });
+      expect(minRes.status).toBe(201);
+
+      const felRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          name: 'Youth Fellowship',
+          category: 'fellowship',
+          leaderName: 'Efua Boateng',
+          leaderMemberId: m2.body.id,
+        });
+      expect(felRes.status).toBe(201);
+
+      const cellRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          name: 'Cantonments Home Cell',
+          category: 'cell_group',
+          leaderName: 'Kwesi Darko',
+          leaderMemberId: m3.body.id,
+        });
+      expect(cellRes.status).toBe(201);
+
+      // Perform leadership handovers & assistant removal across all 3 categories
+      const minHandover = await request(app)
+        .put(`/api/church-groups/${minRes.body.group.id}`)
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          leaderName: 'Kwesi Darko',
+          leaderMemberId: m3.body.id,
+          assistantLeader: '',
+          leadershipChangeReason: 'Annual ministry rotation',
+        });
+      expect(minHandover.status).toBe(200);
+
+      const felHandover = await request(app)
+        .put(`/api/church-groups/${felRes.body.group.id}`)
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          leaderName: 'Yaw Mensah',
+          leaderMemberId: m1.body.id,
+          leadershipChangeReason: 'Youth leadership handover',
+        });
+      expect(felHandover.status).toBe(200);
+
+      const cellHandover = await request(app)
+        .put(`/api/church-groups/${cellRes.body.group.id}`)
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          leaderName: 'Efua Boateng',
+          leaderMemberId: m2.body.id,
+          assistantLeader: 'Yaw Mensah',
+          assistantLeaderMemberId: m1.body.id,
+          leadershipChangeReason: 'Cell multiplication handover',
+        });
+      expect(cellHandover.status).toBe(200);
+
+      // Verify full history & category-filtered history queries
+      const allHistoryRes = await request(app)
+        .get('/api/church-groups/leadership-history')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`);
+      expect(allHistoryRes.status).toBe(200);
+      const entries = allHistoryRes.body.history as any[];
+      expect(entries.some((e) => e.category === 'ministry')).toBe(true);
+      expect(entries.some((e) => e.category === 'fellowship')).toBe(true);
+      expect(entries.some((e) => e.category === 'cell_group')).toBe(true);
+
+      const ministryHistoryRes = await request(app)
+        .get('/api/church-groups/leadership-history?category=ministry')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`);
+      expect(ministryHistoryRes.status).toBe(200);
+      expect(ministryHistoryRes.body.history.every((e: any) => e.category === 'ministry')).toBe(true);
+      expect(
+        ministryHistoryRes.body.history.some(
+          (e: any) =>
+            e.role === 'primary_leader' &&
+            e.action === 'changed' &&
+            e.previousLeaderName === 'Yaw Mensah' &&
+            e.newLeaderName === 'Kwesi Darko' &&
+            e.reason === 'Annual ministry rotation'
+        )
+      ).toBe(true);
+      expect(
+        ministryHistoryRes.body.history.some(
+          (e: any) =>
+            e.role === 'assistant_leader' &&
+            e.action === 'removed' &&
+            e.previousLeaderName === 'Efua Boateng' &&
+            e.newLeaderName === null
+        )
+      ).toBe(true);
+
+      const fellowshipHistoryRes = await request(app)
+        .get('/api/church-groups/leadership-history?category=fellowship')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`);
+      expect(fellowshipHistoryRes.status).toBe(200);
+      expect(
+        fellowshipHistoryRes.body.history.some(
+          (e: any) =>
+            e.category === 'fellowship' &&
+            e.action === 'changed' &&
+            e.previousLeaderName === 'Efua Boateng' &&
+            e.newLeaderName === 'Yaw Mensah'
+        )
+      ).toBe(true);
+
+      const cellHistoryRes = await request(app)
+        .get('/api/church-groups/leadership-history?category=cell_group&role=assistant_leader')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`);
+      expect(cellHistoryRes.status).toBe(200);
+      expect(
+        cellHistoryRes.body.history.some(
+          (e: any) =>
+            e.category === 'cell_group' &&
+            e.role === 'assistant_leader' &&
+            e.action === 'assigned' &&
+            e.newLeaderName === 'Yaw Mensah'
+        )
+      ).toBe(true);
     });
 
     it('never injects hardcoded placeholder organisation names when churchName is omitted', async () => {
@@ -380,6 +605,285 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
       expect(saveRes.status).toBe(200);
       expect(saveRes.body.premiseSettings?.churchName).toBe('');
       expect(saveRes.body.premiseSettings?.churchName).not.toBe('Ekklesphere Sanctuary');
+    });
+  });
+
+  describe('Pre-Migration Supabase Schema-Cache Resilience', () => {
+    it('creates and updates church groups and persists leadership history via audit_log when new columns/table are absent from Supabase schema cache', async () => {
+      const scopedAdminToken = signToken({
+        id: 'sys-admin-schema-test',
+        email: 'sysadmin@ekklesphere.church',
+        role: 'admin',
+        name: 'System Admin',
+        organization_id: TEST_ANCHOR_ORGANIZATION_ID,
+        tenant_id: TEST_ANCHOR_ORGANIZATION_ID,
+      });
+
+      // 1. Seed enrolled members in the default org before attaching the schema-lagging Supabase client
+      const [m1, m2, m3] = await Promise.all([
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({ firstName: 'Abena', lastName: 'Mensah', phoneE164: '+233245000001', status: 'member' }),
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({ firstName: 'Kofi', lastName: 'Owusu', phoneE164: '+233245000002', status: 'member' }),
+        request(app)
+          .post('/api/members')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({ firstName: 'Yaw', lastName: 'Boateng', phoneE164: '+233245000003', status: 'member' }),
+      ]);
+      expect(m1.status).toBe(201);
+      expect(m2.status).toBe(201);
+      expect(m3.status).toBe(201);
+
+      const churchGroupRows: Record<string, any>[] = [];
+      const auditLogRows: Record<string, any>[] = [];
+      let churchGroupInsertAttempts = 0;
+      let churchGroupUpdateAttempts = 0;
+
+      const buildAuditSelectQuery = (filters: Record<string, any> = {}) => {
+        const chain: any = {
+          eq(col: string, val: any) {
+            filters[col] = val;
+            return chain;
+          },
+          order() {
+            return chain;
+          },
+          limit(max: number) {
+            const matched = auditLogRows
+              .filter((r) =>
+                Object.entries(filters).every(([k, v]) => r[k] === v)
+              )
+              .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+              .slice(0, max);
+            return Promise.resolve({ data: matched, error: null });
+          },
+        };
+        return chain;
+      };
+
+      const fakeSupabase: any = {
+        from(table: string) {
+          if (table === 'church_groups') {
+            return {
+              select() {
+                const filters: Record<string, any> = {};
+                const chain: any = {
+                  eq(col: string, val: any) {
+                    filters[col] = val;
+                    return chain;
+                  },
+                  order() {
+                    const matched = churchGroupRows.filter((r) =>
+                      Object.entries(filters).every(([k, v]) => r[k] === v)
+                    );
+                    return Promise.resolve({ data: matched, error: null });
+                  },
+                  maybeSingle() {
+                    const found =
+                      churchGroupRows.find((r) =>
+                        Object.entries(filters).every(([k, v]) => r[k] === v)
+                      ) || null;
+                    return Promise.resolve({ data: found, error: null });
+                  },
+                };
+                return chain;
+              },
+              insert(payload: Record<string, any>) {
+                churchGroupInsertAttempts += 1;
+                return {
+                  select() {
+                    return {
+                      single() {
+                        if (
+                          'assistant_leader_member_id' in payload ||
+                          'leader_member_id' in payload
+                        ) {
+                          return Promise.resolve({
+                            data: null,
+                            error: {
+                              code: 'PGRST204',
+                              message:
+                                "Could not find the 'assistant_leader_member_id' column of 'church_groups' in the schema cache",
+                            },
+                          });
+                        }
+                        const row = {
+                          id: '11111111-1111-4111-8111-111111111111',
+                          ...payload,
+                          created_at: new Date().toISOString(),
+                          updated_at: new Date().toISOString(),
+                        };
+                        churchGroupRows.unshift(row);
+                        return Promise.resolve({ data: row, error: null });
+                      },
+                    };
+                  },
+                };
+              },
+              update(patch: Record<string, any>) {
+                churchGroupUpdateAttempts += 1;
+                const filters: Record<string, any> = {};
+                const chain: any = {
+                  eq(col: string, val: any) {
+                    filters[col] = val;
+                    return chain;
+                  },
+                  select() {
+                    return {
+                      maybeSingle() {
+                        if (
+                          'assistant_leader_member_id' in patch ||
+                          'leader_member_id' in patch
+                        ) {
+                          return Promise.resolve({
+                            data: null,
+                            error: {
+                              code: 'PGRST204',
+                              message:
+                                "Could not find the 'assistant_leader_member_id' column of 'church_groups' in the schema cache",
+                            },
+                          });
+                        }
+                        const idx = churchGroupRows.findIndex((r) =>
+                          Object.entries(filters).every(([k, v]) => r[k] === v)
+                        );
+                        if (idx < 0) {
+                          return Promise.resolve({ data: null, error: null });
+                        }
+                        churchGroupRows[idx] = { ...churchGroupRows[idx], ...patch };
+                        return Promise.resolve({ data: churchGroupRows[idx], error: null });
+                      },
+                    };
+                  },
+                };
+                return chain;
+              },
+            };
+          }
+
+          if (table === 'church_group_leadership_history') {
+            return {
+              insert() {
+                return Promise.resolve({
+                  error: {
+                    code: 'PGRST205',
+                    message:
+                      "Could not find the table 'public.church_group_leadership_history' in the schema cache",
+                  },
+                });
+              },
+              select() {
+                const chain: any = {
+                  eq() {
+                    return chain;
+                  },
+                  order() {
+                    return chain;
+                  },
+                  limit() {
+                    return Promise.resolve({
+                      data: null,
+                      error: {
+                        code: 'PGRST205',
+                        message:
+                          "Could not find the table 'public.church_group_leadership_history' in the schema cache",
+                      },
+                    });
+                  },
+                };
+                return chain;
+              },
+            };
+          }
+
+          if (table === 'audit_log') {
+            return {
+              insert(row: Record<string, any>) {
+                auditLogRows.unshift(row);
+                return Promise.resolve({ error: null });
+              },
+              select() {
+                return buildAuditSelectQuery();
+              },
+            };
+          }
+
+          throw new Error(`Unexpected Supabase table accessed in test: ${table}`);
+        },
+      };
+
+      platformStore.setSupabaseTestHooks({ client: fakeSupabase });
+      try {
+        // 2. Create church group — hits PGRST204 once, retries without new columns, and falls back leadership history to audit_log
+        const createRes = await request(app)
+          .post('/api/church-groups')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            name: 'Media & Production Ministry',
+            category: 'ministry',
+            leaderName: 'Abena Mensah',
+            leaderMemberId: m1.body.id,
+            assistantLeader: 'Kofi Owusu',
+            assistantLeaderMemberId: m2.body.id,
+            meetingDay: 'Saturdays',
+            meetingTime: '15:00',
+            active: true,
+          });
+
+        expect(createRes.status).toBe(201);
+        expect(createRes.body.success).toBe(true);
+        expect(createRes.body.group.name).toBe('Media & Production Ministry');
+        expect(createRes.body.group.leaderName).toBe('Abena Mensah');
+        expect(createRes.body.group.assistantLeader).toBe('Kofi Owusu');
+        expect(churchGroupInsertAttempts).toBe(2);
+
+        const groupId = createRes.body.group.id;
+
+        // 3. Handover primary leader — hits PGRST204 on update, retries cleanly, and logs handover transition to audit_log
+        const updateRes = await request(app)
+          .put(`/api/church-groups/${groupId}`)
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            leaderName: 'Yaw Boateng',
+            leaderMemberId: m3.body.id,
+            leadershipChangeReason: 'Annual ministry leadership rotation',
+          });
+
+        expect(updateRes.status).toBe(200);
+        expect(updateRes.body.group.leaderName).toBe('Yaw Boateng');
+        expect(churchGroupUpdateAttempts).toBe(2);
+
+        // 4. Fetch groups & leadership history (read from audit_log fallback when church_group_leadership_history is missing)
+        const listGroupsRes = await request(app)
+          .get('/api/church-groups')
+          .set('Authorization', `Bearer ${scopedAdminToken}`);
+        expect(listGroupsRes.status).toBe(200);
+        expect(listGroupsRes.body.groups).toHaveLength(1);
+
+        const historyRes = await request(app)
+          .get('/api/church-groups/leadership-history?category=ministry')
+          .set('Authorization', `Bearer ${scopedAdminToken}`);
+        expect(historyRes.status).toBe(200);
+        expect(historyRes.body.history.length).toBeGreaterThanOrEqual(3);
+        expect(
+          historyRes.body.history.some(
+            (h: any) =>
+              h.groupId === groupId &&
+              h.category === 'ministry' &&
+              h.role === 'primary_leader' &&
+              h.action === 'changed' &&
+              h.previousLeaderName === 'Abena Mensah' &&
+              h.newLeaderName === 'Yaw Boateng' &&
+              h.reason === 'Annual ministry leadership rotation'
+          )
+        ).toBe(true);
+      } finally {
+        platformStore.setSupabaseTestHooks({ client: null });
+      }
     });
   });
 });

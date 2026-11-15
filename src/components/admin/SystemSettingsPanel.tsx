@@ -1,11 +1,21 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
+import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
+import {
+  filterMembersForLeaderPicker,
+  getMemberFullName,
+  isAssignedLeaderName,
+  normalizeSettingLabel,
+  resolveMemberLeaderInput,
+} from '../../utils/settingsConnections';
+import { getCanonicalMemberId } from '../member/DigitalMemberCard';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { UserManagement } from '../UserManagement';
 import {
   SystemSettings,
   ChurchGroup,
   ChurchGroupCategory,
+  ChurchGroupLeadershipHistoryEntry,
   Person,
   ConsolePlan,
   LicenseEvaluationResult,
@@ -53,6 +63,10 @@ import {
   Navigation,
   Crosshair,
   Shield,
+  BarChart3,
+  History,
+  ArrowRight,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -77,17 +91,26 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     auditLogs,
     refreshAuditLogs,
     churchGroups,
+    leadershipHistory,
+    isLoadingLeadershipHistory,
+    refreshLeadershipHistory,
     addChurchGroup,
     updateChurchGroup,
     deleteChurchGroup,
     toggleChurchGroupStatus,
     getGroupMembers,
     members,
+    attendanceRecords,
+    services,
+    currentService,
+    followupTasks,
+    donations,
     pushPermissionStatus,
     pushSubscribersCount,
     requestPushPermission,
     sendTestPushNotification,
     requestedSettingsTab,
+    requestOpenAnalytics,
     setAdminSubTab,
   } = useEkklesphere();
 
@@ -100,11 +123,33 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     requestedSettingsTab?.tab || 'general'
   );
 
-  useEffect(() => {
-    if (requestedSettingsTab?.tab) {
-      setActiveTab(requestedSettingsTab.tab);
+  const structureAnalytics = useMemo(
+    () =>
+      computeDashboardAnalytics({
+        members,
+        attendanceRecords,
+        services,
+        currentService,
+        churchGroups,
+        followupTasks,
+        donations,
+        systemSettings,
+      }),
+    [members, attendanceRecords, services, currentService, churchGroups, followupTasks, donations, systemSettings]
+  );
+
+  const groupMetricsByName = useMemo(() => {
+    const map = new Map<string, (typeof structureAnalytics.groups)[number]>();
+    for (const row of structureAnalytics.groups) {
+      map.set(normalizeSettingLabel(row.name).toLowerCase(), row);
     }
-  }, [requestedSettingsTab]);
+    return map;
+  }, [structureAnalytics.groups]);
+
+  const unconfiguredRosterGroups = useMemo(
+    () => structureAnalytics.groups.filter((g) => !g.isConfiguredInDb),
+    [structureAnalytics.groups]
+  );
   const [billingPlans, setBillingPlans] = useState<ConsolePlan[]>([]);
   const [licenseEval, setLicenseEval] = useState<LicenseEvaluationResult | null>(null);
   const [currentLicense, setCurrentLicense] = useState<SystemLicense | null>(null);
@@ -223,13 +268,23 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [viewingMembersGroup, setViewingMembersGroup] = useState<ChurchGroup | null>(null);
 
+  // Leadership Change History Local States
+  const [historyFilterCategory, setHistoryFilterCategory] = useState<'all' | ChurchGroupCategory>('all');
+  const [historyFilterGroupId, setHistoryFilterGroupId] = useState<string>('all');
+  const [historyFilterRole, setHistoryFilterRole] = useState<'all' | 'primary_leader' | 'assistant_leader'>('all');
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const leadershipHistorySectionRef = React.useRef<HTMLDivElement | null>(null);
+
   // Group Form State
   const [groupName, setGroupName] = useState('');
   const [groupCategory, setGroupCategory] = useState<ChurchGroupCategory>('cell_group');
   const [groupLeader, setGroupLeader] = useState('');
+  const [groupLeaderMemberId, setGroupLeaderMemberId] = useState('');
   const [groupLeaderPhone, setGroupLeaderPhone] = useState('');
   const [groupLeaderEmail, setGroupLeaderEmail] = useState('');
   const [groupAssistant, setGroupAssistant] = useState('');
+  const [groupAssistantMemberId, setGroupAssistantMemberId] = useState('');
+  const [leaderChangeReason, setLeaderChangeReason] = useState('');
   const [groupDay, setGroupDay] = useState('Wednesdays');
   const [groupTime, setGroupTime] = useState('18:30 - 19:45');
   const [groupLocation, setGroupLocation] = useState('');
@@ -237,15 +292,141 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [groupDescription, setGroupDescription] = useState('');
   const [groupActive, setGroupActive] = useState(true);
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
+  const [isSavingGroup, setIsSavingGroup] = useState(false);
 
-  const openAddGroupModal = (category: ChurchGroupCategory = 'cell_group') => {
+  // Member Combobox States for Primary & Assistant Leaders
+  const [leaderDropdownOpen, setLeaderDropdownOpen] = useState(false);
+  const [assistantDropdownOpen, setAssistantDropdownOpen] = useState(false);
+  const [leaderHighlightIdx, setLeaderHighlightIdx] = useState(0);
+  const [assistantHighlightIdx, setAssistantHighlightIdx] = useState(0);
+
+  const primaryLeaderResolution = useMemo(
+    () =>
+      resolveMemberLeaderInput(members, {
+        memberId: groupLeaderMemberId || undefined,
+        inputName: groupLeader,
+        requireMatch: true,
+      }),
+    [members, groupLeaderMemberId, groupLeader]
+  );
+
+  const assistantLeaderResolution = useMemo(
+    () =>
+      resolveMemberLeaderInput(members, {
+        memberId: groupAssistantMemberId || undefined,
+        inputName: groupAssistant,
+        requireMatch: false,
+      }),
+    [members, groupAssistantMemberId, groupAssistant]
+  );
+
+  const primaryLeaderSuggestions = useMemo(
+    () =>
+      filterMembersForLeaderPicker(members, groupLeader, {
+        excludeMemberId: groupAssistantMemberId || undefined,
+        limit: 10,
+      }),
+    [members, groupLeader, groupAssistantMemberId]
+  );
+
+  const assistantLeaderSuggestions = useMemo(
+    () =>
+      filterMembersForLeaderPicker(members, groupAssistant, {
+        excludeMemberId: primaryLeaderResolution.member?.id || groupLeaderMemberId || undefined,
+        limit: 10,
+      }),
+    [members, groupAssistant, primaryLeaderResolution.member?.id, groupLeaderMemberId]
+  );
+
+  const editingGroupOriginal = useMemo(
+    () => (editingGroupId ? churchGroups.find((g) => g.id === editingGroupId) || null : null),
+    [editingGroupId, churchGroups]
+  );
+
+  const hasLeadershipChangedInModal = useMemo(() => {
+    if (!editingGroupOriginal) return false;
+    const prevPrimary = normalizeSettingLabel(editingGroupOriginal.leaderName).toLowerCase();
+    const nextPrimary = normalizeSettingLabel(
+      primaryLeaderResolution.canonicalName || groupLeader
+    ).toLowerCase();
+    const prevPrimaryId = (editingGroupOriginal.leaderMemberId || '').trim();
+    const nextPrimaryId = (primaryLeaderResolution.member?.id || groupLeaderMemberId || '').trim();
+    const primaryChanged =
+      prevPrimaryId && nextPrimaryId
+        ? prevPrimaryId !== nextPrimaryId
+        : prevPrimary !== nextPrimary;
+
+    const prevAssistant = normalizeSettingLabel(editingGroupOriginal.assistantLeader).toLowerCase();
+    const nextAssistant = normalizeSettingLabel(
+      assistantLeaderResolution.canonicalName || groupAssistant
+    ).toLowerCase();
+    const prevAssistantId = (editingGroupOriginal.assistantLeaderMemberId || '').trim();
+    const nextAssistantId = (
+      assistantLeaderResolution.member?.id ||
+      groupAssistantMemberId ||
+      ''
+    ).trim();
+    const assistantChanged =
+      prevAssistantId && nextAssistantId
+        ? prevAssistantId !== nextAssistantId
+        : prevAssistant !== nextAssistant;
+
+    return primaryChanged || assistantChanged;
+  }, [
+    editingGroupOriginal,
+    primaryLeaderResolution,
+    groupLeader,
+    groupLeaderMemberId,
+    assistantLeaderResolution,
+    groupAssistant,
+    groupAssistantMemberId,
+  ]);
+
+  const handleSelectPrimaryLeader = useCallback(
+    (member: Person) => {
+      const fullName = getMemberFullName(member);
+      setGroupLeader(fullName);
+      setGroupLeaderMemberId(member.id);
+      setGroupLeaderPhone(member.phoneE164 || '');
+      setGroupLeaderEmail(member.email || '');
+      setLeaderDropdownOpen(false);
+      setLeaderHighlightIdx(0);
+      setGroupErrors((prev) => {
+        if (!prev.leader && !prev.form) return prev;
+        const { leader: _l, form: _f, ...rest } = prev;
+        return rest;
+      });
+    },
+    []
+  );
+
+  const handleSelectAssistantLeader = useCallback(
+    (member: Person) => {
+      const fullName = getMemberFullName(member);
+      setGroupAssistant(fullName);
+      setGroupAssistantMemberId(member.id);
+      setAssistantDropdownOpen(false);
+      setAssistantHighlightIdx(0);
+      setGroupErrors((prev) => {
+        if (!prev.assistantLeader && !prev.form) return prev;
+        const { assistantLeader: _a, form: _f, ...rest } = prev;
+        return rest;
+      });
+    },
+    []
+  );
+
+  const openAddGroupModal = useCallback((category: ChurchGroupCategory = 'cell_group', prefillName?: string) => {
     setEditingGroupId(null);
-    setGroupName('');
+    setGroupName(prefillName || '');
     setGroupCategory(category);
     setGroupLeader('');
-    setGroupLeaderPhone('+233 ');
+    setGroupLeaderMemberId('');
+    setGroupLeaderPhone('');
     setGroupLeaderEmail('');
     setGroupAssistant('');
+    setGroupAssistantMemberId('');
+    setLeaderChangeReason('');
     setGroupDay(category === 'cell_group' ? 'Wednesdays' : category === 'ministry' ? 'Saturdays' : 'Monthly 2nd Saturday');
     setGroupTime(category === 'cell_group' ? '18:30 - 19:45' : '16:00 - 17:30');
     setGroupLocation('');
@@ -253,71 +434,162 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     setGroupDescription('');
     setGroupActive(true);
     setGroupErrors({});
+    setLeaderDropdownOpen(false);
+    setAssistantDropdownOpen(false);
+    setLeaderHighlightIdx(0);
+    setAssistantHighlightIdx(0);
+    setIsSavingGroup(false);
     setIsGroupModalOpen(true);
-  };
+  }, []);
 
-  const openEditGroupModal = (group: ChurchGroup) => {
-    setEditingGroupId(group.id);
-    setGroupName(group.name);
-    setGroupCategory(group.category);
-    setGroupLeader(group.leaderName);
-    setGroupLeaderPhone(group.leaderPhone || '');
-    setGroupLeaderEmail(group.leaderEmail || '');
-    setGroupAssistant(group.assistantLeader || '');
-    setGroupDay(group.meetingDay || '');
-    setGroupTime(group.meetingTime || '');
-    setGroupLocation(group.meetingLocation || '');
-    setGroupDemographic(group.targetDemographic || '');
-    setGroupDescription(group.description);
-    setGroupActive(group.active);
-    setGroupErrors({});
-    setIsGroupModalOpen(true);
-  };
+  const openEditGroupModal = useCallback(
+    (group: ChurchGroup) => {
+      const resolvedPrimary = resolveMemberLeaderInput(members, {
+        memberId: group.leaderMemberId,
+        inputName: group.leaderName,
+        requireMatch: true,
+      });
+      const resolvedAssistant = resolveMemberLeaderInput(members, {
+        memberId: group.assistantLeaderMemberId,
+        inputName: group.assistantLeader,
+        requireMatch: false,
+      });
 
-  const handleSaveGroup = (e: React.FormEvent) => {
+      setEditingGroupId(group.id);
+      setGroupName(group.name);
+      setGroupCategory(group.category);
+      setGroupLeader(resolvedPrimary.canonicalName || group.leaderName);
+      setGroupLeaderMemberId(resolvedPrimary.member?.id || '');
+      setGroupLeaderPhone(group.leaderPhone || resolvedPrimary.member?.phoneE164 || '');
+      setGroupLeaderEmail(group.leaderEmail || resolvedPrimary.member?.email || '');
+      setGroupAssistant(resolvedAssistant.canonicalName || group.assistantLeader || '');
+      setGroupAssistantMemberId(resolvedAssistant.member?.id || '');
+      setLeaderChangeReason('');
+      setGroupDay(group.meetingDay || '');
+      setGroupTime(group.meetingTime || '');
+      setGroupLocation(group.meetingLocation || '');
+      setGroupDemographic(group.targetDemographic || '');
+      setGroupDescription(group.description);
+      setGroupActive(group.active);
+      setGroupErrors({});
+      setLeaderDropdownOpen(false);
+      setAssistantDropdownOpen(false);
+      setLeaderHighlightIdx(0);
+      setAssistantHighlightIdx(0);
+      setIsSavingGroup(false);
+      setIsGroupModalOpen(true);
+    },
+    [members]
+  );
+
+  useEffect(() => {
+    if (!requestedSettingsTab?.tab) return;
+    setActiveTab(requestedSettingsTab.tab);
+    const intent = requestedSettingsTab.groupIntent;
+    if (requestedSettingsTab.tab === 'groups' && intent) {
+      if (intent.mode === 'edit' && intent.groupId) {
+        const target = churchGroups.find((g) => g.id === intent.groupId);
+        if (target) {
+          openEditGroupModal(target);
+        }
+      } else if (intent.mode === 'create') {
+        openAddGroupModal(intent.prefillCategory || 'cell_group', intent.prefillName);
+      }
+    }
+  }, [requestedSettingsTab, churchGroups, openAddGroupModal, openEditGroupModal]);
+
+  const handleSaveGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     const errors: Record<string, string> = {};
     if (!groupName.trim()) errors.name = 'Group name is required';
-    if (!groupLeader.trim()) errors.leader = 'Primary leader name is required';
+
+    const primaryRes = resolveMemberLeaderInput(members, {
+      memberId: groupLeaderMemberId || undefined,
+      inputName: groupLeader,
+      requireMatch: true,
+    });
+    if (primaryRes.status !== 'matched' || !primaryRes.member) {
+      errors.leader =
+        primaryRes.error || 'Primary leader must be selected from your enrolled members list.';
+    }
+
+    const cleanAssistant = groupAssistant.trim();
+    const assistantRes = cleanAssistant
+      ? resolveMemberLeaderInput(members, {
+          memberId: groupAssistantMemberId || undefined,
+          inputName: cleanAssistant,
+          requireMatch: false,
+        })
+      : { status: 'empty' as const };
+
+    if (cleanAssistant) {
+      if (assistantRes.status !== 'matched' || !assistantRes.member) {
+        errors.assistantLeader =
+          assistantRes.error ||
+          'Assistant / Co-Leader must match an enrolled member or be left blank.';
+      } else if (primaryRes.member && assistantRes.member.id === primaryRes.member.id) {
+        errors.assistantLeader =
+          'Assistant / Co-Leader must be a different member from the Primary Leader.';
+      }
+    }
 
     if (Object.keys(errors).length > 0) {
       setGroupErrors(errors);
       return;
     }
 
-    if (editingGroupId) {
-      updateChurchGroup(editingGroupId, {
-        name: groupName.trim(),
-        category: groupCategory,
-        leaderName: groupLeader.trim(),
-        leaderPhone: groupLeaderPhone.trim() || undefined,
-        leaderEmail: groupLeaderEmail.trim() || undefined,
-        assistantLeader: groupAssistant.trim() || undefined,
-        meetingDay: groupDay.trim() || undefined,
-        meetingTime: groupTime.trim() || undefined,
-        meetingLocation: groupLocation.trim() || undefined,
-        targetDemographic: groupDemographic.trim() || undefined,
-        description: groupDescription.trim(),
-        active: groupActive,
-      });
-    } else {
-      addChurchGroup({
-        name: groupName.trim(),
-        category: groupCategory,
-        leaderName: groupLeader.trim(),
-        leaderPhone: groupLeaderPhone.trim() || undefined,
-        leaderEmail: groupLeaderEmail.trim() || undefined,
-        assistantLeader: groupAssistant.trim() || undefined,
-        meetingDay: groupDay.trim() || undefined,
-        meetingTime: groupTime.trim() || undefined,
-        meetingLocation: groupLocation.trim() || undefined,
-        targetDemographic: groupDemographic.trim() || undefined,
-        description: groupDescription.trim(),
-        active: groupActive,
-      });
-    }
+    const primaryMember = primaryRes.member!;
+    const assistantMember = assistantRes.status === 'matched' ? assistantRes.member : undefined;
 
-    setIsGroupModalOpen(false);
+    setIsSavingGroup(true);
+    try {
+      const result = editingGroupId
+        ? await updateChurchGroup(editingGroupId, {
+            name: groupName.trim(),
+            category: groupCategory,
+            leaderName: getMemberFullName(primaryMember),
+            leaderMemberId: primaryMember.id,
+            leaderPhone: groupLeaderPhone.trim() || primaryMember.phoneE164 || undefined,
+            leaderEmail: groupLeaderEmail.trim() || primaryMember.email || undefined,
+            assistantLeader: assistantMember ? getMemberFullName(assistantMember) : '',
+            assistantLeaderMemberId: assistantMember ? assistantMember.id : undefined,
+            leadershipChangeReason: leaderChangeReason.trim() || undefined,
+            meetingDay: groupDay.trim() || undefined,
+            meetingTime: groupTime.trim() || undefined,
+            meetingLocation: groupLocation.trim() || undefined,
+            targetDemographic: groupDemographic.trim() || undefined,
+            description: groupDescription.trim(),
+            active: groupActive,
+          })
+        : await addChurchGroup({
+            name: groupName.trim(),
+            category: groupCategory,
+            leaderName: getMemberFullName(primaryMember),
+            leaderMemberId: primaryMember.id,
+            leaderPhone: groupLeaderPhone.trim() || primaryMember.phoneE164 || undefined,
+            leaderEmail: groupLeaderEmail.trim() || primaryMember.email || undefined,
+            assistantLeader: assistantMember ? getMemberFullName(assistantMember) : undefined,
+            assistantLeaderMemberId: assistantMember ? assistantMember.id : undefined,
+            meetingDay: groupDay.trim() || undefined,
+            meetingTime: groupTime.trim() || undefined,
+            meetingLocation: groupLocation.trim() || undefined,
+            targetDemographic: groupDemographic.trim() || undefined,
+            description: groupDescription.trim(),
+            active: groupActive,
+          });
+
+      if (!result.ok) {
+        setGroupErrors({
+          [result.field || 'form']:
+            result.message || 'Could not save church group. Please check member selection.',
+        });
+        return;
+      }
+
+      setIsGroupModalOpen(false);
+    } finally {
+      setIsSavingGroup(false);
+    }
   };
 
   const handleChange = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
@@ -902,7 +1174,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           }`}
         >
           <Shield className="w-3.5 h-3.5" />
-          <span>Staff &amp; Roles</span>
+          <span>Users &amp; Credentials</span>
         </button>
 
         <button
@@ -1068,7 +1340,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#6D5CF2] animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-[#6D5CF2]" />
                     <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
                       Congregational Structure & Leadership
                     </span>
@@ -1082,15 +1354,23 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     <span>Ministries, Fellowships & Cell Groups</span>
                   </h3>
                   <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-2xl leading-relaxed">
-                    Administrate church functional departments, demographic fellowships, and neighborhood home cell small groups. Assign pastoral leaders, set meeting times, configure venues, and track member allocations.
+                    Administrate church functional departments, demographic fellowships, and neighborhood home cell small groups. Leadership, schedules, and venues flow directly into Congregation &amp; Ministry Analytics.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                   <button
                     type="button"
+                    onClick={() => requestOpenAnalytics({ lens: 'ministries' })}
+                    className="bg-[#EFEDFF] dark:bg-[#2A2A55] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>Ministry Analytics</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => openAddGroupModal('cell_group')}
-                    className="bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-95"
+                    className="bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add New Group</span>
@@ -1099,8 +1379,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               </div>
 
               {/* Group Metric KPI Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5">
-                {/* 1. Total Groups */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5 tabular-nums">
+                {/* 1. Total Groups & Leadership Coverage */}
                 <div
                   onClick={() => setGroupFilterCategory('all')}
                   className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
@@ -1110,15 +1390,18 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   }`}
                 >
                   <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                    <span className="font-semibold">Total Groups</span>
+                    <span className="font-semibold">Configured Structure</span>
                     <Layers className="w-4 h-4 text-[#6D5CF2]" />
                   </div>
-                  <div className="text-2xl font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] mt-1">
+                  <div className="font-mono text-2xl font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] mt-1">
                     {churchGroups.length}
                   </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span>{churchGroups.filter((g) => g.active).length} Active Across Campus</span>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                    <span className="truncate">
+                      {structureAnalytics.leadership.distinctLeadersCount} leaders ·{' '}
+                      {structureAnalytics.leadership.leadershipCoveragePct}% roster covered
+                    </span>
                   </div>
                 </div>
 
@@ -1133,15 +1416,17 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 >
                   <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
                     <span className="font-semibold">Ministries</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]">
-                      Department
+                    <span className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                      Departments
                     </span>
                   </div>
-                  <div className="text-2xl font-extrabold text-[#6D5CF2] dark:text-[#8C7DFF] mt-1">
+                  <div className="font-mono text-2xl font-extrabold text-[#6D5CF2] dark:text-[#8C7DFF] mt-1">
                     {churchGroups.filter((g) => g.category === 'ministry').length}
                   </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Choir, Ushers, Media, Children, Prayer
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                    {structureAnalytics.leadership.unconfiguredDepartmentsCount > 0
+                      ? `${structureAnalytics.leadership.unconfiguredDepartmentsCount} roster dept(s) need lead`
+                      : `${structureAnalytics.namedDepartmentsCount} active departments tracked`}
                   </div>
                 </div>
 
@@ -1156,15 +1441,15 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 >
                   <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
                     <span className="font-semibold">Fellowships</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300">
+                    <span className="text-[11px] font-bold text-sky-700 dark:text-sky-300">
                       Demographic
                     </span>
                   </div>
-                  <div className="text-2xl font-extrabold text-sky-600 dark:text-sky-400 mt-1">
+                  <div className="font-mono text-2xl font-extrabold text-sky-600 dark:text-sky-400 mt-1">
                     {churchGroups.filter((g) => g.category === 'fellowship').length}
                   </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Men, Women, Youth, Teens, Couples
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                    {structureAnalytics.leadership.coLedGroupsCount} co-led across structure
                   </div>
                 </div>
 
@@ -1179,19 +1464,70 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 >
                   <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
                     <span className="font-semibold">Cell Groups</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
+                    <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
                       Home Cells
                     </span>
                   </div>
-                  <div className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
+                  <div className="font-mono text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
                     {churchGroups.filter((g) => g.category === 'cell_group').length}
                   </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Neighborhood & area fellowships
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                    {unconfiguredRosterGroups.length > 0
+                      ? `${unconfiguredRosterGroups.length} roster group(s) unconfigured`
+                      : 'All roster cells configured'}
                   </div>
                 </div>
               </div>
             </div>
+
+            {unconfiguredRosterGroups.length > 0 && (
+              <div className="bg-amber-50/70 dark:bg-amber-950/20 rounded-2xl p-4 sm:p-5 border border-amber-300/70 dark:border-amber-800/50 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>Discovered Roster Groups Missing Pastoral Leadership ({unconfiguredRosterGroups.length})</span>
+                    </h4>
+                    <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                      Members in your directory belong to these groups or departments, but no leader or meeting schedule is configured yet.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => requestOpenAnalytics({ lens: 'ministries' })}
+                    className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Inspect in Analytics
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {unconfiguredRosterGroups.map((ug) => (
+                    <div
+                      key={`${ug.category}-${ug.name}`}
+                      className="bg-white dark:bg-[#1D1D3D] rounded-xl p-3 border border-amber-200 dark:border-amber-800/50 flex items-center justify-between gap-2.5 tabular-nums"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {ug.name}
+                        </div>
+                        <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] font-mono">
+                          {ug.totalMembers} members · {ug.presentCount} live ({ug.turnoutPct}%)
+                          {ug.atRiskCount > 0 ? ` · ${ug.atRiskCount} at-risk` : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openAddGroupModal(ug.category, ug.name)}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-[11px] font-bold whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        Assign Lead
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Filter, Search & Quick Category Selector Toolbar */}
             <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -1296,9 +1632,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 })
                 .map((group) => {
                   const enrolledMembers = getGroupMembers(group.name);
+                  const liveMetrics = groupMetricsByName.get(normalizeSettingLabel(group.name).toLowerCase());
+                  const hasAssignedLead = isAssignedLeaderName(group.leaderName);
                   const isMinistry = group.category === 'ministry';
                   const isFellowship = group.category === 'fellowship';
-                  const isCell = group.category === 'cell_group';
 
                   return (
                     <div
@@ -1333,7 +1670,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                             >
                               <span
                                 className={`w-1.5 h-1.5 rounded-full ${
-                                  group.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                                  group.active ? 'bg-emerald-500' : 'bg-slate-400'
                                 }`}
                               />
                               <span>{group.active ? 'Active' : 'Inactive'}</span>
@@ -1353,16 +1690,26 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                         <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55] mb-3 space-y-1.5">
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-[#666A86] dark:text-[#A9ACC8] font-medium">Primary Leader</span>
-                            <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
-                              <span className="w-5 h-5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[9px] flex items-center justify-center shrink-0">
-                                {group.leaderName
-                                  .split(' ')
-                                  .map((n) => n[0])
-                                  .slice(0, 2)
-                                  .join('')}
+                            {hasAssignedLead ? (
+                              <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                                <span className="w-5 h-5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[9px] flex items-center justify-center shrink-0">
+                                  {group.leaderName
+                                    .split(' ')
+                                    .map((n) => n[0])
+                                    .slice(0, 2)
+                                    .join('')}
+                                </span>
+                                <span>{group.leaderName}</span>
                               </span>
-                              <span>{group.leaderName}</span>
-                            </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openEditGroupModal(group)}
+                                className="text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer"
+                              >
+                                Assign Leader
+                              </button>
+                            )}
                           </div>
 
                           {group.leaderPhone && (
@@ -1390,6 +1737,40 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                           )}
                         </div>
 
+                        {/* Live Turnout & Pastoral Care Snapshot (Synced with Dashboard Analytics) */}
+                        <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] px-2.5 py-2 mb-3 text-center tabular-nums">
+                          <div>
+                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                              Enrolled
+                            </div>
+                            <div className="font-mono text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              {liveMetrics?.totalMembers ?? enrolledMembers.length}
+                            </div>
+                          </div>
+                          <div className="border-x border-[#E9EBF5] dark:border-[#2D2D55]">
+                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                              Live Turnout
+                            </div>
+                            <div className="font-mono text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                              {liveMetrics ? `${liveMetrics.presentCount} (${liveMetrics.turnoutPct}%)` : '0 (0%)'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                              Care / Risk
+                            </div>
+                            <div
+                              className={`font-mono text-xs font-bold ${
+                                (liveMetrics?.atRiskCount || 0) + (liveMetrics?.openFollowupCount || 0) > 0
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : 'text-emerald-600 dark:text-emerald-400'
+                              }`}
+                            >
+                              {liveMetrics ? `${liveMetrics.atRiskCount} / ${liveMetrics.openFollowupCount}` : '0 / 0'}
+                            </div>
+                          </div>
+                        </div>
+
                         {/* Schedule & Venue Information */}
                         <div className="space-y-1.5 text-xs text-[#666A86] dark:text-[#A9ACC8] mb-4">
                           {(group.meetingDay || group.meetingTime) && (
@@ -1414,22 +1795,56 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                         </div>
                       </div>
 
-                      {/* Card Footer with Members Count & Actions */}
+                        {/* Card Footer with Members Count & Actions */}
                       <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setViewingMembersGroup(group)}
-                          className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                          <span>{enrolledMembers.length} enrolled</span>
-                        </button>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => setViewingMembersGroup(group)}
+                            className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                          >
+                            <Users className="w-3.5 h-3.5" />
+                            <span>{enrolledMembers.length} enrolled</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              requestOpenAnalytics({
+                                lens: group.category === 'ministry' ? 'departments' : 'ministries',
+                                searchQuery: group.name,
+                                categoryFilter: group.category,
+                              })
+                            }
+                            className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] dark:hover:text-[#8C7DFF] flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            title="Inspect in Congregation & Ministry Analytics"
+                          >
+                            <BarChart3 className="w-3 h-3" />
+                            <span>Analytics</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHistoryFilterCategory(group.category);
+                              setHistoryFilterGroupId(group.id);
+                              setHistoryFilterRole('all');
+                              leadershipHistorySectionRef.current?.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'start',
+                              });
+                            }}
+                            className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] dark:hover:text-[#8C7DFF] flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            title="View Leadership Change History"
+                          >
+                            <History className="w-3 h-3" />
+                            <span>History</span>
+                          </button>
+                        </div>
 
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => openEditGroupModal(group)}
-                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors"
+                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
                             title="Edit Group"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -1445,7 +1860,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                                 setTimeout(() => setConfirmDeleteGroupId(null), 3500);
                               }
                             }}
-                            className={`p-1.5 rounded-lg transition-colors ${
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
                               confirmDeleteGroupId === group.id
                                 ? 'bg-rose-600 text-white'
                                 : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40'
@@ -1490,6 +1905,311 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </button>
               </div>
             )}
+
+            {/* Leadership Change History Panel (All Categories: Ministries, Fellowships, Cell Groups) */}
+            {(() => {
+              const categoryCounts = {
+                all: leadershipHistory.length,
+                ministry: leadershipHistory.filter((h) => h.category === 'ministry').length,
+                fellowship: leadershipHistory.filter((h) => h.category === 'fellowship').length,
+                cell_group: leadershipHistory.filter((h) => h.category === 'cell_group').length,
+              };
+
+              const groupOptionsMap = new Map<string, { id: string; name: string; category: ChurchGroupCategory }>();
+              for (const g of churchGroups) {
+                groupOptionsMap.set(g.id, { id: g.id, name: g.name, category: g.category });
+              }
+              for (const h of leadershipHistory) {
+                if (!groupOptionsMap.has(h.groupId)) {
+                  groupOptionsMap.set(h.groupId, {
+                    id: h.groupId,
+                    name: h.groupName,
+                    category: h.category,
+                  });
+                }
+              }
+              const groupOptions = Array.from(groupOptionsMap.values())
+                .filter((opt) => historyFilterCategory === 'all' || opt.category === historyFilterCategory)
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+              const filteredHistory = leadershipHistory.filter((entry) => {
+                if (historyFilterCategory !== 'all' && entry.category !== historyFilterCategory) return false;
+                if (historyFilterGroupId !== 'all' && entry.groupId !== historyFilterGroupId) return false;
+                if (historyFilterRole !== 'all' && entry.role !== historyFilterRole) return false;
+                if (!historySearchQuery.trim()) return true;
+                const q = historySearchQuery.toLowerCase();
+                return (
+                  entry.groupName.toLowerCase().includes(q) ||
+                  (entry.previousLeaderName || '').toLowerCase().includes(q) ||
+                  (entry.newLeaderName || '').toLowerCase().includes(q) ||
+                  (entry.changedByName || '').toLowerCase().includes(q) ||
+                  (entry.changedByEmail || '').toLowerCase().includes(q) ||
+                  (entry.reason || '').toLowerCase().includes(q)
+                );
+              });
+
+              const formatCategoryText = (cat: ChurchGroupCategory) =>
+                cat === 'ministry' ? 'Ministry' : cat === 'fellowship' ? 'Fellowship' : 'Cell Group';
+
+              const formatActionText = (action: ChurchGroupLeadershipHistoryEntry['action']) => {
+                switch (action) {
+                  case 'assigned':
+                    return 'Appointed';
+                  case 'changed':
+                    return 'Handover';
+                  case 'removed':
+                    return 'Cleared';
+                  case 'group_deleted':
+                    return 'Group Deleted';
+                  default:
+                    return action;
+                }
+              };
+
+              return (
+                <div
+                  ref={leadershipHistorySectionRef}
+                  className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-4"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
+                        <History className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+                        <span>Leadership Change History (All Categories)</span>
+                      </h4>
+                      <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                        Verified audit trail of primary and assistant leadership changes across Ministries, Fellowships, and Cell Groups.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => refreshLeadershipHistory()}
+                      disabled={isLoadingLeadershipHistory}
+                      className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLeadershipHistory ? 'animate-spin' : ''}`} />
+                      <span>Refresh Log</span>
+                    </button>
+                  </div>
+
+                  {/* Category Tabs & Filters */}
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-1">
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 tabular-nums">
+                      {(
+                        [
+                          { id: 'all', label: 'All Categories', count: categoryCounts.all },
+                          { id: 'ministry', label: 'Ministries', count: categoryCounts.ministry },
+                          { id: 'fellowship', label: 'Fellowships', count: categoryCounts.fellowship },
+                          { id: 'cell_group', label: 'Cell Groups', count: categoryCounts.cell_group },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            setHistoryFilterCategory(tab.id);
+                            setHistoryFilterGroupId('all');
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                            historyFilterCategory === tab.id
+                              ? 'bg-[#6D5CF2] text-white'
+                              : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                          }`}
+                        >
+                          {tab.label} ({tab.count})
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={historyFilterGroupId}
+                        onChange={(e) => setHistoryFilterGroupId(e.target.value)}
+                        aria-label="Filter leadership history by group"
+                        className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2] max-w-[200px]"
+                      >
+                        <option value="all">All Groups</option>
+                        {groupOptions.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        value={historyFilterRole}
+                        onChange={(e) => setHistoryFilterRole(e.target.value as any)}
+                        aria-label="Filter leadership history by role"
+                        className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      >
+                        <option value="all">All Roles</option>
+                        <option value="primary_leader">Primary Leader</option>
+                        <option value="assistant_leader">Assistant Leader</option>
+                      </select>
+
+                      <div className="relative w-full sm:w-56">
+                        <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
+                        <input
+                          type="text"
+                          placeholder="Search leader, group, reason..."
+                          value={historySearchQuery}
+                          onChange={(e) => setHistorySearchQuery(e.target.value)}
+                          className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                        />
+                        {historySearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setHistorySearchQuery('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dense SaaS History Table */}
+                  {filteredHistory.length > 0 ? (
+                    <div className="overflow-x-auto rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <table className="w-full text-left border-collapse text-xs tabular-nums">
+                        <thead className="bg-[#F6F7FC] dark:bg-[#14142E] text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                          <tr>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Timestamp</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Group</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Category</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Role &amp; Event</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Leadership Transition</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Reason &amp; Recorded By</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55]">
+                          {filteredHistory.map((entry) => {
+                            const formattedDate = (() => {
+                              const d = new Date(entry.createdAt);
+                              if (Number.isNaN(d.getTime())) return entry.createdAt;
+                              return d.toLocaleString(undefined, {
+                                year: 'numeric',
+                                month: 'short',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              });
+                            })();
+
+                            return (
+                              <tr
+                                key={entry.id}
+                                className="min-h-[44px] hover:bg-[#F6F7FC]/70 dark:hover:bg-[#14142E]/60 transition-colors"
+                              >
+                                <td className="py-2.5 px-3 font-mono text-[11px] text-[#666A86] dark:text-[#A9ACC8] whitespace-nowrap">
+                                  {formattedDate}
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-[#1D1B3A] dark:text-[#F2F2FA] whitespace-nowrap">
+                                  {entry.groupName}
+                                </td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <span
+                                    className={`text-[11px] font-bold ${
+                                      entry.category === 'ministry'
+                                        ? 'text-[#6D5CF2] dark:text-[#8C7DFF]'
+                                        : entry.category === 'fellowship'
+                                        ? 'text-sky-600 dark:text-sky-400'
+                                        : 'text-emerald-600 dark:text-emerald-400'
+                                    }`}
+                                  >
+                                    {formatCategoryText(entry.category)}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <div className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                                    {entry.role === 'primary_leader' ? 'Primary Leader' : 'Assistant Leader'}
+                                  </div>
+                                  <div
+                                    className={`text-[11px] font-semibold ${
+                                      entry.action === 'assigned'
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : entry.action === 'changed'
+                                        ? 'text-[#6D5CF2] dark:text-[#8C7DFF]'
+                                        : 'text-rose-600 dark:text-rose-400'
+                                    }`}
+                                  >
+                                    {formatActionText(entry.action)}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span
+                                      className={`${
+                                        entry.previousLeaderName
+                                          ? 'text-[#666A86] dark:text-[#A9ACC8]'
+                                          : 'italic text-slate-400 dark:text-slate-500'
+                                      }`}
+                                    >
+                                      {entry.previousLeaderName || 'Unassigned'}
+                                    </span>
+                                    <ArrowRight className="w-3 h-3 text-[#666A86] dark:text-[#A9ACC8] shrink-0" />
+                                    <span
+                                      className={`font-bold ${
+                                        entry.newLeaderName
+                                          ? 'text-[#1D1B3A] dark:text-[#F2F2FA]'
+                                          : 'italic text-rose-600 dark:text-rose-400'
+                                      }`}
+                                    >
+                                      {entry.newLeaderName || 'None'}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  {entry.reason && (
+                                    <div className="text-[#1D1B3A] dark:text-[#F2F2FA] font-medium">
+                                      {entry.reason}
+                                    </div>
+                                  )}
+                                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                                    By {entry.changedByName || entry.changedByEmail || 'Administrator'}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="py-8 px-4 text-center rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <History className="w-7 h-7 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                      <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        {leadershipHistory.length === 0
+                          ? 'No leadership transitions recorded yet'
+                          : 'No leadership changes match the selected filters'}
+                      </p>
+                      <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-md mx-auto">
+                        {leadershipHistory.length === 0
+                          ? 'Creating groups or updating Primary / Assistant leaders in Ministries, Fellowships, or Cell Groups automatically logs an immutable history entry here.'
+                          : 'Try clearing category, group, role, or search filters to view all recorded transitions.'}
+                      </p>
+                      {leadershipHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHistoryFilterCategory('all');
+                            setHistoryFilterGroupId('all');
+                            setHistoryFilterRole('all');
+                            setHistorySearchQuery('');
+                          }}
+                          className="mt-3 px-3.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-xs font-bold cursor-pointer"
+                        >
+                          Clear Filters
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Connected Modules Summary Bar */}
             <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div>
@@ -1497,16 +2217,25 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   Connected Across Ekklesphere Modules
                 </div>
                 <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                  Active Ministries feed Department selectors &amp; Analytics; Cell Groups &amp; Fellowships sync to Directory filters, Usher Check-in, Member Registration, Pastoral Auto-Assignment, and Broadcast Audiences.
+                  Active Ministries feed Department selectors &amp; Leadership Analytics; Cell Groups &amp; Fellowships sync to Directory filters, Live Insights, Usher Check-in, Registration, and Pastoral Care.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setAdminSubTab('dashboard')}
-                className="px-3.5 py-2 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Open Analytics &amp; Directory
-              </button>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => requestOpenAnalytics({ lens: 'ministries' })}
+                  className="px-3.5 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Open Ministry Analytics
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminSubTab('workflows')}
+                  className="px-3.5 py-2 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Open Directory
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -2444,20 +3173,175 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
               {/* Leaders Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
+                <div className="relative">
                   <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
                     Primary Leader Name <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="Leader full name"
+                    role="combobox"
+                    aria-expanded={leaderDropdownOpen}
+                    aria-autocomplete="list"
+                    aria-controls="primary-leader-member-listbox"
+                    placeholder="Search enrolled member by name, ID, or phone..."
                     value={groupLeader}
-                    onChange={(e) => setGroupLeader(e.target.value)}
+                    onFocus={() => {
+                      setLeaderDropdownOpen(true);
+                      setLeaderHighlightIdx(0);
+                    }}
+                    onBlur={() => {
+                      setTimeout(() => setLeaderDropdownOpen(false), 150);
+                    }}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setGroupLeader(nextVal);
+                      const exactMatch = resolveMemberLeaderInput(members, {
+                        inputName: nextVal,
+                        requireMatch: true,
+                      });
+                      if (exactMatch.status === 'matched' && exactMatch.member) {
+                        setGroupLeaderMemberId(exactMatch.member.id);
+                        if (!groupLeaderPhone.trim() && exactMatch.member.phoneE164) {
+                          setGroupLeaderPhone(exactMatch.member.phoneE164);
+                        }
+                        if (!groupLeaderEmail.trim() && exactMatch.member.email) {
+                          setGroupLeaderEmail(exactMatch.member.email);
+                        }
+                      } else {
+                        setGroupLeaderMemberId('');
+                      }
+                      setLeaderDropdownOpen(true);
+                      setLeaderHighlightIdx(0);
+                      if (groupErrors.leader || groupErrors.form) {
+                        setGroupErrors((prev) => {
+                          const { leader: _l, form: _f, ...rest } = prev;
+                          return rest;
+                        });
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (!leaderDropdownOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                        setLeaderDropdownOpen(true);
+                        return;
+                      }
+                      if (!leaderDropdownOpen) return;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setLeaderHighlightIdx((prev) =>
+                          primaryLeaderSuggestions.length > 0
+                            ? (prev + 1) % primaryLeaderSuggestions.length
+                            : 0
+                        );
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setLeaderHighlightIdx((prev) =>
+                          primaryLeaderSuggestions.length > 0
+                            ? (prev - 1 + primaryLeaderSuggestions.length) %
+                              primaryLeaderSuggestions.length
+                            : 0
+                        );
+                      } else if (e.key === 'Enter' && primaryLeaderSuggestions.length > 0) {
+                        const target = primaryLeaderSuggestions[leaderHighlightIdx];
+                        if (target) {
+                          e.preventDefault();
+                          handleSelectPrimaryLeader(target);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setLeaderDropdownOpen(false);
+                      }
+                    }}
+                    autoComplete="off"
                     className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
-                      groupErrors.leader ? 'border-rose-500' : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                      groupErrors.leader ||
+                      (groupLeader.trim() && !leaderDropdownOpen && primaryLeaderResolution.status !== 'matched')
+                        ? 'border-rose-500'
+                        : primaryLeaderResolution.status === 'matched'
+                        ? 'border-emerald-500/80'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55]'
                     } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]`}
                   />
-                  {groupErrors.leader && <p className="text-[10px] text-rose-500 mt-1">{groupErrors.leader}</p>}
+
+                  {leaderDropdownOpen && (
+                    <div
+                      id="primary-leader-member-listbox"
+                      role="listbox"
+                      className="absolute left-0 right-0 top-[62px] z-30 max-h-52 overflow-y-auto rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xl p-1 space-y-0.5"
+                    >
+                      {members.length === 0 ? (
+                        <div className="p-2.5 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          No enrolled members found yet. Add members in Directory first.
+                        </div>
+                      ) : primaryLeaderSuggestions.length === 0 ? (
+                        <div className="p-2.5 text-[11px] text-rose-600 dark:text-rose-400">
+                          No member matches "{groupLeader}". Only enrolled members can lead groups.
+                        </div>
+                      ) : (
+                        primaryLeaderSuggestions.map((m, idx) => {
+                          const fullName = getMemberFullName(m);
+                          const memberCode = getCanonicalMemberId(m);
+                          const isSelected = primaryLeaderResolution.member?.id === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                handleSelectPrimaryLeader(m);
+                              }}
+                              className={`w-full px-2.5 py-2 rounded-lg text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                idx === leaderHighlightIdx || isSelected
+                                  ? 'bg-[#EFEDFF] dark:bg-[#2A2A55]'
+                                  : 'hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <MemberAvatar
+                                  src={m.imageUrl}
+                                  name={fullName}
+                                  initials={m.avatarInitials}
+                                  sizeClass="w-6 h-6"
+                                  textClass="text-[9px] font-bold"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                    {fullName}
+                                  </div>
+                                  <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                                    {m.department || m.homeCellGroup || m.groupName || 'Congregation'}
+                                    {m.phoneE164 ? ` · ${m.phoneE164}` : ''}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className="font-mono text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF] whitespace-nowrap shrink-0 tabular-nums">
+                                {memberCode}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {primaryLeaderResolution.status === 'matched' && primaryLeaderResolution.member ? (
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1 tabular-nums">
+                      <UserCheck className="w-3 h-3 shrink-0" />
+                      <span>
+                        Verified member · <span className="font-mono">{getCanonicalMemberId(primaryLeaderResolution.member)}</span>
+                      </span>
+                    </p>
+                  ) : groupErrors.leader ? (
+                    <p className="text-[10px] text-rose-500 mt-1">{groupErrors.leader}</p>
+                  ) : groupLeader.trim() ? (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                      Select an enrolled member from the directory dropdown to validate.
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                      Must match a member in your directory ({members.length} enrolled).
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -2488,19 +3372,187 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   />
                 </div>
 
-                <div>
+                <div className="relative">
                   <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                    Assistant / Co-Leader
+                    Assistant / Co-Leader (Optional)
                   </label>
                   <input
                     type="text"
-                    placeholder="Assistant leader full name"
+                    role="combobox"
+                    aria-expanded={assistantDropdownOpen}
+                    aria-autocomplete="list"
+                    aria-controls="assistant-leader-member-listbox"
+                    placeholder="Search enrolled member (or leave blank)"
                     value={groupAssistant}
-                    onChange={(e) => setGroupAssistant(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    onFocus={() => {
+                      setAssistantDropdownOpen(true);
+                      setAssistantHighlightIdx(0);
+                    }}
+                    onBlur={() => {
+                      setTimeout(() => setAssistantDropdownOpen(false), 150);
+                    }}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setGroupAssistant(nextVal);
+                      if (!nextVal.trim()) {
+                        setGroupAssistantMemberId('');
+                      } else {
+                        const exactMatch = resolveMemberLeaderInput(members, {
+                          inputName: nextVal,
+                          requireMatch: false,
+                        });
+                        setGroupAssistantMemberId(
+                          exactMatch.status === 'matched' && exactMatch.member
+                            ? exactMatch.member.id
+                            : ''
+                        );
+                      }
+                      setAssistantDropdownOpen(true);
+                      setAssistantHighlightIdx(0);
+                      if (groupErrors.assistantLeader || groupErrors.form) {
+                        setGroupErrors((prev) => {
+                          const { assistantLeader: _a, form: _f, ...rest } = prev;
+                          return rest;
+                        });
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (!assistantDropdownOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                        setAssistantDropdownOpen(true);
+                        return;
+                      }
+                      if (!assistantDropdownOpen) return;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setAssistantHighlightIdx((prev) =>
+                          assistantLeaderSuggestions.length > 0
+                            ? (prev + 1) % assistantLeaderSuggestions.length
+                            : 0
+                        );
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setAssistantHighlightIdx((prev) =>
+                          assistantLeaderSuggestions.length > 0
+                            ? (prev - 1 + assistantLeaderSuggestions.length) %
+                              assistantLeaderSuggestions.length
+                            : 0
+                        );
+                      } else if (e.key === 'Enter' && assistantLeaderSuggestions.length > 0) {
+                        const target = assistantLeaderSuggestions[assistantHighlightIdx];
+                        if (target) {
+                          e.preventDefault();
+                          handleSelectAssistantLeader(target);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setAssistantDropdownOpen(false);
+                      }
+                    }}
+                    autoComplete="off"
+                    className={`w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border ${
+                      groupErrors.assistantLeader
+                        ? 'border-rose-500'
+                        : assistantLeaderResolution.status === 'matched'
+                        ? 'border-emerald-500/80'
+                        : 'border-[#E9EBF5] dark:border-[#2D2D55]'
+                    } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]`}
                   />
+
+                  {assistantDropdownOpen && (
+                    <div
+                      id="assistant-leader-member-listbox"
+                      role="listbox"
+                      className="absolute left-0 right-0 top-[62px] z-30 max-h-48 overflow-y-auto rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xl p-1 space-y-0.5"
+                    >
+                      {members.length === 0 ? (
+                        <div className="p-2.5 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          No enrolled members available yet.
+                        </div>
+                      ) : assistantLeaderSuggestions.length === 0 ? (
+                        <div className="p-2.5 text-[11px] text-rose-600 dark:text-rose-400">
+                          No other member matches "{groupAssistant}".
+                        </div>
+                      ) : (
+                        assistantLeaderSuggestions.map((m, idx) => {
+                          const fullName = getMemberFullName(m);
+                          const memberCode = getCanonicalMemberId(m);
+                          const isSelected = assistantLeaderResolution.member?.id === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                handleSelectAssistantLeader(m);
+                              }}
+                              className={`w-full px-2.5 py-2 rounded-lg text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                idx === assistantHighlightIdx || isSelected
+                                  ? 'bg-[#EFEDFF] dark:bg-[#2A2A55]'
+                                  : 'hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <MemberAvatar
+                                  src={m.imageUrl}
+                                  name={fullName}
+                                  initials={m.avatarInitials}
+                                  sizeClass="w-6 h-6"
+                                  textClass="text-[9px] font-bold"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                    {fullName}
+                                  </div>
+                                  <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                                    {m.department || m.homeCellGroup || m.groupName || 'Congregation'}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className="font-mono text-[10px] text-[#6D5CF2] dark:text-[#8C7DFF] whitespace-nowrap shrink-0 tabular-nums">
+                                {memberCode}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {assistantLeaderResolution.status === 'matched' && assistantLeaderResolution.member ? (
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1 tabular-nums">
+                      <UserCheck className="w-3 h-3 shrink-0" />
+                      <span>
+                        Verified member · <span className="font-mono">{getCanonicalMemberId(assistantLeaderResolution.member)}</span>
+                      </span>
+                    </p>
+                  ) : groupErrors.assistantLeader ? (
+                    <p className="text-[10px] text-rose-500 mt-1">{groupErrors.assistantLeader}</p>
+                  ) : groupAssistant.trim() ? (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                      Select an enrolled member or clear to remove assistant leader.
+                    </p>
+                  ) : null}
                 </div>
               </div>
+
+              {editingGroupId && hasLeadershipChangedInModal && (
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Reason / Note for Leadership Change (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Annual leadership rotation, handover, new appointment"
+                    value={leaderChangeReason}
+                    onChange={(e) => setLeaderChangeReason(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#6D5CF2]/40 text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                  <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Recorded permanently in the Leadership Change History for {groupCategory.replace('_', ' ')}s.
+                  </p>
+                </div>
+              )}
 
               {/* Schedule Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2587,21 +3639,35 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
               </div>
 
+              {groupErrors.form && (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                  {groupErrors.form}
+                </div>
+              )}
+
               {/* Action Buttons */}
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
                 <button
                   type="button"
                   onClick={() => setIsGroupModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white"
+                  disabled={isSavingGroup}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white disabled:opacity-60"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  disabled={isSavingGroup}
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95 disabled:opacity-60 whitespace-nowrap"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>{editingGroupId ? 'Update Group' : 'Save Group'}</span>
+                  <span>
+                    {isSavingGroup
+                      ? 'Validating & Saving...'
+                      : editingGroupId
+                      ? 'Update Group'
+                      : 'Save Group'}
+                  </span>
                 </button>
               </div>
             </form>
