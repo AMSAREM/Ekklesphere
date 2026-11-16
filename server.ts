@@ -51,6 +51,11 @@ import {
   sendResendEmail,
 } from './src/server/communicationsService.ts';
 import { getMemberPortfolio, isPastoralOfficerOrLeader } from './src/constants/portfolios.ts';
+import {
+  isValidGroupCategorySlug,
+  normalizeIncomingGroupCategory,
+  sanitizeCustomGroupCategories,
+} from './src/shared/groupCategories.ts';
 
 // Fail closed at startup in production if JWT_SECRET, SUPABASE_URL, or SUPABASE_SERVICE_ROLE_KEY are missing.
 assertProductionAuthConfig();
@@ -1318,6 +1323,20 @@ const SystemSettingsPatchSchema = z.object({
   emailFromAddress: z.string().trim().max(200).optional(),
   emailSenderName: z.string().trim().max(160).optional(),
   enablePushNotifications: z.boolean().optional(),
+  customGroupCategories: z
+    .array(
+      z.object({
+        id: z.string().trim().max(64).optional(),
+        label: z.string().trim().min(1).max(48),
+        pluralLabel: z.string().trim().max(56).optional(),
+        description: z.string().trim().max(100).optional(),
+        color: z.enum(['indigo', 'emerald', 'sky', 'violet', 'amber', 'rose', 'teal']).optional(),
+        isBuiltIn: z.boolean().optional(),
+        createdAt: z.string().trim().max(40).optional(),
+      })
+    )
+    .max(50)
+    .optional(),
 });
 
 const TestSmsGatewaySchema = z.object({
@@ -1347,9 +1366,19 @@ const BroadcastDispatchSchema = z.object({
   body: z.string().trim().min(1, 'Message body is required.').max(4000),
 });
 
+const ChurchGroupCategorySchema = z
+  .string()
+  .trim()
+  .min(1, 'Group category is required.')
+  .max(64, 'Group category must be 64 characters or fewer.')
+  .transform((val) => normalizeIncomingGroupCategory(val) || '')
+  .refine((val) => isValidGroupCategorySlug(val), {
+    message: 'Group category must contain letters, numbers, hyphens, or underscores.',
+  });
+
 const ChurchGroupCreateSchema = z.object({
   name: z.string().trim().min(1, 'Group name is required.').max(160),
-  category: z.enum(['ministry', 'fellowship', 'cell_group']),
+  category: ChurchGroupCategorySchema,
   leaderName: z.string().trim().min(1, 'Primary leader name is required.').max(160),
   leaderMemberId: z.string().trim().max(120).optional().nullable(),
   leaderPhone: z.string().trim().max(64).optional().nullable(),
@@ -1403,7 +1432,14 @@ app.put(
     }
 
     try {
-      const result = await platformStore.saveSystemSettings(req.organizationId!, parsed.data, {
+      const { customGroupCategories: rawCustomCategories, ...restPatch } = parsed.data;
+      const sanitizedPatch = {
+        ...restPatch,
+        ...(rawCustomCategories !== undefined
+          ? { customGroupCategories: sanitizeCustomGroupCategories(rawCustomCategories) }
+          : {}),
+      };
+      const result = await platformStore.saveSystemSettings(req.organizationId!, sanitizedPatch, {
         id: req.user?.id,
         email: req.user?.email,
         role: req.user?.role,
@@ -1445,7 +1481,14 @@ app.patch(
     }
 
     try {
-      const result = await platformStore.saveSystemSettings(req.organizationId!, parsed.data, {
+      const { customGroupCategories: rawCustomCategories, ...restPatch } = parsed.data;
+      const sanitizedPatch = {
+        ...restPatch,
+        ...(rawCustomCategories !== undefined
+          ? { customGroupCategories: sanitizeCustomGroupCategories(rawCustomCategories) }
+          : {}),
+      };
+      const result = await platformStore.saveSystemSettings(req.organizationId!, sanitizedPatch, {
         id: req.user?.id,
         email: req.user?.email,
         role: req.user?.role,
@@ -1913,9 +1956,9 @@ app.get(
     try {
       const rawCategory = typeof req.query.category === 'string' ? req.query.category.trim() : 'all';
       const category =
-        rawCategory === 'ministry' || rawCategory === 'fellowship' || rawCategory === 'cell_group'
-          ? rawCategory
-          : 'all';
+        rawCategory === 'all' || !rawCategory
+          ? 'all'
+          : normalizeIncomingGroupCategory(rawCategory) || 'all';
       const rawRole = typeof req.query.role === 'string' ? req.query.role.trim() : 'all';
       const role =
         rawRole === 'primary_leader' || rawRole === 'assistant_leader' ? rawRole : 'all';

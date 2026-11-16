@@ -15,7 +15,9 @@ import {
   SystemSettings,
   ChurchGroup,
   ChurchGroupCategory,
+  ChurchGroupCategoryDefinition,
   ChurchGroupLeadershipHistoryEntry,
+  GroupCategoryColor,
   Person,
   ConsolePlan,
   LicenseEvaluationResult,
@@ -24,6 +26,18 @@ import {
   BillingCycle,
   PaymentMethod,
 } from '../../types/ekklesphere';
+import {
+  BUILT_IN_GROUP_CATEGORIES,
+  CUSTOM_GROUP_CATEGORY_PRESETS,
+  GROUP_CATEGORY_COLOR_OPTIONS,
+  getAllGroupCategories,
+  getGroupCategoryMeta,
+  getGroupCategoryStyles,
+  isDepartmentLikeCategory,
+  normalizeGroupCategorySlug,
+  pluralizeCategoryLabel,
+  sanitizeCustomGroupCategories,
+} from '../../shared/groupCategories';
 import {
   Building2,
   Radio,
@@ -269,13 +283,48 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     }
   }, [systemSettings, hasChanges]);
 
+  React.useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      customGroupCategories: sanitizeCustomGroupCategories(systemSettings.customGroupCategories),
+    }));
+  }, [systemSettings.customGroupCategories]);
+
+  const customGroupCategories = useMemo(
+    () => sanitizeCustomGroupCategories(systemSettings.customGroupCategories),
+    [systemSettings.customGroupCategories]
+  );
+
+  const allGroupCategories = useMemo(
+    () => getAllGroupCategories(customGroupCategories, churchGroups, leadershipHistory),
+    [customGroupCategories, churchGroups, leadershipHistory]
+  );
+
   // Groups Management Local States
-  const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | 'ministry' | 'fellowship' | 'cell_group'>('all');
+  const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | ChurchGroupCategory>('all');
   const [groupFilterStatus, setGroupFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [groupSearchQuery, setGroupSearchQuery] = useState('');
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [viewingMembersGroup, setViewingMembersGroup] = useState<ChurchGroup | null>(null);
+
+  // Custom Group Category Creation & Management States
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [catLabel, setCatLabel] = useState('');
+  const [catPluralLabel, setCatPluralLabel] = useState('');
+  const [catDescription, setCatDescription] = useState('');
+  const [catColor, setCatColor] = useState<GroupCategoryColor>('violet');
+  const [catError, setCatError] = useState<string | null>(null);
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+
+  // Inline Quick Category Creator inside Add/Edit Group Modal
+  const [showInlineCategoryCreator, setShowInlineCategoryCreator] = useState(false);
+  const [inlineCatLabel, setInlineCatLabel] = useState('');
+  const [inlineCatDesc, setInlineCatDesc] = useState('');
+  const [inlineCatColor, setInlineCatColor] = useState<GroupCategoryColor>('violet');
+  const [inlineCatError, setInlineCatError] = useState<string | null>(null);
+  const [isSavingInlineCat, setIsSavingInlineCat] = useState(false);
 
   // Leadership Change History Local States
   const [historyFilterCategory, setHistoryFilterCategory] = useState<'all' | ChurchGroupCategory>('all');
@@ -425,6 +474,192 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     []
   );
 
+  const openCategoryModal = useCallback((catToEdit?: ChurchGroupCategoryDefinition) => {
+    if (catToEdit) {
+      setEditingCategoryId(catToEdit.id);
+      setCatLabel(catToEdit.label);
+      setCatPluralLabel(catToEdit.pluralLabel || pluralizeCategoryLabel(catToEdit.label));
+      setCatDescription(catToEdit.description || '');
+      setCatColor(catToEdit.color || 'violet');
+    } else {
+      setEditingCategoryId(null);
+      setCatLabel('');
+      setCatPluralLabel('');
+      setCatDescription('');
+      setCatColor('violet');
+    }
+    setCatError(null);
+    setIsSavingCategory(false);
+    setIsCategoryModalOpen(true);
+  }, []);
+
+  const handleSaveCustomCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSettingsAdmin) {
+      showToast('Only administrators can create or edit group categories.');
+      return;
+    }
+
+    const cleanLabel = catLabel.trim().replace(/\s+/g, ' ');
+    if (!cleanLabel) {
+      setCatError('Category name is required (e.g. Department, Month Born).');
+      return;
+    }
+
+    const targetSlug = editingCategoryId || normalizeGroupCategorySlug(cleanLabel);
+    if (!targetSlug) {
+      setCatError('Enter a valid category name containing letters or numbers.');
+      return;
+    }
+
+    if (BUILT_IN_GROUP_CATEGORIES.some((b) => b.id === targetSlug)) {
+      setCatError(`"${cleanLabel}" matches a built-in category. Choose a distinct name.`);
+      return;
+    }
+
+    if (!editingCategoryId && customGroupCategories.some((c) => c.id === targetSlug)) {
+      setCatError(`Category "${cleanLabel}" already exists.`);
+      return;
+    }
+
+    const nextEntry: ChurchGroupCategoryDefinition = {
+      id: targetSlug,
+      label: cleanLabel.slice(0, 48),
+      pluralLabel: (catPluralLabel.trim() || pluralizeCategoryLabel(cleanLabel)).slice(0, 56),
+      description: (catDescription.trim() || 'Custom Category').slice(0, 100),
+      color: catColor,
+      isBuiltIn: false,
+      createdAt:
+        customGroupCategories.find((c) => c.id === targetSlug)?.createdAt ||
+        new Date().toISOString(),
+    };
+
+    const nextCustomList = editingCategoryId
+      ? customGroupCategories.map((c) => (c.id === editingCategoryId ? nextEntry : c))
+      : [...customGroupCategories, nextEntry];
+
+    setIsSavingCategory(true);
+    setCatError(null);
+    try {
+      const ok = await updateSystemSettings({ customGroupCategories: nextCustomList });
+      if (!ok) {
+        setCatError('Could not save category to database. Please try again.');
+        return;
+      }
+      showToast(
+        editingCategoryId
+          ? `Category "${nextEntry.label}" updated`
+          : `Category "${nextEntry.label}" created`
+      );
+      setEditingCategoryId(null);
+      setCatLabel('');
+      setCatPluralLabel('');
+      setCatDescription('');
+      setCatColor('violet');
+    } finally {
+      setIsSavingCategory(false);
+    }
+  };
+
+  const handleDeleteCustomCategory = async (categoryId: string) => {
+    if (!isSettingsAdmin) {
+      showToast('Only administrators can remove custom categories.');
+      return;
+    }
+    const groupsUsingCategory = churchGroups.filter((g) => g.category === categoryId).length;
+    if (groupsUsingCategory > 0) {
+      setCatError(
+        `Cannot delete this category while ${groupsUsingCategory} group${
+          groupsUsingCategory === 1 ? '' : 's'
+        } are assigned to it. Reassign those groups first.`
+      );
+      return;
+    }
+
+    const target = customGroupCategories.find((c) => c.id === categoryId);
+    const nextCustomList = customGroupCategories.filter((c) => c.id !== categoryId);
+    setIsSavingCategory(true);
+    setCatError(null);
+    try {
+      const ok = await updateSystemSettings({ customGroupCategories: nextCustomList });
+      if (!ok) {
+        setCatError('Could not delete category from database.');
+        return;
+      }
+      if (groupFilterCategory === categoryId) setGroupFilterCategory('all');
+      if (historyFilterCategory === categoryId) setHistoryFilterCategory('all');
+      if (groupCategory === categoryId) setGroupCategory('cell_group');
+      showToast(`Removed category "${target?.label || categoryId}"`);
+    } finally {
+      setIsSavingCategory(false);
+    }
+  };
+
+  const handleInlineCreateCategory = async () => {
+    if (!isSettingsAdmin) {
+      showToast('Only administrators can create group categories.');
+      return;
+    }
+    const cleanLabel = inlineCatLabel.trim().replace(/\s+/g, ' ');
+    if (!cleanLabel) {
+      setInlineCatError('Enter a category name (e.g. Department or Month Born).');
+      return;
+    }
+
+    const slug = normalizeGroupCategorySlug(cleanLabel);
+    if (!slug) {
+      setInlineCatError('Enter a valid category name with letters or numbers.');
+      return;
+    }
+    if (BUILT_IN_GROUP_CATEGORIES.some((b) => b.id === slug)) {
+      setGroupCategory(slug);
+      setShowInlineCategoryCreator(false);
+      setInlineCatLabel('');
+      setInlineCatDesc('');
+      setInlineCatError(null);
+      return;
+    }
+    const existing = customGroupCategories.find((c) => c.id === slug);
+    if (existing) {
+      setGroupCategory(existing.id);
+      setShowInlineCategoryCreator(false);
+      setInlineCatLabel('');
+      setInlineCatDesc('');
+      setInlineCatError(null);
+      return;
+    }
+
+    const nextEntry: ChurchGroupCategoryDefinition = {
+      id: slug,
+      label: cleanLabel.slice(0, 48),
+      pluralLabel: pluralizeCategoryLabel(cleanLabel).slice(0, 56),
+      description: (inlineCatDesc.trim() || 'Custom Category').slice(0, 100),
+      color: inlineCatColor,
+      isBuiltIn: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    setIsSavingInlineCat(true);
+    setInlineCatError(null);
+    try {
+      const ok = await updateSystemSettings({
+        customGroupCategories: [...customGroupCategories, nextEntry],
+      });
+      if (!ok) {
+        setInlineCatError('Could not save custom category.');
+        return;
+      }
+      setGroupCategory(nextEntry.id);
+      setShowInlineCategoryCreator(false);
+      setInlineCatLabel('');
+      setInlineCatDesc('');
+      setInlineCatError(null);
+      showToast(`Category "${nextEntry.label}" added and selected`);
+    } finally {
+      setIsSavingInlineCat(false);
+    }
+  };
+
   const openAddGroupModal = useCallback((category: ChurchGroupCategory = 'cell_group', prefillName?: string) => {
     setEditingGroupId(null);
     setGroupName(prefillName || '');
@@ -443,6 +678,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     setGroupDescription('');
     setGroupActive(true);
     setGroupErrors({});
+    setShowInlineCategoryCreator(false);
+    setInlineCatLabel('');
+    setInlineCatDesc('');
+    setInlineCatError(null);
     setLeaderDropdownOpen(false);
     setAssistantDropdownOpen(false);
     setLeaderHighlightIdx(0);
@@ -481,6 +720,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       setGroupDescription(group.description);
       setGroupActive(group.active);
       setGroupErrors({});
+      setShowInlineCategoryCreator(false);
+      setInlineCatLabel('');
+      setInlineCatDesc('');
+      setInlineCatError(null);
       setLeaderDropdownOpen(false);
       setAssistantDropdownOpen(false);
       setLeaderHighlightIdx(0);
@@ -1047,58 +1290,58 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   };
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-200">
+    <div className="space-y-4 sm:space-y-5 w-full min-w-0 animate-in fade-in duration-200">
       {/* Top Header Card */}
-      <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+      <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 sm:gap-4 min-w-0">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
             <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
               System & Campus Parameters
             </span>
-            <span className="text-[#666A86] dark:text-[#A9ACC8]">·</span>
+            <span className="text-[#666A86] dark:text-[#A9ACC8]" aria-hidden="true">·</span>
             <span className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
               Ghana Act 843 Compliant
             </span>
           </div>
-          <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
+          <h2 className="text-lg sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
             System Settings
           </h2>
-          <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-xl">
+          <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-xl leading-relaxed">
             Configure church profile, PostGIS geofence radii, BLE signal thresholds, pastoral care alert rules, and communications gateways.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap lg:justify-end shrink-0">
           {hasChanges && (
-            <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-xl flex items-center gap-1 border border-amber-500/20">
-              <AlertCircle className="w-3.5 h-3.5" />
+            <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1.5 rounded-xl flex items-center gap-1 border border-amber-500/20 whitespace-nowrap">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               Unsaved changes
             </span>
           )}
           <button
             type="button"
             onClick={handleReset}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+            className={`min-h-[38px] px-3 sm:px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               confirmReset
                 ? 'bg-rose-600 text-white border-rose-600'
                 : 'bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-slate-200 dark:hover:bg-white/10 text-[#666A86] dark:text-[#A9ACC8] border-[#E9EBF5] dark:border-[#2D2D55]'
             }`}
           >
-            <RotateCcw className="w-3.5 h-3.5" />
+            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
             <span>{confirmReset ? 'Click Again to Confirm Reset' : 'Reset Defaults'}</span>
           </button>
           <button
             type="button"
             disabled={isSyncingSystemSettings}
             onClick={() => handleSave()}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-60 ${
+            className={`min-h-[38px] px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-sm disabled:opacity-60 ${
               hasChanges
-                ? 'bg-[#6D5CF2] hover:bg-[#5b4be0] text-white scale-102'
+                ? 'bg-[#6D5CF2] hover:bg-[#5b4be0] text-white'
                 : 'bg-[#6D5CF2]/90 hover:bg-[#6D5CF2] text-white'
             }`}
           >
-            <Save className="w-3.5 h-3.5" />
+            <Save className="w-3.5 h-3.5 shrink-0" />
             <span>{isSyncingSystemSettings ? 'Saving...' : 'Save Settings'}</span>
           </button>
           {onClose && (
@@ -1106,7 +1349,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               type="button"
               onClick={onClose}
               aria-label="Close Settings"
-              className="p-2 rounded-xl text-[#666A86] hover:text-[#1D1B3A] dark:text-[#A9ACC8] dark:hover:text-white bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-slate-200 dark:hover:bg-white/10 border border-[#E9EBF5] dark:border-[#2D2D55] transition-all cursor-pointer"
+              className="min-h-[38px] min-w-[38px] p-2 rounded-xl text-[#666A86] hover:text-[#1D1B3A] dark:text-[#A9ACC8] dark:hover:text-white bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-slate-200 dark:hover:bg-white/10 border border-[#E9EBF5] dark:border-[#2D2D55] transition-all flex items-center justify-center cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1115,32 +1358,41 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       </div>
 
       {/* Settings Navigation Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+      <div
+        role="tablist"
+        aria-label="System Settings Navigation"
+        className="grid grid-cols-2 sm:grid-cols-4 xl:flex xl:flex-wrap items-stretch xl:items-center gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-white/80 dark:bg-[#1D1D3D]/80 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs w-full min-w-0"
+      >
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'general'}
           onClick={() => setActiveTab('general')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'general'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <Building2 className="w-3.5 h-3.5" />
-          <span>Campus Profile</span>
+          <Building2 className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Campus Profile</span>
         </button>
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'groups'}
           onClick={() => setActiveTab('groups')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'groups'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <Users className="w-3.5 h-3.5" />
-          <span>Ministries & Cell Groups</span>
+          <Users className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Ministries &amp; Cell Groups</span>
           <span
-            className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+            className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold shrink-0 tabular-nums ${
               activeTab === 'groups'
                 ? 'bg-white/20 text-white'
                 : 'bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF]'
@@ -1151,81 +1403,96 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
         </button>
 
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'proximity'}
           onClick={() => setActiveTab('proximity')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'proximity'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <Radio className="w-3.5 h-3.5" />
-          <span>Proximity & Geofencing</span>
+          <Radio className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Proximity &amp; Geofencing</span>
         </button>
 
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'pastoral'}
           onClick={() => setActiveTab('pastoral')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'pastoral'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <HeartHandshake className="w-3.5 h-3.5" />
-          <span>Pastoral Care Rules</span>
+          <HeartHandshake className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Pastoral Care Rules</span>
         </button>
 
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'privacy'}
           onClick={() => setActiveTab('privacy')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'privacy'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <ShieldCheck className="w-3.5 h-3.5" />
-          <span>Privacy & Governance</span>
+          <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Privacy &amp; Governance</span>
         </button>
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'gateways'}
           onClick={() => setActiveTab('gateways')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'gateways'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <Send className="w-3.5 h-3.5" />
-          <span>SMS & Paystack Gateways</span>
+          <Send className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">SMS &amp; Paystack Gateways</span>
         </button>
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'staff'}
           onClick={() => setActiveTab('staff')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'staff'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <Shield className="w-3.5 h-3.5" />
-          <span>Users &amp; Credentials</span>
+          <Shield className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Users &amp; Credentials</span>
         </button>
 
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'billing'}
           onClick={() => setActiveTab('billing')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+          className={`min-h-[40px] min-w-0 flex items-center justify-start xl:justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'billing'
               ? 'bg-[#6D5CF2] text-white shadow-xs'
-              : 'bg-white dark:bg-[#1D1D3D] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55]'
+              : 'bg-[#F6F7FC]/70 dark:bg-[#14142E]/70 xl:bg-transparent xl:dark:bg-transparent text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA] hover:bg-[#F6F7FC] dark:hover:bg-[#14142E]'
           }`}
         >
-          <CreditCard className="w-3.5 h-3.5" />
-          <span>Plan &amp; Upgrade</span>
+          <CreditCard className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Plan &amp; Upgrade</span>
           {licenseEval?.status === 'trial' && (
             <span
-              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold shrink-0 ${
                 activeTab === 'billing'
                   ? 'bg-white/20 text-white'
                   : 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
@@ -1369,56 +1636,72 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
         {/* TAB 2: Ministries, Fellowships & Cell Groups Management */}
         {activeTab === 'groups' && (
-          <div className="space-y-5 animate-in fade-in duration-200">
+          <div className="space-y-4 sm:space-y-5 min-w-0 animate-in fade-in duration-200">
             {/* Top Overview & Action Header Card */}
-            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-7 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="w-2 h-2 rounded-full bg-[#6D5CF2]" />
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs min-w-0">
+              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 sm:pb-5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-[#6D5CF2] shrink-0" />
                     <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                      Congregational Structure & Leadership
+                      Congregational Structure &amp; Leadership
                     </span>
-                    <span className="text-[#666A86] dark:text-[#A9ACC8]">·</span>
-                    <span className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                    <span className="text-[#666A86] dark:text-[#A9ACC8]" aria-hidden="true">·</span>
+                    <span className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] truncate">
                       {formData.campusName || systemSettings.campusName}
                     </span>
                   </div>
                   <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
-                    <Users className="w-5 h-5 text-[#6D5CF2]" />
-                    <span>Ministries, Fellowships & Cell Groups</span>
+                    <Users className="w-5 h-5 text-[#6D5CF2] shrink-0" />
+                    <span>Ministries, Departments &amp; Group Categories</span>
                   </h3>
                   <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-2xl leading-relaxed">
-                    Administrate church functional departments, demographic fellowships, and neighborhood home cell small groups. Leadership, schedules, and venues flow directly into Congregation &amp; Ministry Analytics.
+                    Administrate ministries, departments, fellowships, cell groups, month-born bands, and custom categories. Leadership, schedules, and categories flow directly into Congregation &amp; Ministry Analytics.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-2 flex-wrap xl:justify-end shrink-0">
                   <button
                     type="button"
                     onClick={() => requestOpenAnalytics({ lens: 'ministries' })}
-                    className="bg-[#EFEDFF] dark:bg-[#2A2A55] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="min-h-[38px] bg-[#EFEDFF] dark:bg-[#2A2A55] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl px-3 sm:px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
                   >
-                    <BarChart3 className="w-3.5 h-3.5" />
+                    <BarChart3 className="w-3.5 h-3.5 shrink-0" />
                     <span>Ministry Analytics</span>
                   </button>
+                  {isSettingsAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => openCategoryModal()}
+                      className="min-h-[38px] bg-[#F6F7FC] dark:bg-[#14142E] hover:border-[#6D5CF2] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] rounded-xl px-3 sm:px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
+                      <span>
+                        Categories ({allGroupCategories.length})
+                      </span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => openAddGroupModal('cell_group')}
-                    className="bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap shrink-0 active:scale-95"
+                    onClick={() =>
+                      openAddGroupModal(
+                        groupFilterCategory !== 'all' ? groupFilterCategory : 'cell_group'
+                      )
+                    }
+                    className="min-h-[38px] bg-[#6D5CF2] hover:bg-[#5b4be0] text-white rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-95"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Plus className="w-3.5 h-3.5 shrink-0" />
                     <span>Add New Group</span>
                   </button>
                 </div>
               </div>
 
-              {/* Group Metric KPI Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5 tabular-nums">
+              {/* Group Metric KPI Cards (Built-in + Admin Custom Categories) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3.5 mt-4 sm:mt-5 tabular-nums">
                 {/* 1. Total Groups & Leadership Coverage */}
                 <div
                   onClick={() => setGroupFilterCategory('all')}
-                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                  className={`min-w-0 p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
                     groupFilterCategory === 'all'
                       ? 'bg-[#EFEDFF]/60 dark:bg-[#2A2A55]/40 border-[#6D5CF2]'
                       : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/50'
@@ -1434,84 +1717,54 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                     <span className="truncate">
-                      {structureAnalytics.leadership.distinctLeadersCount} leaders ·{' '}
-                      {structureAnalytics.leadership.leadershipCoveragePct}% roster covered
+                      {allGroupCategories.length} categories ·{' '}
+                      {structureAnalytics.leadership.leadershipCoveragePct}% covered
                     </span>
                   </div>
                 </div>
 
-                {/* 2. Ministries */}
-                <div
-                  onClick={() => setGroupFilterCategory('ministry')}
-                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
-                    groupFilterCategory === 'ministry'
-                      ? 'bg-[#EFEDFF]/60 dark:bg-[#2A2A55]/40 border-[#6D5CF2]'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                    <span className="font-semibold">Ministries</span>
-                    <span className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
-                      Departments
-                    </span>
-                  </div>
-                  <div className="font-mono text-2xl font-extrabold text-[#6D5CF2] dark:text-[#8C7DFF] mt-1">
-                    {churchGroups.filter((g) => g.category === 'ministry').length}
-                  </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
-                    {structureAnalytics.leadership.unconfiguredDepartmentsCount > 0
-                      ? `${structureAnalytics.leadership.unconfiguredDepartmentsCount} roster dept(s) need lead`
-                      : `${structureAnalytics.namedDepartmentsCount} active departments tracked`}
-                  </div>
-                </div>
+                {allGroupCategories.map((cat) => {
+                  const catCount = churchGroups.filter((g) => g.category === cat.id).length;
+                  const styles = getGroupCategoryStyles(cat.color);
+                  const isActive = groupFilterCategory === cat.id;
+                  const subNote =
+                    cat.id === 'ministry'
+                      ? structureAnalytics.leadership.unconfiguredDepartmentsCount > 0
+                        ? `${structureAnalytics.leadership.unconfiguredDepartmentsCount} roster dept(s) need lead`
+                        : `${structureAnalytics.namedDepartmentsCount} active departments tracked`
+                      : cat.id === 'fellowship'
+                      ? `${structureAnalytics.leadership.coLedGroupsCount} co-led across structure`
+                      : cat.id === 'cell_group'
+                      ? unconfiguredRosterGroups.length > 0
+                        ? `${unconfiguredRosterGroups.length} roster group(s) unconfigured`
+                        : 'All roster cells configured'
+                      : `${catCount} configured group${catCount === 1 ? '' : 's'}`;
 
-                {/* 3. Fellowships */}
-                <div
-                  onClick={() => setGroupFilterCategory('fellowship')}
-                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
-                    groupFilterCategory === 'fellowship'
-                      ? 'bg-sky-50 dark:bg-sky-950/30 border-sky-400'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-sky-400/50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                    <span className="font-semibold">Fellowships</span>
-                    <span className="text-[11px] font-bold text-sky-700 dark:text-sky-300">
-                      Demographic
-                    </span>
-                  </div>
-                  <div className="font-mono text-2xl font-extrabold text-sky-600 dark:text-sky-400 mt-1">
-                    {churchGroups.filter((g) => g.category === 'fellowship').length}
-                  </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
-                    {structureAnalytics.leadership.coLedGroupsCount} co-led across structure
-                  </div>
-                </div>
-
-                {/* 4. Cell Groups */}
-                <div
-                  onClick={() => setGroupFilterCategory('cell_group')}
-                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
-                    groupFilterCategory === 'cell_group'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-500'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] hover:border-emerald-500/50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                    <span className="font-semibold">Cell Groups</span>
-                    <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
-                      Home Cells
-                    </span>
-                  </div>
-                  <div className="font-mono text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
-                    {churchGroups.filter((g) => g.category === 'cell_group').length}
-                  </div>
-                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
-                    {unconfiguredRosterGroups.length > 0
-                      ? `${unconfiguredRosterGroups.length} roster group(s) unconfigured`
-                      : 'All roster cells configured'}
-                  </div>
-                </div>
+                  return (
+                    <div
+                      key={cat.id}
+                      onClick={() => setGroupFilterCategory(cat.id)}
+                      className={`min-w-0 p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer ${
+                        isActive
+                          ? styles.kpiActiveClass
+                          : `bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] ${styles.kpiHoverClass}`
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                        <span className="font-semibold truncate">{cat.pluralLabel || cat.label}</span>
+                        <span className={`text-[11px] font-bold truncate shrink-0 ${styles.kpiLabelClass}`}>
+                          {cat.description || (cat.isBuiltIn ? cat.label : 'Custom')}
+                        </span>
+                      </div>
+                      <div className={`font-mono text-2xl font-extrabold mt-1 ${styles.kpiValueClass}`}>
+                        {catCount}
+                      </div>
+                      <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                        {subNote}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1565,13 +1818,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             )}
 
             {/* Filter, Search & Quick Category Selector Toolbar */}
-            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-3.5 sm:p-4 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3 min-w-0">
               {/* Category Filter Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+              <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                 <button
                   type="button"
                   onClick={() => setGroupFilterCategory('all')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  className={`min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                     groupFilterCategory === 'all'
                       ? 'bg-[#6D5CF2] text-white shadow-xs'
                       : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
@@ -1579,51 +1832,45 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 >
                   All ({churchGroups.length})
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setGroupFilterCategory('ministry')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                    groupFilterCategory === 'ministry'
-                      ? 'bg-[#6D5CF2] text-white shadow-xs'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
-                  }`}
-                >
-                  Ministries ({churchGroups.filter((g) => g.category === 'ministry').length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setGroupFilterCategory('fellowship')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                    groupFilterCategory === 'fellowship'
-                      ? 'bg-[#6D5CF2] text-white shadow-xs'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
-                  }`}
-                >
-                  Fellowships ({churchGroups.filter((g) => g.category === 'fellowship').length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setGroupFilterCategory('cell_group')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                    groupFilterCategory === 'cell_group'
-                      ? 'bg-[#6D5CF2] text-white shadow-xs'
-                      : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
-                  }`}
-                >
-                  Cell Groups ({churchGroups.filter((g) => g.category === 'cell_group').length})
-                </button>
+                {allGroupCategories.map((cat) => {
+                  const count = churchGroups.filter((g) => g.category === cat.id).length;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setGroupFilterCategory(cat.id)}
+                      className={`min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        groupFilterCategory === cat.id
+                          ? 'bg-[#6D5CF2] text-white shadow-xs'
+                          : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
+                      }`}
+                    >
+                      {cat.pluralLabel || cat.label} ({count})
+                    </button>
+                  );
+                })}
+                {isSettingsAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => openCategoryModal()}
+                    className="min-h-[34px] px-2.5 py-1.5 rounded-xl text-xs font-bold border border-dashed border-[#6D5CF2]/50 text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-all whitespace-nowrap cursor-pointer inline-flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3 shrink-0" />
+                    <span>New Category</span>
+                  </button>
+                )}
               </div>
 
               {/* Search & Status Filter */}
-              <div className="flex items-center gap-2 flex-1 md:flex-initial">
-                <div className="relative flex-1 sm:w-64">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full xl:w-auto shrink-0">
+                <div className="relative flex-1 sm:w-64 min-w-0">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
                   <input
                     type="text"
                     placeholder="Search by name, leader, location..."
                     value={groupSearchQuery}
                     onChange={(e) => setGroupSearchQuery(e.target.value)}
-                    className="w-full pl-8 pr-8 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    className="w-full min-h-[38px] pl-8 pr-8 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                   {groupSearchQuery && (
                     <button
@@ -1639,7 +1886,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 <select
                   value={groupFilterStatus}
                   onChange={(e) => setGroupFilterStatus(e.target.value as any)}
-                  className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-semibold"
+                  className="w-full sm:w-auto min-h-[38px] px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-semibold"
                 >
                   <option value="all">All Statuses</option>
                   <option value="active">Active Only</option>
@@ -1649,7 +1896,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             </div>
 
             {/* Groups Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
               {churchGroups
                 .filter((group) => {
                   if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
@@ -1669,27 +1916,21 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   const enrolledMembers = getGroupMembers(group.name);
                   const liveMetrics = groupMetricsByName.get(normalizeSettingLabel(group.name).toLowerCase());
                   const hasAssignedLead = isAssignedLeaderName(group.leaderName);
-                  const isMinistry = group.category === 'ministry';
-                  const isFellowship = group.category === 'fellowship';
+                  const catMeta = getGroupCategoryMeta(group.category, customGroupCategories);
+                  const catStyles = getGroupCategoryStyles(catMeta.color);
 
                   return (
                     <div
                       key={group.id}
-                      className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col justify-between hover:shadow-md transition-all group"
+                      className="min-w-0 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col justify-between hover:shadow-md transition-all group"
                     >
                       <div>
                         {/* Top Badges & Status Toggle */}
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${
-                              isMinistry
-                                ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-[#2A2A55] dark:text-[#8C7DFF]'
-                                : isFellowship
-                                ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
-                                : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
-                            }`}
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${catStyles.badgeClass}`}
                           >
-                            {isMinistry ? 'Ministry' : isFellowship ? 'Fellowship' : 'Cell Group'}
+                            {catMeta.label}
                           </span>
 
                           <div className="flex items-center gap-1.5">
@@ -1831,8 +2072,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       </div>
 
                         {/* Card Footer with Members Count & Actions */}
-                      <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
                           <button
                             type="button"
                             onClick={() => setViewingMembersGroup(group)}
@@ -1845,7 +2086,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                             type="button"
                             onClick={() =>
                               requestOpenAnalytics({
-                                lens: group.category === 'ministry' ? 'departments' : 'ministries',
+                                lens: isDepartmentLikeCategory(group.category) ? 'departments' : 'ministries',
                                 searchQuery: group.name,
                                 categoryFilter: group.category,
                               })
@@ -1941,14 +2182,13 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               </div>
             )}
 
-            {/* Leadership Change History Panel (All Categories: Ministries, Fellowships, Cell Groups) */}
+            {/* Leadership Change History Panel (All Categories: Built-in + Custom) */}
             {(() => {
-              const categoryCounts = {
-                all: leadershipHistory.length,
-                ministry: leadershipHistory.filter((h) => h.category === 'ministry').length,
-                fellowship: leadershipHistory.filter((h) => h.category === 'fellowship').length,
-                cell_group: leadershipHistory.filter((h) => h.category === 'cell_group').length,
-              };
+              const historyCountByCat = new Map<string, number>();
+              for (const h of leadershipHistory) {
+                const key = String(h.category || 'cell_group').toLowerCase();
+                historyCountByCat.set(key, (historyCountByCat.get(key) || 0) + 1);
+              }
 
               const groupOptionsMap = new Map<string, { id: string; name: string; category: ChurchGroupCategory }>();
               for (const g of churchGroups) {
@@ -1984,7 +2224,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               });
 
               const formatCategoryText = (cat: ChurchGroupCategory) =>
-                cat === 'ministry' ? 'Ministry' : cat === 'fellowship' ? 'Fellowship' : 'Cell Group';
+                getGroupCategoryMeta(cat, customGroupCategories).label;
 
               const formatActionText = (action: ChurchGroupLeadershipHistoryEntry['action']) => {
                 switch (action) {
@@ -2004,16 +2244,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               return (
                 <div
                   ref={leadershipHistorySectionRef}
-                  className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-5 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-4"
+                  className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs space-y-4 min-w-0"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
                         <History className="w-4 h-4 text-[#6D5CF2] shrink-0" />
                         <span>Leadership Change History (All Categories)</span>
                       </h4>
                       <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                        Verified audit trail of primary and assistant leadership changes across Ministries, Fellowships, and Cell Groups.
+                        Verified audit trail of primary and assistant leadership changes across all built-in and custom group categories.
                       </p>
                     </div>
 
@@ -2021,7 +2261,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       type="button"
                       onClick={() => refreshLeadershipHistory()}
                       disabled={isLoadingLeadershipHistory}
-                      className="px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+                      className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60 self-start sm:self-auto"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLeadershipHistory ? 'animate-spin' : ''}`} />
                       <span>Refresh Log</span>
@@ -2029,16 +2269,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   </div>
 
                   {/* Category Tabs & Filters */}
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-1">
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 tabular-nums">
-                      {(
-                        [
-                          { id: 'all', label: 'All Categories', count: categoryCounts.all },
-                          { id: 'ministry', label: 'Ministries', count: categoryCounts.ministry },
-                          { id: 'fellowship', label: 'Fellowships', count: categoryCounts.fellowship },
-                          { id: 'cell_group', label: 'Cell Groups', count: categoryCounts.cell_group },
-                        ] as const
-                      ).map((tab) => (
+                  <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 min-w-0 tabular-nums">
+                      {[
+                        { id: 'all' as const, label: 'All Categories', count: leadershipHistory.length },
+                        ...allGroupCategories.map((cat) => ({
+                          id: cat.id,
+                          label: cat.pluralLabel || cat.label,
+                          count: historyCountByCat.get(cat.id) || 0,
+                        })),
+                      ].map((tab) => (
                         <button
                           key={tab.id}
                           type="button"
@@ -2046,7 +2286,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                             setHistoryFilterCategory(tab.id);
                             setHistoryFilterGroupId('all');
                           }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                          className={`min-h-[32px] px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
                             historyFilterCategory === tab.id
                               ? 'bg-[#6D5CF2] text-white'
                               : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
@@ -2057,12 +2297,12 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       ))}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2 w-full xl:w-auto shrink-0">
                       <select
                         value={historyFilterGroupId}
                         onChange={(e) => setHistoryFilterGroupId(e.target.value)}
                         aria-label="Filter leadership history by group"
-                        className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2] max-w-[200px]"
+                        className="w-full sm:w-auto sm:max-w-[200px] min-h-[36px] px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                       >
                         <option value="all">All Groups</option>
                         {groupOptions.map((g) => (
@@ -2076,7 +2316,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                         value={historyFilterRole}
                         onChange={(e) => setHistoryFilterRole(e.target.value as any)}
                         aria-label="Filter leadership history by role"
-                        className="px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                        className="w-full sm:w-auto min-h-[36px] px-2.5 py-1.5 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                       >
                         <option value="all">All Roles</option>
                         <option value="primary_leader">Primary Leader</option>
@@ -2147,11 +2387,9 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                                 <td className="py-2.5 px-3 whitespace-nowrap">
                                   <span
                                     className={`text-[11px] font-bold ${
-                                      entry.category === 'ministry'
-                                        ? 'text-[#6D5CF2] dark:text-[#8C7DFF]'
-                                        : entry.category === 'fellowship'
-                                        ? 'text-sky-600 dark:text-sky-400'
-                                        : 'text-emerald-600 dark:text-emerald-400'
+                                      getGroupCategoryStyles(
+                                        getGroupCategoryMeta(entry.category, customGroupCategories).color
+                                      ).textClass
                                     }`}
                                   >
                                     {formatCategoryText(entry.category)}
@@ -3279,58 +3517,147 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             <form onSubmit={handleSaveGroup} className="space-y-4 text-xs">
               {/* Category Selection Cards */}
               <div>
-                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
-                  Group Category <span className="text-rose-500">*</span>
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setGroupCategory('cell_group')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      groupCategory === 'cell_group'
-                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-900 dark:text-emerald-200'
-                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
-                    }`}
-                  >
-                    <div className="font-bold flex items-center justify-between">
-                      <span>Cell Group</span>
-                      {groupCategory === 'cell_group' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
-                    </div>
-                    <div className="text-[10px] mt-0.5 opacity-80">Home Small Group</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setGroupCategory('ministry')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      groupCategory === 'ministry'
-                        ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
-                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
-                    }`}
-                  >
-                    <div className="font-bold flex items-center justify-between">
-                      <span>Ministry</span>
-                      {groupCategory === 'ministry' && <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />}
-                    </div>
-                    <div className="text-[10px] mt-0.5 opacity-80">Department Unit</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setGroupCategory('fellowship')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      groupCategory === 'fellowship'
-                        ? 'bg-sky-50 dark:bg-sky-950/40 border-sky-400 text-sky-900 dark:text-sky-200'
-                        : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
-                    }`}
-                  >
-                    <div className="font-bold flex items-center justify-between">
-                      <span>Fellowship</span>
-                      {groupCategory === 'fellowship' && <Check className="w-3.5 h-3.5 text-sky-600" />}
-                    </div>
-                    <div className="text-[10px] mt-0.5 opacity-80">Demographic Wing</div>
-                  </button>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Group Category <span className="text-rose-500">*</span>
+                  </label>
+                  {isSettingsAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowInlineCategoryCreator((prev) => !prev);
+                        setInlineCatError(null);
+                      }}
+                      className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{showInlineCategoryCreator ? 'Close Category Form' : 'Create New Category'}</span>
+                    </button>
+                  )}
                 </div>
+
+                {showInlineCategoryCreator && isSettingsAdmin && (
+                  <div className="mb-3 p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#6D5CF2]/40 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        Quick Create Custom Category
+                      </span>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {CUSTOM_GROUP_CATEGORY_PRESETS.filter(
+                          (p) => !customGroupCategories.some((c) => c.id === normalizeGroupCategorySlug(p.label))
+                        )
+                          .slice(0, 2)
+                          .map((preset) => (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => {
+                                setInlineCatLabel(preset.label);
+                                setInlineCatDesc(preset.description);
+                                setInlineCatColor(preset.color);
+                                setInlineCatError(null);
+                              }}
+                              className="px-2 py-0.5 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[10px] font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] hover:border-[#6D5CF2] cursor-pointer"
+                            >
+                              + {preset.label}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Category Name (e.g. Department, Month Born)"
+                        value={inlineCatLabel}
+                        onChange={(e) => {
+                          setInlineCatLabel(e.target.value);
+                          setInlineCatError(null);
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Short Subtitle (e.g. Birth Month Wing)"
+                        value={inlineCatDesc}
+                        onChange={(e) => setInlineCatDesc(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                          Color:
+                        </span>
+                        {GROUP_CATEGORY_COLOR_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setInlineCatColor(opt.id)}
+                            title={opt.label}
+                            className={`w-4 h-4 rounded-full ${opt.swatchClass} cursor-pointer transition-transform ${
+                              inlineCatColor === opt.id
+                                ? 'ring-2 ring-offset-1 ring-[#6D5CF2] scale-110'
+                                : 'opacity-70 hover:opacity-100'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleInlineCreateCategory}
+                        disabled={isSavingInlineCat}
+                        className="px-3 py-1 rounded-lg bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-[11px] font-bold cursor-pointer disabled:opacity-60"
+                      >
+                        {isSavingInlineCat ? 'Saving...' : 'Save Category'}
+                      </button>
+                    </div>
+                    {inlineCatError && (
+                      <p className="text-[10px] text-rose-500 font-semibold">{inlineCatError}</p>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {allGroupCategories.map((cat) => {
+                    const styles = getGroupCategoryStyles(cat.color);
+                    const selected = groupCategory === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          setGroupCategory(cat.id);
+                          if (groupErrors.category || groupErrors.form) {
+                            setGroupErrors((prev) => {
+                              const { category: _c, form: _f, ...rest } = prev;
+                              return rest;
+                            });
+                          }
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          selected
+                            ? styles.modalCardActiveClass
+                            : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                        }`}
+                      >
+                        <div className="font-bold flex items-center justify-between gap-1">
+                          <span className="truncate">{cat.label}</span>
+                          {selected && <Check className={`w-3.5 h-3.5 shrink-0 ${styles.modalCheckClass}`} />}
+                        </div>
+                        <div className="text-[10px] mt-0.5 opacity-80 truncate">
+                          {cat.description || (cat.isBuiltIn ? cat.label : 'Custom Category')}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {groupErrors.category && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold mt-1.5">
+                    {groupErrors.category}
+                  </p>
+                )}
               </div>
 
               {/* Group Name */}
@@ -3728,7 +4055,9 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#6D5CF2]/40 text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                    Recorded permanently in the Leadership Change History for {groupCategory.replace('_', ' ')}s.
+                    Recorded permanently in the Leadership Change History for{' '}
+                    {getGroupCategoryMeta(groupCategory, customGroupCategories).pluralLabel ||
+                      getGroupCategoryMeta(groupCategory, customGroupCategories).label}.
                   </p>
                 </div>
               )}
@@ -3818,9 +4147,9 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
               </div>
 
-              {groupErrors.form && (
+              {(groupErrors.form || groupErrors.category) && (
                 <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
-                  {groupErrors.form}
+                  {groupErrors.form || groupErrors.category}
                 </div>
               )}
 
@@ -3869,17 +4198,17 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             <div className="flex items-center justify-between pb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                      viewingMembersGroup.category === 'ministry'
-                        ? 'bg-[#EFEDFF] text-[#6D5CF2] dark:bg-[#2A2A55] dark:text-[#8C7DFF]'
-                        : viewingMembersGroup.category === 'fellowship'
-                        ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
-                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
-                    }`}
-                  >
-                    {viewingMembersGroup.category.replace('_', ' ')}
-                  </span>
+                  {(() => {
+                    const meta = getGroupCategoryMeta(viewingMembersGroup.category, customGroupCategories);
+                    const styles = getGroupCategoryStyles(meta.color);
+                    return (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${styles.badgeClass}`}
+                      >
+                        {meta.label}
+                      </span>
+                    );
+                  })()}
                   <span className="text-xs text-[#666A86] dark:text-[#A9ACC8]">·</span>
                   <span className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                     Leader: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{viewingMembersGroup.leaderName}</strong>
@@ -3980,6 +4309,260 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: Create & Manage Congregational Group Categories */}
+      {isCategoryModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div
+            className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-[#E9EBF5] dark:border-[#2D2D55] animate-in zoom-in-95 duration-150 my-auto max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  {editingCategoryId ? 'Edit Group Category' : 'Manage Group Categories'}
+                </h3>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Create distinct categories such as Departments, Month Born groups, or Age Bands.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(false)}
+                className="p-1.5 rounded-xl text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCustomCategory} className="space-y-3.5 text-xs pb-5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+              {!editingCategoryId && (
+                <div>
+                  <span className="block text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] mb-1.5">
+                    Quick Templates
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CUSTOM_GROUP_CATEGORY_PRESETS.map((preset) => {
+                      const slug = normalizeGroupCategorySlug(preset.label);
+                      const alreadyAdded = customGroupCategories.some((c) => c.id === slug);
+                      return (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          disabled={alreadyAdded}
+                          onClick={() => {
+                            setCatLabel(preset.label);
+                            setCatPluralLabel(preset.pluralLabel);
+                            setCatDescription(preset.description);
+                            setCatColor(preset.color);
+                            setCatError(null);
+                          }}
+                          className={`px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-colors ${
+                            alreadyAdded
+                              ? 'bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-400 cursor-not-allowed'
+                              : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:border-[#6D5CF2] cursor-pointer'
+                          }`}
+                        >
+                          {alreadyAdded ? `✓ ${preset.label}` : `+ ${preset.label}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Category Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Department, Month Born"
+                    value={catLabel}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setCatLabel(next);
+                      if (!editingCategoryId && !catPluralLabel.trim()) {
+                        setCatPluralLabel('');
+                      }
+                      setCatError(null);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Plural Tab Label
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={catLabel ? pluralizeCategoryLabel(catLabel) : 'e.g. Departments'}
+                    value={catPluralLabel}
+                    onChange={(e) => setCatPluralLabel(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                  Description / Classification Note
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Operational department unit or Birth-month fellowship"
+                  value={catDescription}
+                  onChange={(e) => setCatDescription(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+              </div>
+
+              <div>
+                <span className="block font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  Accent Color
+                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {GROUP_CATEGORY_COLOR_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setCatColor(opt.id)}
+                      className={`px-2.5 py-1 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+                        catColor === opt.id
+                          ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
+                          : 'bg-[#F6F7FC] dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                      }`}
+                    >
+                      <span className={`w-2.5 h-2.5 rounded-full ${opt.swatchClass}`} />
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {catError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                  {catError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                {editingCategoryId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCategoryId(null);
+                      setCatLabel('');
+                      setCatPluralLabel('');
+                      setCatDescription('');
+                      setCatColor('violet');
+                      setCatError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white cursor-pointer"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSavingCategory}
+                  className="px-4 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>
+                    {isSavingCategory
+                      ? 'Saving...'
+                      : editingCategoryId
+                      ? 'Update Category'
+                      : 'Create Category'}
+                  </span>
+                </button>
+              </div>
+            </form>
+
+            {/* Configured Categories Directory */}
+            <div className="pt-4 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  Configured Categories ({allGroupCategories.length})
+                </span>
+                <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                  Synced to Supabase
+                </span>
+              </div>
+
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                {allGroupCategories.map((cat) => {
+                  const styles = getGroupCategoryStyles(cat.color);
+                  const count = churchGroups.filter((g) => g.category === cat.id).length;
+                  const isCustomConfigured = customGroupCategories.some((c) => c.id === cat.id);
+
+                  return (
+                    <div
+                      key={cat.id}
+                      className="p-2.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${styles.badgeClass}`}>
+                            {cat.label}
+                          </span>
+                          <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+                            {count} {count === 1 ? 'group' : 'groups'}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                          {cat.description || cat.pluralLabel}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {cat.isBuiltIn ? (
+                          <span className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8] px-2">
+                            Built-in
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openCategoryModal(cat)}
+                              className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] cursor-pointer"
+                              title="Edit category"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            {isCustomConfigured && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomCategory(cat.id)}
+                                disabled={isSavingCategory || count > 0}
+                                className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={
+                                  count > 0
+                                    ? `Cannot delete while ${count} group(s) use this category`
+                                    : 'Delete custom category'
+                                }
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>

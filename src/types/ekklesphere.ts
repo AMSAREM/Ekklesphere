@@ -384,9 +384,31 @@ export interface SystemSettings {
   emailFromAddress?: string;
   emailSenderName?: string;
   enablePushNotifications: boolean;
+  customGroupCategories?: ChurchGroupCategoryDefinition[];
 }
 
-export type ChurchGroupCategory = 'ministry' | 'fellowship' | 'cell_group';
+export type BuiltInChurchGroupCategory = 'ministry' | 'fellowship' | 'cell_group';
+
+export type ChurchGroupCategory = BuiltInChurchGroupCategory | (string & {});
+
+export type GroupCategoryColor =
+  | 'indigo'
+  | 'emerald'
+  | 'sky'
+  | 'violet'
+  | 'amber'
+  | 'rose'
+  | 'teal';
+
+export interface ChurchGroupCategoryDefinition {
+  id: string;
+  label: string;
+  pluralLabel?: string;
+  description?: string;
+  color?: GroupCategoryColor;
+  isBuiltIn?: boolean;
+  createdAt?: string;
+}
 
 export type ChurchGroupLeadershipRole = 'primary_leader' | 'assistant_leader';
 

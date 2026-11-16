@@ -32,8 +32,9 @@ import {
   QrCode,
 } from 'lucide-react';
 import { DashboardAnalyticsResult } from '../../utils/dashboardAnalytics';
-import { ChurchGroupCategory } from '../../types/ekklesphere';
+import { ChurchGroupCategory, ChurchGroupCategoryDefinition } from '../../types/ekklesphere';
 import { SettingsGroupIntent } from '../../utils/settingsConnections';
+import { getAllGroupCategories, getGroupCategoryMeta } from '../../shared/groupCategories';
 
 export type AnalyticsLens = 'all' | 'departments' | 'ministries' | 'demographics' | 'services';
 
@@ -57,13 +58,8 @@ interface DashboardDeepAnalyticsProps {
   externalFilterQuery?: string;
   externalCategoryFilter?: 'all' | ChurchGroupCategory;
   externalFilterNonce?: number;
+  customGroupCategories?: ChurchGroupCategoryDefinition[];
 }
-
-const CATEGORY_LABELS: Record<ChurchGroupCategory, string> = {
-  ministry: 'Ministry',
-  fellowship: 'Fellowship',
-  cell_group: 'Cell Group',
-};
 
 const BINARY_STATUS_LABELS: Record<'live' | 'closed', { label: string; colorClass: string; dotClass: string }> = {
   live: {
@@ -98,12 +94,26 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   externalFilterQuery,
   externalCategoryFilter,
   externalFilterNonce,
+  customGroupCategories,
 }) => {
   const [filterQuery, setFilterQuery] = useState('');
   const [groupCategoryFilter, setGroupCategoryFilter] = useState<'all' | ChurchGroupCategory>('all');
   const [ministryViewMode, setMinistryViewMode] = useState<'groups' | 'leaders'>('groups');
   const [deptSortKey, setDeptSortKey] = useState<'members' | 'turnout'>('members');
   const [confirmDeleteSvcId, setConfirmDeleteSvcId] = useState<string | null>(null);
+
+  const allCategories = useMemo(
+    () => getAllGroupCategories(customGroupCategories, analytics.groups),
+    [customGroupCategories, analytics.groups]
+  );
+
+  const customCategoriesCount = Math.max(
+    0,
+    analytics.groupCounts.total -
+      analytics.groupCounts.ministries -
+      analytics.groupCounts.fellowships -
+      analytics.groupCounts.cellGroups
+  );
 
   useEffect(() => {
     if (!externalFilterNonce) return;
@@ -304,6 +314,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
           </div>
           <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5 block">
             {analytics.groupCounts.ministries} min · {analytics.groupCounts.fellowships} fel · {analytics.groupCounts.cellGroups} cells
+            {customCategoriesCount > 0 ? ` · ${customCategoriesCount} custom` : ''}
           </span>
         </div>
 
@@ -674,7 +685,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                   Ministries, Fellowships &amp; Leadership Accountability
                 </h3>
                 <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                  Active campus ministries ({analytics.groupCounts.ministries}), fellowships ({analytics.groupCounts.fellowships}), and home cells ({analytics.groupCounts.cellGroups}) connected to pastoral leadership.
+                  Active ministries ({analytics.groupCounts.ministries}), fellowships ({analytics.groupCounts.fellowships}), cells ({analytics.groupCounts.cellGroups}){customCategoriesCount > 0 ? `, and custom groups (${customCategoriesCount})` : ''} connected to pastoral leadership.
                 </p>
               </div>
             </div>
@@ -707,15 +718,14 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
               </div>
 
               {ministryViewMode === 'groups' && (
-                <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
-                  {(
-                    [
-                      { id: 'all', label: `All (${analytics.groupCounts.total})` },
-                      { id: 'ministry', label: `Ministries (${analytics.groupCounts.ministries})` },
-                      { id: 'fellowship', label: `Fellowships (${analytics.groupCounts.fellowships})` },
-                      { id: 'cell_group', label: `Cells (${analytics.groupCounts.cellGroups})` },
-                    ] as const
-                  ).map((cat) => (
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] overflow-x-auto max-w-full scrollbar-none">
+                  {[
+                    { id: 'all' as const, label: `All (${analytics.groupCounts.total})` },
+                    ...allCategories.map((cat) => ({
+                      id: cat.id,
+                      label: `${cat.pluralLabel || cat.label} (${analytics.groupCounts.byCategory?.[cat.id] ?? 0})`,
+                    })),
+                  ].map((cat) => (
                     <button
                       key={cat.id}
                       type="button"
@@ -850,7 +860,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                                 >
                                   {grp.name}
                                   <span className="text-[#666A86] dark:text-[#A9ACC8]">
-                                    {' '}({grp.role === 'Co-Lead' ? 'Co' : CATEGORY_LABELS[grp.category]})
+                                    {' '}({grp.role === 'Co-Lead' ? 'Co' : getGroupCategoryMeta(grp.category, customGroupCategories).label})
                                   </span>
                                   {idx < leader.groups.length - 1 ? ',' : ''}
                                 </button>
@@ -1041,7 +1051,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                             <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                           </div>
                           <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5 truncate max-w-[200px]">
-                            {CATEGORY_LABELS[group.category]}
+                            {getGroupCategoryMeta(group.category, customGroupCategories).label}
                             {' · '}
                             <span className={group.active ? 'text-emerald-600 dark:text-emerald-400' : ''}>
                               {group.active ? 'Active' : 'Paused'}

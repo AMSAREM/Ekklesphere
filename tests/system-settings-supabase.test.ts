@@ -3,6 +3,8 @@ import request from 'supertest';
 import { app } from '../server';
 import { signToken, TEST_ANCHOR_ORGANIZATION_ID } from '../lib/auth';
 import { platformStore } from '../src/server/platformStore';
+import { mergeSelectableCellGroups, mergeSelectableDepartments } from '../src/utils/settingsConnections';
+import { computeDashboardAnalytics } from '../src/utils/dashboardAnalytics';
 
 describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Supabase API)', () => {
   beforeEach(() => {
@@ -881,6 +883,437 @@ describe('System Settings, Church Groups, Gateways & Audit Logs (Multi-Tenant Su
               h.reason === 'Annual ministry leadership rotation'
           )
         ).toBe(true);
+      } finally {
+        platformStore.setSupabaseTestHooks({ client: null });
+      }
+    });
+  });
+
+  describe('Admin Custom Group Categories (Departments, Month Born & Custom Wings)', () => {
+    it('allows admins to create custom categories, assign groups to them, track leadership history, and isolate tenants', async () => {
+      // 1. Non-admin cannot mutate system-level customGroupCategories
+      const pastorCatAttempt = await request(app)
+        .put('/api/system-settings')
+        .set('Authorization', `Bearer ${defaultOrgPastorToken}`)
+        .send({
+          customGroupCategories: [{ label: 'Department', color: 'violet' }],
+        });
+      expect(pastorCatAttempt.status).toBe(403);
+
+      // 2. Admin saves custom categories (Department + Month Born) while deduplicating built-in IDs cleanly
+      const saveCatRes = await request(app)
+        .put('/api/system-settings')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          customGroupCategories: [
+            { id: 'ministry', label: 'Ministry' }, // built-in should be skipped cleanly
+            {
+              label: 'Department',
+              pluralLabel: 'Departments',
+              description: 'Operational & Service Unit',
+              color: 'violet',
+            },
+            {
+              label: 'Month Born',
+              pluralLabel: 'Month Born Groups',
+              description: 'Birth Month Fellowship',
+              color: 'amber',
+            },
+          ],
+        });
+
+      expect(saveCatRes.status).toBe(200);
+      expect(saveCatRes.body.settings.customGroupCategories).toHaveLength(2);
+      expect(saveCatRes.body.settings.customGroupCategories).toEqual([
+        expect.objectContaining({
+          id: 'department',
+          label: 'Department',
+          pluralLabel: 'Departments',
+          description: 'Operational & Service Unit',
+          color: 'violet',
+          isBuiltIn: false,
+        }),
+        expect.objectContaining({
+          id: 'month_born',
+          label: 'Month Born',
+          pluralLabel: 'Month Born Groups',
+          description: 'Birth Month Fellowship',
+          color: 'amber',
+          isBuiltIn: false,
+        }),
+      ]);
+
+      // Verify GET /api/system-settings returns custom categories
+      const getCatRes = await request(app)
+        .get('/api/system-settings')
+        .set('Authorization', `Bearer ${defaultOrgPastorToken}`);
+      expect(getCatRes.status).toBe(200);
+      expect(getCatRes.body.settings.customGroupCategories).toHaveLength(2);
+
+      // Verify separate organisation stays isolated with empty customGroupCategories
+      const otherOrgReg = await request(app)
+        .post('/api/auth/register-organisation')
+        .set('X-Forwarded-For', '10.20.9.1')
+        .send({
+          organizationName: 'Cedar Assembly Kumasi',
+          orgType: 'church',
+          city: 'Kumasi',
+          country: 'Ghana',
+          adminFirstName: 'Samuel',
+          adminLastName: 'Osei',
+          email: 'admin@cedarassembly.org',
+          password: 'StrongPassword#2026',
+        });
+      expect(otherOrgReg.status).toBe(201);
+      const otherSettingsRes = await request(app)
+        .get('/api/system-settings')
+        .set('Authorization', `Bearer ${otherOrgReg.body.token}`);
+      expect(otherSettingsRes.status).toBe(200);
+      expect(otherSettingsRes.body.settings.customGroupCategories).toEqual([]);
+
+      // 3. Enroll leaders in default org & create groups under 'department' and 'month_born'
+      const m1 = await request(app)
+        .post('/api/members')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          firstName: 'Nana',
+          lastName: 'Adjei',
+          phoneE164: '+233240001122',
+          groupName: 'January Born',
+          department: 'Protocol Department',
+        });
+      expect(m1.status).toBe(201);
+
+      const m2 = await request(app)
+        .post('/api/members')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          firstName: 'Esi',
+          lastName: 'Badu',
+          phoneE164: '+233240003344',
+          groupName: 'January Born',
+          department: 'General Congregation',
+        });
+      expect(m2.status).toBe(201);
+
+      const deptGroupRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          name: 'Protocol Department',
+          category: 'department',
+          leaderName: 'Nana Adjei',
+          leaderMemberId: m1.body.id,
+          meetingDay: 'Sundays',
+          active: true,
+        });
+      expect(deptGroupRes.status).toBe(201);
+      expect(deptGroupRes.body.group.category).toBe('department');
+
+      const monthBornGroupRes = await request(app)
+        .post('/api/church-groups')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`)
+        .send({
+          name: 'January Born',
+          category: 'Month Born', // accepts label or normalized slug cleanly
+          leaderName: 'Esi Badu',
+          leaderMemberId: m2.body.id,
+          meetingDay: '1st Saturday Monthly',
+          active: true,
+        });
+      expect(monthBornGroupRes.status).toBe(201);
+      expect(monthBornGroupRes.body.group.category).toBe('month_born');
+
+      // 4. Filter leadership change history by custom category
+      const monthHistoryRes = await request(app)
+        .get('/api/church-groups/leadership-history?category=month_born')
+        .set('Authorization', `Bearer ${defaultOrgAdminToken}`);
+      expect(monthHistoryRes.status).toBe(200);
+      expect(monthHistoryRes.body.history).toHaveLength(1);
+      expect(monthHistoryRes.body.history[0]).toMatchObject({
+        groupName: 'January Born',
+        category: 'month_born',
+        newLeaderName: 'Esi Badu',
+        action: 'assigned',
+      });
+
+      // 5. Verify settingsConnections & dashboardAnalytics integrate custom categories cleanly
+      const groups = [deptGroupRes.body.group, monthBornGroupRes.body.group];
+      const selectableDepts = mergeSelectableDepartments(groups, []);
+      const selectableCells = mergeSelectableCellGroups(groups, []);
+      expect(selectableDepts).toContain('Protocol Department');
+      expect(selectableDepts).not.toContain('January Born');
+      expect(selectableCells).toContain('January Born');
+      expect(selectableCells).not.toContain('Protocol Department');
+
+      const analytics = computeDashboardAnalytics({
+        members: [m1.body, m2.body],
+        attendanceRecords: [],
+        services: [],
+        currentService: {
+          id: 'svc-1',
+          serviceId: 'svc-1',
+          campusId: 'site-1',
+          name: 'Sunday Service',
+          date: '2026-11-15',
+          startsAt: '08:30',
+          endsAt: '11:00',
+          status: 'closed',
+          expectedAttendance: 100,
+        },
+        churchGroups: groups,
+        followupTasks: [],
+        donations: [],
+        systemSettings: getCatRes.body.settings,
+      });
+      expect(analytics.groupCounts.byCategory.department).toBe(1);
+      expect(analytics.groupCounts.byCategory.month_born).toBe(1);
+    });
+
+    it('syncs custom categories to public.church_group_categories when available and handles pre-migration PGRST205 / 23514 errors cleanly', async () => {
+      const scopedAdminToken = signToken({
+        id: 'sys-admin-cat-table-test',
+        email: 'sysadmin@ekklesphere.church',
+        role: 'admin',
+        name: 'System Admin',
+        organization_id: TEST_ANCHOR_ORGANIZATION_ID,
+        tenant_id: TEST_ANCHOR_ORGANIZATION_ID,
+      });
+
+      const leaderMemberRes = await request(app)
+        .post('/api/members')
+        .set('Authorization', `Bearer ${scopedAdminToken}`)
+        .send({ firstName: 'Kwame', lastName: 'Bediako', phoneE164: '+233246000011', status: 'member' });
+      expect(leaderMemberRes.status).toBe(201);
+
+      const categoryTableRows: Record<string, any>[] = [];
+      const orgRowState: Record<string, any> = {
+        id: TEST_ANCHOR_ORGANIZATION_ID,
+        name: 'Ekklesphere Sanctuary',
+        settings: {},
+      };
+      let simulateMissingCategoryTable = false;
+
+      const fakeSupabase: any = {
+        from(table: string) {
+          if (table === 'organizations') {
+            return {
+              select() {
+                const chain: any = {
+                  eq() {
+                    return chain;
+                  },
+                  maybeSingle() {
+                    return Promise.resolve({ data: orgRowState, error: null });
+                  },
+                };
+                return chain;
+              },
+              update(patch: Record<string, any>) {
+                return {
+                  eq() {
+                    Object.assign(orgRowState, patch);
+                    return Promise.resolve({ error: null });
+                  },
+                };
+              },
+            };
+          }
+
+          if (table === 'sites') {
+            return {
+              select() {
+                const chain: any = {
+                  eq() {
+                    return chain;
+                  },
+                  order() {
+                    return Promise.resolve({ data: [], error: null });
+                  },
+                };
+                return chain;
+              },
+            };
+          }
+
+          if (table === 'church_group_categories') {
+            if (simulateMissingCategoryTable) {
+              const missingErr = {
+                code: 'PGRST205',
+                message: "Could not find the table 'public.church_group_categories' in the schema cache",
+              };
+              const missingChain: any = {
+                select() {
+                  return missingChain;
+                },
+                eq() {
+                  return missingChain;
+                },
+                order() {
+                  return Promise.resolve({ data: null, error: missingErr });
+                },
+                then(resolve: any) {
+                  return resolve({ data: null, error: missingErr });
+                },
+              };
+              return missingChain;
+            }
+
+            return {
+              select() {
+                const filters: Record<string, any> = {};
+                const chain: any = {
+                  eq(col: string, val: any) {
+                    filters[col] = val;
+                    return chain;
+                  },
+                  order() {
+                    const matched = categoryTableRows.filter((r) =>
+                      Object.entries(filters).every(([k, v]) => r[k] === v)
+                    );
+                    return Promise.resolve({ data: matched, error: null });
+                  },
+                  then(resolve: any) {
+                    const matched = categoryTableRows.filter((r) =>
+                      Object.entries(filters).every(([k, v]) => r[k] === v)
+                    );
+                    return resolve({ data: matched, error: null });
+                  },
+                };
+                return chain;
+              },
+              upsert(rows: Record<string, any>[]) {
+                for (const r of rows) {
+                  const idx = categoryTableRows.findIndex(
+                    (existing) =>
+                      existing.organization_id === r.organization_id && existing.slug === r.slug
+                  );
+                  if (idx >= 0) {
+                    categoryTableRows[idx] = { ...categoryTableRows[idx], ...r };
+                  } else {
+                    categoryTableRows.push({
+                      id: `cat-${categoryTableRows.length + 1}`,
+                      created_at: new Date().toISOString(),
+                      ...r,
+                    });
+                  }
+                }
+                return Promise.resolve({ error: null });
+              },
+              delete() {
+                const filters: Record<string, any> = {};
+                const chain: any = {
+                  eq(col: string, val: any) {
+                    filters[col] = val;
+                    return chain;
+                  },
+                  in(col: string, vals: any[]) {
+                    for (let i = categoryTableRows.length - 1; i >= 0; i--) {
+                      const row = categoryTableRows[i];
+                      const eqOk = Object.entries(filters).every(([k, v]) => row[k] === v);
+                      if (eqOk && vals.includes(row[col])) {
+                        categoryTableRows.splice(i, 1);
+                      }
+                    }
+                    return Promise.resolve({ error: null });
+                  },
+                };
+                return chain;
+              },
+            };
+          }
+
+          if (table === 'church_groups') {
+            return {
+              insert() {
+                return {
+                  select() {
+                    return {
+                      single() {
+                        return Promise.resolve({
+                          data: null,
+                          error: {
+                            code: '23514',
+                            message:
+                              'new row for relation "church_groups" violates check constraint "church_groups_category_check"',
+                          },
+                        });
+                      },
+                    };
+                  },
+                };
+              },
+            };
+          }
+
+          if (table === 'audit_log') {
+            return {
+              insert() {
+                return Promise.resolve({ error: null });
+              },
+            };
+          }
+
+          throw new Error(`Unexpected Supabase table accessed in test: ${table}`);
+        },
+      };
+
+      platformStore.setSupabaseTestHooks({ client: fakeSupabase });
+      try {
+        // 1. Saving custom categories dual-syncs into church_group_categories table & organizations.settings
+        const saveRes = await request(app)
+          .put('/api/system-settings')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            customGroupCategories: [
+              { label: 'Department', pluralLabel: 'Departments', description: 'Service Unit', color: 'violet' },
+              { label: 'Month Born', pluralLabel: 'Month Born Groups', description: 'Birth Cohort', color: 'amber' },
+            ],
+          });
+
+        expect(saveRes.status).toBe(200);
+        expect(categoryTableRows).toHaveLength(2);
+        expect(categoryTableRows.map((r) => r.slug)).toEqual(['department', 'month_born']);
+
+        // 2. Removing one custom category prunes it from church_group_categories cleanly
+        const pruneRes = await request(app)
+          .put('/api/system-settings')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            customGroupCategories: [
+              { label: 'Department', pluralLabel: 'Departments', description: 'Service Unit', color: 'violet' },
+            ],
+          });
+        expect(pruneRes.status).toBe(200);
+        expect(categoryTableRows.map((r) => r.slug)).toEqual(['department']);
+
+        // 3. Even if church_group_categories is missing (PGRST205), PUT & GET succeed via organizations.settings JSONB
+        simulateMissingCategoryTable = true;
+        const preMigrationSave = await request(app)
+          .put('/api/system-settings')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            customGroupCategories: [
+              { label: 'Department', color: 'violet' },
+              { label: 'Month Born', color: 'amber' },
+            ],
+          });
+        expect(preMigrationSave.status).toBe(200);
+        expect(preMigrationSave.body.settings.customGroupCategories).toHaveLength(2);
+
+        // 4. If church_groups still has old CHECK constraint (23514), API returns 400 field='category' migration guidance
+        const groupFailRes = await request(app)
+          .post('/api/church-groups')
+          .set('Authorization', `Bearer ${scopedAdminToken}`)
+          .send({
+            name: 'Media Department',
+            category: 'department',
+            leaderName: 'Kwame Bediako',
+            leaderMemberId: leaderMemberRes.body.id,
+          });
+        expect(groupFailRes.status).toBe(400);
+        expect(groupFailRes.body.field).toBe('category');
+        expect(groupFailRes.body.message).toMatch(/20261128000000_custom_group_categories\.sql/);
       } finally {
         platformStore.setSupabaseTestHooks({ client: null });
       }

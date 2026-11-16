@@ -101,6 +101,7 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   emailFromAddress: '',
   emailSenderName: '',
   enablePushNotifications: true,
+  customGroupCategories: [],
 };
 
 function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>): Person {

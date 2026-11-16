@@ -22,10 +22,15 @@ import {
 import { churchWallStore } from './churchWallStore.ts';
 import { resolveServiceWindow, type BinaryServiceStatus } from '../utils/serviceStatus.ts';
 import { buildAutoAssignAbsenteesPlan } from '../utils/settingsConnections.ts';
+import {
+  normalizeIncomingGroupCategory,
+  sanitizeCustomGroupCategories,
+} from '../shared/groupCategories.ts';
 import type {
   BillingCycle,
   ChurchGroup,
   ChurchGroupCategory,
+  ChurchGroupCategoryDefinition,
   ChurchGroupLeadershipAction,
   ChurchGroupLeadershipHistoryEntry,
   ChurchGroupLeadershipRole,
@@ -301,6 +306,7 @@ export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   emailFromAddress: '',
   emailSenderName: '',
   enablePushNotifications: true,
+  customGroupCategories: [],
 };
 
 const DEFAULT_PLANS: Record<LicenseTier, ConsolePlan> = {
@@ -3790,6 +3796,102 @@ class PlatformStore {
     return cleared;
   }
 
+  private isMissingGroupCategoriesTableError(error: { code?: string; message?: string } | null): boolean {
+    if (!error) return false;
+    const code = String(error.code || '').toUpperCase();
+    const msg = String(error.message || '');
+    return (
+      code === 'PGRST205' ||
+      code === '42P01' ||
+      /church_group_categories/i.test(msg) &&
+        (/schema cache/i.test(msg) || /does not exist/i.test(msg) || /could not find the table/i.test(msg))
+    );
+  }
+
+  private async readCustomGroupCategoriesFromTable(
+    sb: SupabaseClient,
+    orgId: string
+  ): Promise<ChurchGroupCategoryDefinition[] | null> {
+    const { data, error } = await sb
+      .from('church_group_categories')
+      .select('slug, label, plural_label, description, color, created_at')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      if (this.isMissingGroupCategoriesTableError(error)) {
+        return null;
+      }
+      console.warn('[Ekklesphere] Could not read church_group_categories:', error.message);
+      return null;
+    }
+
+    return sanitizeCustomGroupCategories(
+      (data || []).map((row: Record<string, any>) => ({
+        id: row.slug,
+        label: row.label,
+        pluralLabel: row.plural_label,
+        description: row.description,
+        color: row.color,
+        isBuiltIn: false,
+        createdAt: row.created_at,
+      }))
+    );
+  }
+
+  private async syncCustomGroupCategoriesToTable(
+    sb: SupabaseClient,
+    orgId: string,
+    categories: ChurchGroupCategoryDefinition[]
+  ): Promise<void> {
+    const sanitized = sanitizeCustomGroupCategories(categories);
+    const desiredSlugs = sanitized.map((c) => c.id);
+
+    const { data: existingRows, error: listErr } = await sb
+      .from('church_group_categories')
+      .select('slug')
+      .eq('organization_id', orgId);
+
+    if (listErr) {
+      if (!this.isMissingGroupCategoriesTableError(listErr)) {
+        console.warn('[Ekklesphere] Could not sync church_group_categories:', listErr.message);
+      }
+      return;
+    }
+
+    const removedSlugs = (existingRows || [])
+      .map((r: any) => String(r.slug || ''))
+      .filter((slug: string) => slug && !desiredSlugs.includes(slug));
+
+    if (removedSlugs.length > 0) {
+      const { error: delErr } = await sb
+        .from('church_group_categories')
+        .delete()
+        .eq('organization_id', orgId)
+        .in('slug', removedSlugs);
+      if (delErr && !this.isMissingGroupCategoriesTableError(delErr)) {
+        console.warn('[Ekklesphere] Could not prune church_group_categories:', delErr.message);
+      }
+    }
+
+    if (sanitized.length > 0) {
+      const rowsToUpsert = sanitized.map((cat) => ({
+        organization_id: orgId,
+        slug: cat.id,
+        label: cat.label,
+        plural_label: cat.pluralLabel,
+        description: cat.description || '',
+        color: cat.color || 'violet',
+      }));
+      const { error: upsertErr } = await sb
+        .from('church_group_categories')
+        .upsert(rowsToUpsert, { onConflict: 'organization_id,slug' });
+      if (upsertErr && !this.isMissingGroupCategoriesTableError(upsertErr)) {
+        console.warn('[Ekklesphere] Could not upsert church_group_categories:', upsertErr.message);
+      }
+    }
+  }
+
   public async getSystemSettings(organizationId: string): Promise<{
     settings: SystemSettings;
     configured: boolean;
@@ -3800,13 +3902,16 @@ class PlatformStore {
     const orgId = organizationId.toLowerCase();
     const sites = await this.getSitesForOrg(orgId);
     const activeSite = sites.find((s) => s.active) || sites[0] || null;
+    const sb = this.activeSupabase;
 
-    if (this.supabase) {
-      const { data: orgRow } = await this.supabase
+    if (sb) {
+      const { data: orgRow } = await sb
         .from('organizations')
         .select('*')
         .eq('id', orgId)
         .maybeSingle();
+
+      const tableCategories = await this.readCustomGroupCategoriesFromTable(sb, orgId);
 
       if (orgRow) {
         const raw =
@@ -3892,6 +3997,14 @@ class PlatformStore {
               : typeof orgRow.push_configured === 'boolean'
               ? orgRow.push_configured
               : DEFAULT_ORG_SYSTEM_SETTINGS.enablePushNotifications,
+          customGroupCategories: sanitizeCustomGroupCategories([
+            ...(tableCategories || []),
+            ...(Array.isArray(raw.custom_group_categories)
+              ? raw.custom_group_categories
+              : Array.isArray(raw.customGroupCategories)
+              ? raw.customGroupCategories
+              : []),
+          ]),
         };
 
         return {
@@ -3933,6 +4046,7 @@ class PlatformStore {
           }
         : {}),
       ...(memSettings || {}),
+      customGroupCategories: sanitizeCustomGroupCategories(memSettings?.customGroupCategories),
     };
 
     if (activeSite && Number.isFinite(activeSite.lat) && Number.isFinite(activeSite.lng)) {
@@ -4055,6 +4169,10 @@ class PlatformStore {
       autoAssignCellLeaders: Boolean(patch.autoAssignCellLeaders ?? current.autoAssignCellLeaders),
       requireExplicitConsent: Boolean(patch.requireExplicitConsent ?? current.requireExplicitConsent),
       enablePushNotifications: Boolean(patch.enablePushNotifications ?? current.enablePushNotifications),
+      customGroupCategories:
+        patch.customGroupCategories !== undefined
+          ? sanitizeCustomGroupCategories(patch.customGroupCategories)
+          : sanitizeCustomGroupCategories(current.customGroupCategories),
     };
 
     const hasExplicitCoords =
@@ -4082,13 +4200,21 @@ class PlatformStore {
     }
 
     const nowIso = new Date().toISOString();
+    const sb = this.activeSupabase;
 
-    if (this.supabase) {
-      const { data: existingOrg } = await this.supabase
+    if (sb) {
+      const { data: existingOrg, error: orgReadError } = await sb
         .from('organizations')
-        .select('name, settings')
+        .select('id, name, settings')
         .eq('id', orgId)
         .maybeSingle();
+
+      if (orgReadError) {
+        throw new Error(`Failed to read organization settings in Supabase: ${orgReadError.message}`);
+      }
+      if (!existingOrg) {
+        throw new Error(`Organization record "${orgId}" not found in Supabase.`);
+      }
 
       const existingJson =
         existingOrg?.settings && typeof existingOrg.settings === 'object'
@@ -4128,6 +4254,7 @@ class PlatformStore {
         email_sender_name: merged.emailSenderName || '',
         enable_push_notifications: merged.enablePushNotifications,
         push_configured: merged.enablePushNotifications,
+        custom_group_categories: merged.customGroupCategories || [],
       };
 
       const orgUpdate: Record<string, unknown> = {
@@ -4149,7 +4276,7 @@ class PlatformStore {
         updated_at: nowIso,
       };
 
-      let { error } = await this.supabase.from('organizations').update(orgUpdate).eq('id', orgId);
+      let { error } = await sb.from('organizations').update(orgUpdate).eq('id', orgId);
 
       for (let attempt = 0; attempt < 4 && error; attempt++) {
         const msg = error.message || '';
@@ -4158,7 +4285,7 @@ class PlatformStore {
           msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
         if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(orgUpdate, colMatch[1])) {
           delete orgUpdate[colMatch[1]];
-          const retry = await this.supabase.from('organizations').update(orgUpdate).eq('id', orgId);
+          const retry = await sb.from('organizations').update(orgUpdate).eq('id', orgId);
           error = retry.error;
           continue;
         }
@@ -4167,6 +4294,10 @@ class PlatformStore {
 
       if (error) {
         throw new Error(`Failed to save system settings in Supabase: ${error.message}`);
+      }
+
+      if (patch.customGroupCategories !== undefined) {
+        await this.syncCustomGroupCategoriesToTable(sb, orgId, merged.customGroupCategories || []);
       }
     } else {
       this.systemSettingsByOrg.set(orgId, merged);
@@ -4238,9 +4369,10 @@ class PlatformStore {
       churchName: org?.name || '',
     };
 
-    if (this.supabase) {
+    const sb = this.activeSupabase;
+    if (sb) {
       const nowIso = new Date().toISOString();
-      const { data: existingOrg } = await this.supabase
+      const { data: existingOrg } = await sb
         .from('organizations')
         .select('name, settings')
         .eq('id', orgId)
@@ -4278,6 +4410,7 @@ class PlatformStore {
         sms_gateway_provider: DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider,
         sms_sender_id: DEFAULT_ORG_SYSTEM_SETTINGS.smsSenderId,
         enable_push_notifications: DEFAULT_ORG_SYSTEM_SETTINGS.enablePushNotifications,
+        custom_group_categories: [],
       };
 
       const orgResetPatch: Record<string, unknown> = {
@@ -4295,7 +4428,7 @@ class PlatformStore {
         updated_at: nowIso,
       };
 
-      let { error } = await this.supabase.from('organizations').update(orgResetPatch).eq('id', orgId);
+      let { error } = await sb.from('organizations').update(orgResetPatch).eq('id', orgId);
       for (let attempt = 0; attempt < 3 && error; attempt++) {
         const msg = error.message || '';
         const colMatch =
@@ -4303,12 +4436,13 @@ class PlatformStore {
           msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
         if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(orgResetPatch, colMatch[1])) {
           delete orgResetPatch[colMatch[1]];
-          const retry = await this.supabase.from('organizations').update(orgResetPatch).eq('id', orgId);
+          const retry = await sb.from('organizations').update(orgResetPatch).eq('id', orgId);
           error = retry.error;
           continue;
         }
         break;
       }
+      await this.syncCustomGroupCategoriesToTable(sb, orgId, []);
     } else {
       this.systemSettingsByOrg.set(orgId, resetValues);
       this.premiseByOrg.delete(orgId);
@@ -4652,9 +4786,11 @@ class PlatformStore {
         .from('church_group_leadership_history')
         .insert(dbRows);
       if (error) {
-        if (this.isMissingLeadershipHistoryTableError(error)) {
+        const isCategoryConstraintError =
+          String(error.code || '') === '23514' && /category/i.test(String(error.message || ''));
+        if (this.isMissingLeadershipHistoryTableError(error) || isCategoryConstraintError) {
           console.warn(
-            '[Ekklesphere] church_group_leadership_history table not yet in Supabase schema cache; persisting transitions to audit_log fallback:',
+            '[Ekklesphere] church_group_leadership_history unable to accept entry directly; persisting transition to audit_log fallback:',
             error.message
           );
           for (const entry of normalizedEntries) {
@@ -4819,11 +4955,14 @@ class PlatformStore {
         ? payload.assistantLeaderMemberId
         : null;
 
+    const normalizedCategory =
+      normalizeIncomingGroupCategory(payload.category) || 'cell_group';
+
     if (sb) {
       const baseInsertPayload = {
         organization_id: orgId,
         name: payload.name.trim(),
-        category: payload.category,
+        category: normalizedCategory,
         leader_name: payload.leaderName.trim(),
         leader_phone: payload.leaderPhone?.trim() || null,
         leader_email: payload.leaderEmail?.trim() || null,
@@ -4862,6 +5001,14 @@ class PlatformStore {
       }
 
       if (error || !data) {
+        if (error && String(error.code || '') === '23514' && /category/i.test(String(error.message || ''))) {
+          const schemaErr: any = new Error(
+            'Your live Supabase database needs migration 20261128000000_custom_group_categories.sql applied to store custom group categories.'
+          );
+          schemaErr.status = 400;
+          schemaErr.field = 'category';
+          throw schemaErr;
+        }
         throw new Error(`Failed to create church group in Supabase: ${error?.message || 'Unknown error'}`);
       }
       created = this.mapSupabaseChurchGroupRow(data);
@@ -4875,7 +5022,7 @@ class PlatformStore {
       created = {
         id: randomUUID(),
         name: payload.name.trim(),
-        category: payload.category,
+        category: normalizedCategory,
         leaderName: payload.leaderName.trim(),
         leaderMemberId: payload.leaderMemberId?.trim() || undefined,
         leaderPhone: payload.leaderPhone?.trim() || undefined,
@@ -4995,7 +5142,9 @@ class PlatformStore {
 
       const dbPatch: Record<string, unknown> = { updated_at: nowIso };
       if (updates.name !== undefined) dbPatch.name = updates.name.trim();
-      if (updates.category !== undefined) dbPatch.category = updates.category;
+      if (updates.category !== undefined) {
+        dbPatch.category = normalizeIncomingGroupCategory(updates.category) || updates.category;
+      }
       if (updates.leaderName !== undefined) dbPatch.leader_name = updates.leaderName.trim();
       if (updates.leaderMemberId !== undefined) {
         dbPatch.leader_member_id =
@@ -5053,6 +5202,14 @@ class PlatformStore {
       }
 
       if (error) {
+        if (String(error.code || '') === '23514' && /category/i.test(String(error.message || ''))) {
+          const schemaErr: any = new Error(
+            'Your live Supabase database needs migration 20261128000000_custom_group_categories.sql applied to store custom group categories.'
+          );
+          schemaErr.status = 400;
+          schemaErr.field = 'category';
+          throw schemaErr;
+        }
         throw new Error(`Failed to update church group in Supabase: ${error.message}`);
       }
       if (!data) {
@@ -5082,6 +5239,10 @@ class PlatformStore {
       }
       existingGroup = { ...list[idx] };
       const { leadershipChangeReason: _ignoredReason, ...restUpdates } = updates;
+      if (restUpdates.category !== undefined) {
+        restUpdates.category =
+          normalizeIncomingGroupCategory(restUpdates.category) || restUpdates.category;
+      }
       updated = {
         ...list[idx],
         ...restUpdates,

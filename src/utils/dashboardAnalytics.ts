@@ -203,6 +203,7 @@ export interface DashboardAnalyticsResult {
     ministries: number;
     fellowships: number;
     cellGroups: number;
+    byCategory: Record<string, number>;
   };
   leadership: LeadershipAnalyticsSummary;
   serviceComparisons: ServiceComparisonRow[];
@@ -631,12 +632,19 @@ export function computeDashboardAnalytics(
     }))
     .sort((a, b) => b.totalMembers - a.totalMembers || b.turnoutPct - a.turnoutPct || a.name.localeCompare(b.name));
 
+  const byCategory: Record<string, number> = {};
+  for (const g of groups) {
+    const key = String(g.category || 'cell_group').toLowerCase();
+    byCategory[key] = (byCategory[key] || 0) + 1;
+  }
+
   const groupCounts = {
     total: groups.length,
     active: groups.filter((g) => g.active).length,
-    ministries: groups.filter((g) => g.category === 'ministry').length,
-    fellowships: groups.filter((g) => g.category === 'fellowship').length,
-    cellGroups: groups.filter((g) => g.category === 'cell_group').length,
+    ministries: byCategory.ministry || 0,
+    fellowships: byCategory.fellowship || 0,
+    cellGroups: byCategory.cell_group || 0,
+    byCategory,
   };
 
   // 3b. Congregational Structure & Leadership Accountability Rollup

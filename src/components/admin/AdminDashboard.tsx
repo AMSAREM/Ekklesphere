@@ -57,7 +57,7 @@ import {
 } from './AdminDashboardModals';
 import { ServiceQrModal, ServiceQrTarget } from './ServiceQrModal';
 import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
-import { Person } from '../../types/ekklesphere';
+import { ChurchGroupCategory, Person } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { ContactCallButton } from '../common/ContactCallButton';
 import { getImageFallbackUrls } from '../../utils/imageUrl';
@@ -160,7 +160,7 @@ export const AdminDashboard: React.FC = () => {
   const [analyticsLens, setAnalyticsLens] = useState<AnalyticsLens>('all');
   const [externalAnalyticsQuery, setExternalAnalyticsQuery] = useState<string | undefined>(undefined);
   const [externalAnalyticsCategory, setExternalAnalyticsCategory] = useState<
-    'all' | 'ministry' | 'fellowship' | 'cell_group' | undefined
+    'all' | ChurchGroupCategory | undefined
   >(undefined);
   const [externalAnalyticsNonce, setExternalAnalyticsNonce] = useState<number>(0);
   const analyticsSectionRef = useRef<HTMLDivElement>(null);
@@ -1481,6 +1481,7 @@ export const AdminDashboard: React.FC = () => {
                     externalFilterQuery={externalAnalyticsQuery}
                     externalCategoryFilter={externalAnalyticsCategory}
                     externalFilterNonce={externalAnalyticsNonce}
+                    customGroupCategories={systemSettings.customGroupCategories}
                     onAddMember={() => {
                       setEditingMember(null);
                       setIsAddMemberOpen(true);

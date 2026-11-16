@@ -11,6 +11,7 @@ import {
   isPastoralOfficerOrLeader,
   isSeniorPastoralPortfolio,
 } from '../constants/portfolios';
+import { isDepartmentLikeCategory } from '../shared/groupCategories';
 
 export type SettingsTabId =
   | 'general'
@@ -290,9 +291,9 @@ export function findMatchingChurchGroup(
     findByName(criteria.homeCellGroup || criteria.groupName);
 
   const ministryGroup =
-    findByName(criteria.department, ['ministry']) ||
+    findByName(criteria.department, ['ministry', 'department']) ||
     findByName(criteria.department) ||
-    findByName(criteria.groupName, ['ministry']);
+    findByName(criteria.groupName, ['ministry', 'department']);
 
   return { cellOrFellowshipGroup, ministryGroup };
 }
@@ -313,7 +314,7 @@ export function mergeSelectableDepartments(
   addUnique('General Congregation');
 
   churchGroups
-    .filter((g) => g.active !== false && g.category === 'ministry')
+    .filter((g) => g.active !== false && isDepartmentLikeCategory(g.category))
     .forEach((g) => addUnique(g.name));
 
   members.forEach((m) => addUnique(m.department));
@@ -339,7 +340,7 @@ export function mergeSelectableCellGroups(
   };
 
   churchGroups
-    .filter((g) => g.active !== false && (g.category === 'cell_group' || g.category === 'fellowship'))
+    .filter((g) => g.active !== false && !isDepartmentLikeCategory(g.category))
     .forEach((g) => addUnique(g.name));
 
   members.forEach((m) => {

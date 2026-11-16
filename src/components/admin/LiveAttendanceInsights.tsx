@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { AttendanceRecord, CheckinMethod, ChurchGroup, ChurchGroupCategory, Person } from '../../types/ekklesphere';
+import { isDepartmentLikeCategory } from '../../shared/groupCategories';
 import { isAssignedLeaderName, normalizeSettingLabel } from '../../utils/settingsConnections';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 import { VisitorTrendsAnalysis } from './VisitorTrendsAnalysis';
@@ -359,8 +360,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     const map = new Map<string, SegmentAccumulator>();
     const targetGroups = churchGroups.filter((g) =>
       groupDimension === 'department'
-        ? g.category === 'ministry'
-        : g.category === 'cell_group' || g.category === 'fellowship'
+        ? isDepartmentLikeCategory(g.category)
+        : !isDepartmentLikeCategory(g.category)
     );
 
     for (const grp of targetGroups) {
