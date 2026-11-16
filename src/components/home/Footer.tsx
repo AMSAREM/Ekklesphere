@@ -3,6 +3,7 @@
 
 import React from 'react';
 import type { Church } from '../../types/churchHome';
+import { BrandLogo } from '../common/BrandLogo';
 
 export interface FooterProps {
   church: Church;
@@ -92,9 +93,16 @@ export const Footer: React.FC<FooterProps> = ({
         </div>
 
         <div className="mt-10 flex flex-col justify-between gap-3 border-t border-white/10 pt-6 text-xs text-white/65 sm:flex-row sm:items-center">
-          <p>
-            © {year} {church.name}. All rights reserved.
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p>
+              © {year} {church.name}. All rights reserved.
+            </p>
+            <span className="text-white/30">·</span>
+            <span className="inline-flex items-center gap-2">
+              <span>Powered by</span>
+              <BrandLogo size="xs" surface="dark" />
+            </span>
+          </div>
           {[church.phone, church.email].filter(Boolean).length > 0 && (
             <p>
               {[church.phone, church.email].filter(Boolean).join(' · ')}

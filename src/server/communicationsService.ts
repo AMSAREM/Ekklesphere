@@ -248,6 +248,7 @@ export async function sendResendEmail(params: {
   subject: string;
   text: string;
   html?: string;
+  replyTo?: string;
   apiKey?: string;
   fetchImpl?: typeof fetch;
 }): Promise<ResendEmailResult> {
@@ -318,6 +319,7 @@ export async function sendResendEmail(params: {
           subject: params.subject,
           text: params.text,
           html: htmlBody,
+          ...(params.replyTo ? { reply_to: params.replyTo } : {}),
         }),
       });
       const data: any = await resp.json().catch(() => ({}));
@@ -356,6 +358,7 @@ export async function sendResendEmail(params: {
         subject: params.subject,
         text: params.text,
         html: htmlBody,
+        ...(params.replyTo ? { reply_to: params.replyTo } : {}),
       }));
       const resp = await doFetch('https://api.resend.com/emails/batch', {
         method: 'POST',

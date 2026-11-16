@@ -11,6 +11,7 @@ import {
   FileText,
   CheckCircle2,
 } from 'lucide-react';
+import { BrandLogo } from '../common/BrandLogo';
 
 export const HelpDocsModal: React.FC = () => {
   const { isHelpModalOpen, setIsHelpModalOpen, systemSettings } = useEkklesphere();
@@ -37,16 +38,14 @@ export const HelpDocsModal: React.FC = () => {
       <div className="relative w-full max-w-2xl max-h-[85vh] bg-white dark:bg-[#1A1A3A] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden text-[#1D1B3A] dark:text-[#F2F2FA]">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center">
-              <FileText className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 id="help-modal-title" className="text-base font-bold">
-                Ekklesphere Documentation & Guide
+          <div className="flex items-center gap-3">
+            <BrandLogo size="xs" surface="auto" />
+            <div className="border-l border-slate-200 dark:border-slate-700 pl-3">
+              <h2 id="help-modal-title" className="text-sm sm:text-base font-bold">
+                Documentation & Guide
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {systemSettings.churchName} · Operating System Architecture
+                {systemSettings.churchName || 'Ekklesphere'} · Operating System Architecture
               </p>
             </div>
           </div>

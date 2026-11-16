@@ -24,6 +24,7 @@ import { useEkklesphere } from '../../context/EkklesphereContext';
 import { getCanonicalMemberId, findMemberByScannedId } from './DigitalMemberCard';
 import { CameraQrScanner } from '../common/CameraQrScanner';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { parseServiceQrPayload } from '../../utils/serviceQr';
 
 interface MemberQrScannerModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   const {
     members,
     checkInPerson,
+    checkInWithServiceQr,
     attendanceRecords,
     showToast,
     currentService,
@@ -51,12 +53,19 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   } = useEkklesphere();
 
   const [activeMode, setActiveMode] = useState<'scanner' | 'my_code'>('scanner');
-  const [flashlightOn, setFlashlightOn] = useState(false);
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isScanning, setIsScanning] = useState(true);
+  const [isVerifyingServiceQr, setIsVerifyingServiceQr] = useState(false);
   const [scannedMember, setScannedMember] = useState<Person | null>(null);
-  const [scannedSessionList, setScannedSessionList] = useState<{ member: Person; time: string }[]>([]);
+  const [scannedServiceResult, setScannedServiceResult] = useState<{
+    ok: boolean;
+    message: string;
+    serviceName?: string;
+    alreadyCheckedIn?: boolean;
+  } | null>(null);
+  const [scannedSessionList, setScannedSessionList] = useState<
+    { id: string; label: string; time: string }[]
+  >([]);
   const [searchFilter, setSearchFilter] = useState('');
   const [fellowshipContext, setFellowshipContext] = useState<string>(currentService.name);
 
@@ -96,20 +105,24 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
     }
   };
 
+  const selectedGatheringServiceId =
+    services.find((svc) => svc.name === fellowshipContext)?.id || undefined;
+
   const handleProcessScan = (targetMember: Person) => {
-    if (!hasScheduledService || !currentService.id) {
+    const targetSvcId = selectedGatheringServiceId || currentService.id;
+    if (!hasScheduledService && !selectedGatheringServiceId) {
       showToast(checkInEligibility.message);
       return;
     }
 
     setIsScanning(false);
+    setScannedServiceResult(null);
     playScanBeep();
 
-    // Check if member already checked in for the active service
     const isAlreadyCheckedIn = attendanceRecords.some(
       (r) =>
         r.personId === targetMember.id &&
-        (r.serviceInstanceId === currentService.id ||
+        (r.serviceInstanceId === targetSvcId ||
           (!r.serviceInstanceId && services.length === 1))
     );
 
@@ -118,7 +131,8 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
         targetMember.id,
         'posted_qr',
         98,
-        `Scanned in ${fellowshipContext}`
+        `Scanned in ${fellowshipContext}`,
+        selectedGatheringServiceId
       );
       if (!started) {
         setIsScanning(true);
@@ -128,32 +142,74 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
 
     setScannedMember(targetMember);
     setScannedSessionList((prev) => {
-      if (prev.some((item) => item.member.id === targetMember.id)) {
+      if (prev.some((item) => item.id === `mem-${targetMember.id}`)) {
         return prev;
       }
       return [
         {
-          member: targetMember,
+          id: `mem-${targetMember.id}`,
+          label: `${targetMember.firstName} ${targetMember.lastName}`,
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         },
         ...prev,
       ];
     });
 
-    showToast(`Scanned ${targetMember.firstName} ${targetMember.lastName} (${targetMember.groupName || targetMember.homeCellGroup || 'General'})`);
+    showToast(
+      `Scanned ${targetMember.firstName} ${targetMember.lastName} (${targetMember.groupName || targetMember.homeCellGroup || 'General'})`
+    );
+  };
+
+  const handleProcessServiceQr = async (decodedText: string) => {
+    const svcPayload = parseServiceQrPayload(decodedText, services);
+    if (!svcPayload) return false;
+
+    setIsScanning(false);
+    setScannedMember(null);
+    setIsVerifyingServiceQr(true);
+    try {
+      const result = await checkInWithServiceQr(svcPayload);
+      if (result.ok) {
+        playScanBeep();
+        setScannedSessionList((prev) => [
+          {
+            id: `svc-${result.serviceId || svcPayload.serviceId}-${Date.now()}`,
+            label: `${result.serviceName || 'Scheduled Service'} (Self QR Check-in)`,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          },
+          ...prev,
+        ]);
+      }
+      setScannedServiceResult({
+        ok: result.ok,
+        message: result.message,
+        serviceName: result.serviceName,
+        alreadyCheckedIn: result.alreadyCheckedIn,
+      });
+    } finally {
+      setIsVerifyingServiceQr(false);
+    }
+    return true;
   };
 
   const handleResetScanner = () => {
     setScannedMember(null);
+    setScannedServiceResult(null);
     setIsScanning(true);
   };
 
   const handleDecodedString = (decodedText: string) => {
+    const svcPayload = parseServiceQrPayload(decodedText, services);
+    if (svcPayload) {
+      void handleProcessServiceQr(decodedText);
+      return;
+    }
+
     const targetMember = findMemberByScannedId(members, decodedText);
     if (targetMember) {
       handleProcessScan(targetMember);
     } else {
-      showToast(`Scanned Code: "${decodedText}" (No matching member pass found)`);
+      showToast(`Scanned Code: "${decodedText}" (No matching service QR or member pass found)`);
     }
   };
 
@@ -284,15 +340,72 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 onScan={handleDecodedString}
                 soundEnabled={soundEnabled}
                 onToggleSound={() => setSoundEnabled(!soundEnabled)}
-                isActive={hasScheduledService && activeMode === 'scanner' && isScanning && !scannedMember}
+                isActive={
+                  activeMode === 'scanner' &&
+                  isScanning &&
+                  !scannedMember &&
+                  !scannedServiceResult &&
+                  !isVerifyingServiceQr
+                }
                 className="aspect-4/3 w-full"
                 reticleSize="md"
                 instructionsText={
-                  hasScheduledService
-                    ? `Align member QR pass for ${fellowshipContext}`
-                    : 'Check-in paused until a service is scheduled'
+                  isVerifyingServiceQr
+                    ? 'Verifying Service Check-In QR...'
+                    : 'Point at Service QR Poster or Member Pass'
                 }
               />
+
+              {/* SERVICE QR CHECK-IN CONFIRMATION OR ERROR BANNER */}
+              {scannedServiceResult && (
+                <div
+                  className={`p-4 rounded-3xl border space-y-3 ${
+                    scannedServiceResult.ok
+                      ? 'bg-emerald-950/40 border-emerald-500/40'
+                      : 'bg-rose-950/40 border-rose-500/40'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      {scannedServiceResult.ok ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <h3 className="text-sm font-bold text-white">
+                          {scannedServiceResult.ok
+                            ? scannedServiceResult.alreadyCheckedIn
+                              ? 'Already Checked In'
+                              : 'Service Check-In Verified'
+                            : 'QR Check-In Declined'}
+                        </h3>
+                        <p className="text-xs text-slate-200 mt-0.5">
+                          {scannedServiceResult.message}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-white/10 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetScanner}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer"
+                    >
+                      Scan Another QR
+                    </button>
+                    {scannedServiceResult.ok && (
+                      <button
+                        type="button"
+                        onClick={onClose}
+                        className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold cursor-pointer"
+                      >
+                        Done
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* SCAN RESULT CONFIRMATION CARD (when a member is scanned) */}
               {scannedMember && (
@@ -357,31 +470,51 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   </span>
                 </div>
 
-                {/* Quick Search or Hardware QR Scanner input */}
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Scan Member ID QR or search name / cell..."
-                    value={searchFilter}
-                    onChange={(e) => setSearchFilter(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && searchFilter.trim()) {
-                        e.preventDefault();
-                        const exact = findMemberByScannedId(members, searchFilter);
-                        if (exact) {
-                          handleProcessScan(exact);
-                          setSearchFilter('');
-                        } else if (availableMembers.length === 1) {
-                          handleProcessScan(availableMembers[0]);
-                          setSearchFilter('');
-                        } else {
-                          showToast(`No member found for "${searchFilter.trim()}"`);
+                {/* Quick Search, Service QR Link Paste, or Hardware QR Scanner input */}
+                <div className="relative flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Paste Service QR link/code or search member..."
+                      value={searchFilter}
+                      onChange={(e) => setSearchFilter(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && searchFilter.trim()) {
+                          e.preventDefault();
+                          const svcPayload = parseServiceQrPayload(searchFilter, services);
+                          if (svcPayload) {
+                            void handleProcessServiceQr(searchFilter);
+                            setSearchFilter('');
+                            return;
+                          }
+                          const exact = findMemberByScannedId(members, searchFilter);
+                          if (exact) {
+                            handleProcessScan(exact);
+                            setSearchFilter('');
+                          } else if (availableMembers.length === 1) {
+                            handleProcessScan(availableMembers[0]);
+                            setSearchFilter('');
+                          } else {
+                            showToast(`No service QR or member found for "${searchFilter.trim()}"`);
+                          }
                         }
-                      }
-                    }}
-                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 outline-none focus:border-[#6D5CF2]"
-                  />
+                      }}
+                      className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 outline-none focus:border-[#6D5CF2]"
+                    />
+                  </div>
+                  {parseServiceQrPayload(searchFilter, services) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleProcessServiceQr(searchFilter);
+                        setSearchFilter('');
+                      }}
+                      className="px-3 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold whitespace-nowrap cursor-pointer"
+                    >
+                      Verify QR
+                    </button>
+                  )}
                 </div>
 
                 {/* Carousel of available members */}
@@ -448,15 +581,15 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                   </div>
 
                   <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                    {scannedSessionList.map((item, idx) => (
+                    {scannedSessionList.map((item) => (
                       <div
-                        key={idx}
+                        key={item.id}
                         className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-white/5 text-xs"
                       >
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span className="font-medium text-white truncate max-w-[180px]">
-                            {item.member.firstName} {item.member.lastName}
+                          <span className="font-medium text-white truncate max-w-[200px]">
+                            {item.label}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">{item.time}</span>

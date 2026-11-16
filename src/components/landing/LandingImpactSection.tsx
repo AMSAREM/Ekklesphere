@@ -1,25 +1,55 @@
 import React from 'react';
 import { ArrowUpRight } from 'lucide-react';
+import type { LandingPageConfig, PublicLandingOverview } from '../../types/ekklesphere';
 
-const IMPACT_STATS = [
-  {
-    value: '6.2',
-    unit: 'hrs',
-    label: 'saved per team member each month',
-  },
-  {
-    value: '2.4',
-    unit: '×',
-    label: 'more follow-ups completed on time',
-  },
-  {
-    value: '94',
-    unit: '%',
-    label: 'of teams feel more in sync',
-  },
-];
+interface LandingImpactSectionProps {
+  landingConfig?: LandingPageConfig | null;
+  liveStats?: PublicLandingOverview['liveStats'] | null;
+}
 
-export const LandingImpactSection: React.FC = () => {
+export const LandingImpactSection: React.FC<LandingImpactSectionProps> = ({
+  landingConfig,
+  liveStats,
+}) => {
+  const cmsStats = landingConfig?.featuredStats;
+
+  const stats = [
+    {
+      value:
+        liveStats && liveStats.activeChurchesCount > 0
+          ? String(liveStats.activeChurchesCount)
+          : cmsStats?.congregationsServed || '6.2',
+      unit:
+        liveStats && liveStats.activeChurchesCount > 0
+          ? liveStats.activeChurchesCount === 1
+            ? 'church'
+            : 'churches'
+          : cmsStats?.congregationsServed
+          ? ''
+          : 'hrs',
+      label:
+        liveStats && liveStats.activeChurchesCount > 0
+          ? 'active organisations provisioned on platform'
+          : 'saved per team member each month',
+    },
+    {
+      value:
+        liveStats && liveStats.totalCheckinsRecorded > 0
+          ? liveStats.totalCheckinsRecorded.toLocaleString()
+          : cmsStats?.proximityAccuracy || '2.4',
+      unit: liveStats && liveStats.totalCheckinsRecorded > 0 ? '' : cmsStats?.proximityAccuracy ? '' : '×',
+      label:
+        liveStats && liveStats.totalCheckinsRecorded > 0
+          ? 'verified attendance check-ins recorded'
+          : 'geofence & usher check-in cadence',
+    },
+    {
+      value: cmsStats?.networkUptime || '99.98%',
+      unit: '',
+      label: 'platform uptime across active sanctuaries',
+    },
+  ];
+
   return (
     <section className="bg-[#e8dfd1] py-16 sm:py-24 lg:py-28">
       <div className="mx-auto max-w-[1360px] px-5 sm:px-8 lg:px-14">
@@ -36,24 +66,29 @@ export const LandingImpactSection: React.FC = () => {
             </h2>
           </div>
 
-          <p className="max-w-[280px] text-sm leading-relaxed text-[#5c625e]">
-            The details matter. But they should never be the thing your team is known for.
+          <p className="max-w-[300px] text-sm leading-relaxed text-[#5c625e]">
+            {landingConfig?.showcaseHeadline ||
+              'The details matter. But they should never be the thing your team is known for.'}
           </p>
         </div>
 
         {/* Metrics Grid Div */}
         <div className="mt-14 grid grid-cols-1 divide-y divide-[#cec5b7] border-t border-b border-[#cec5b7] md:grid-cols-3 md:divide-x md:divide-y-0">
-          {IMPACT_STATS.map((stat) => (
+          {stats.map((stat) => (
             <div
               key={stat.label}
               className="flex items-center justify-between gap-4 py-8 md:px-7 md:first:pl-0 md:last:pr-0"
             >
               <div>
-                <div className="text-5xl sm:text-6xl font-bold leading-none tracking-[-0.05em] tabular-nums text-[#0b1f33]">
+                <div className="text-4xl sm:text-5xl font-bold leading-none tracking-[-0.04em] tabular-nums text-[#0b1f33]">
                   {stat.value}
-                  <span className="ml-1 text-2xl sm:text-3xl tracking-tight">{stat.unit}</span>
+                  {stat.unit && (
+                    <span className="ml-1.5 text-xl sm:text-2xl tracking-tight font-semibold">
+                      {stat.unit}
+                    </span>
+                  )}
                 </div>
-                <div className="mt-3 max-w-[190px] text-xs leading-snug text-[#5c625e]">
+                <div className="mt-3 max-w-[220px] text-xs leading-snug text-[#5c625e]">
                   {stat.label}
                 </div>
               </div>

@@ -32,6 +32,7 @@ import {
   Mail,
   Smartphone,
   Activity,
+  QrCode,
 } from 'lucide-react';
 import { ProximitySimulator } from '../simulator/ProximitySimulator';
 import { UserManagement } from '../UserManagement';
@@ -54,12 +55,13 @@ import {
   FollowupQueueModal,
   NewAssignmentModal,
 } from './AdminDashboardModals';
+import { ServiceQrModal, ServiceQrTarget } from './ServiceQrModal';
 import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
 import { Person } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { ContactCallButton } from '../common/ContactCallButton';
 import { getImageFallbackUrls } from '../../utils/imageUrl';
-import { computeServiceBinaryStatus } from '../../utils/serviceStatus';
+import { computeServiceBinaryStatus, isPlaceholderServiceId } from '../../utils/serviceStatus';
 
 type AdminNavTab =
   | 'dashboard'
@@ -92,6 +94,15 @@ function formatServiceDate(isoDate?: string, includeYear: boolean = false): stri
     month: 'short',
     ...(includeYear ? { year: 'numeric' } : {}),
   });
+}
+
+function shuffleMembersRandomly(list: Person[]): Person[] {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 export const AdminDashboard: React.FC = () => {
@@ -164,6 +175,7 @@ export const AdminDashboard: React.FC = () => {
   // Lightbox for clicking any member portrait directly from Dashboard
   const [photoPreviewMember, setPhotoPreviewMember] = useState<Person | null>(null);
   const [editingServiceTarget, setEditingServiceTarget] = useState<EditableServiceTarget | null>(null);
+  const [qrServiceTarget, setQrServiceTarget] = useState<ServiceQrTarget | null>(null);
   const [confirmDeleteCalendarSvcId, setConfirmDeleteCalendarSvcId] = useState<string | null>(null);
   const [tickNowMs, setTickNowMs] = useState<number>(() => Date.now());
 
@@ -252,6 +264,29 @@ export const AdminDashboard: React.FC = () => {
     () => members.filter((m) => Boolean(m.imageUrl && m.imageUrl.trim().length > 0)),
     [members]
   );
+
+  const [photoShuffleTick, setPhotoShuffleTick] = useState<number>(() => Math.random());
+
+  useEffect(() => {
+    if (activeTab !== 'dashboard') return;
+    setPhotoShuffleTick((n) => n + 1);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'dashboard' || photoPreviewMember || uploadedPhotoMembers.length <= 1) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      setPhotoShuffleTick((n) => n + 1);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [activeTab, photoPreviewMember, uploadedPhotoMembers.length]);
+
+  const shuffledPhotoMembers = useMemo(() => {
+    void photoShuffleTick;
+    return shuffleMembersRandomly(uploadedPhotoMembers);
+  }, [uploadedPhotoMembers, photoShuffleTick]);
 
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<Person | null>(null);
@@ -594,47 +629,35 @@ export const AdminDashboard: React.FC = () => {
               className="bg-[#1D1B3A] dark:bg-[#19193A] text-white rounded-3xl border border-[#2F2D59] p-5 sm:p-6 my-2 sm:my-4"
             >
               <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 pb-4 border-b border-white/10">
-                <div className="min-w-0 flex flex-col gap-1.5">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-white/65">
-                    <span className="font-semibold text-white/95 truncate max-w-[220px]">
-                      {systemSettings.campusName || 'Main Campus'}
-                    </span>
-                    <span aria-hidden="true" className="text-white/30">/</span>
-                    <span className="font-medium text-white/75">Operations Console</span>
-                    <span aria-hidden="true" className="text-white/30">·</span>
-                    <span className="truncate max-w-[200px] text-white/70">
-                      Operator: <strong className="font-semibold text-white/90">{currentUser?.name || 'Administrator'}</strong>
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
-                    <span
-                      className={`inline-flex items-center gap-1.5 font-semibold ${
-                        dashboardAnalytics.activeService.binaryStatus === 'live'
-                          ? 'text-[#4FBF98]'
-                          : 'text-white/75'
-                      }`}
-                    >
-                      <Radio className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                      <span>
-                        {services.length === 0
-                          ? 'No Service Scheduled'
-                          : dashboardAnalytics.activeService.binaryStatus === 'live'
-                          ? 'Live Service'
-                          : 'Closed Service'}
-                      </span>
-                    </span>
-                    <span aria-hidden="true" className="hidden sm:inline-block h-3.5 w-px bg-white/15" />
-                    <span className="font-mono text-[11px] text-white/80">
-                      {services.length === 0
-                        ? 'Schedule a service to enable member check-ins'
-                        : `${
-                            currentService.date
-                              ? formatServiceDate(currentService.date, true)
-                              : 'Current Schedule'
-                          } · ${currentService.startsAt}–${currentService.endsAt} (+${dashboardAnalytics.activeService.dwellMinutes}m grace)`}
-                    </span>
-                  </div>
+                <div className="min-w-0 flex flex-col gap-0.5">
+                  {(() => {
+                    const tenantName = (
+                      systemSettings.churchName ||
+                      currentUser?.organizationName ||
+                      ''
+                    ).trim();
+                    const hour = new Date(tickNowMs).getHours();
+                    const greeting =
+                      hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+                    const rawName = (currentUser?.name || 'Administrator').trim();
+                    return tenantName ? (
+                      <>
+                        <h2
+                          title={tenantName}
+                          className="text-lg sm:text-xl font-bold tracking-tight text-white truncate"
+                        >
+                          {tenantName}
+                        </h2>
+                        <p className="text-xs sm:text-sm font-medium text-[#C4BDFF] truncate">
+                          {greeting}, {rawName}
+                        </p>
+                      </>
+                    ) : (
+                      <h2 className="text-base sm:text-lg font-semibold tracking-tight text-white truncate">
+                        {greeting}, {rawName}
+                      </h2>
+                    );
+                  })()}
                 </div>
 
                 {/* Operational Hero Controls */}
@@ -666,6 +689,33 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <History className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
                     <span>History</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!currentService?.id || isPlaceholderServiceId(currentService.id)}
+                    title={
+                      currentService?.id && !isPlaceholderServiceId(currentService.id)
+                        ? `Show Check-In QR for ${currentService.name}`
+                        : 'Schedule a service first to generate a QR code'
+                    }
+                    onClick={() => {
+                      if (!currentService?.id || isPlaceholderServiceId(currentService.id)) return;
+                      setQrServiceTarget({
+                        id: currentService.id,
+                        name: currentService.name,
+                        date: currentService.date,
+                        startsAt: currentService.startsAt,
+                        endsAt: currentService.endsAt,
+                        dwellMinutes:
+                          currentService.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5,
+                        status: currentService.status,
+                      });
+                    }}
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 disabled:opacity-45 disabled:cursor-not-allowed border border-white/15 text-white rounded-lg px-3 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <QrCode className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
+                    <span>Service QR</span>
                   </button>
 
                   <button
@@ -1182,7 +1232,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
-                  {uploadedPhotoMembers.slice(0, 10).map((m) => (
+                  {shuffledPhotoMembers.slice(0, 10).map((m) => (
                     <button
                       key={m.id}
                       type="button"
@@ -1500,6 +1550,30 @@ export const AdminDashboard: React.FC = () => {
                         startsAt: target.startsAt,
                         endsAt: target.endsAt,
                         expectedAttendance: target.expectedAttendance,
+                        dwellMinutes: allowance,
+                        status: binaryStatus,
+                      });
+                    }}
+                    onOpenServiceQr={(svcId) => {
+                      const target = services.find((s) => s.id === svcId);
+                      if (!target) return;
+                      const allowance = target.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5;
+                      const binaryStatus = computeServiceBinaryStatus({
+                        date: target.date,
+                        startsAt: target.startsAt,
+                        endsAt: target.endsAt,
+                        startTimeIso: target.startTimeIso,
+                        endTimeIso: target.endTimeIso,
+                        allowanceMinutes: allowance,
+                        rawStatus: target.status,
+                        nowMs: tickNowMs,
+                      });
+                      setQrServiceTarget({
+                        id: target.id,
+                        name: target.name,
+                        date: target.date,
+                        startsAt: target.startsAt,
+                        endsAt: target.endsAt,
                         dwellMinutes: allowance,
                         status: binaryStatus,
                       });
@@ -1861,6 +1935,25 @@ export const AdminDashboard: React.FC = () => {
                                   {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
                                   {svc.startsAt}–{svc.endsAt}
                                 </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setQrServiceTarget({
+                                    id: svc.id,
+                                    name: svc.name,
+                                    date: svc.date,
+                                    startsAt: svc.startsAt,
+                                    endsAt: svc.endsAt,
+                                    dwellMinutes: allowance,
+                                    status: svcBinaryStatus,
+                                  })
+                                }
+                                className="p-1 rounded-lg text-slate-400 hover:text-[#6D5CF2] cursor-pointer"
+                                title="Show Service Check-In QR"
+                                aria-label={`Show check-in QR for ${svc.name}`}
+                              >
+                                <QrCode className="w-3 h-3" />
                               </button>
                               <button
                                 type="button"
@@ -2342,6 +2435,12 @@ export const AdminDashboard: React.FC = () => {
         }}
         onNotify={showToast}
         formatDateLabel={formatServiceDate}
+      />
+
+      <ServiceQrModal
+        isOpen={Boolean(qrServiceTarget)}
+        service={qrServiceTarget}
+        onClose={() => setQrServiceTarget(null)}
       />
 
       <BroadcastModal

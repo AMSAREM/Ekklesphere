@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { LicenseTier } from '../../types/ekklesphere';
 import { AuthTabMode, resolveAuthTabFromLocation } from '../../utils/authRoute';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface UnifiedAuthScreenProps {
   initialTab?: AuthTabMode;
@@ -37,6 +38,8 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
     isGoogleAuthLoading,
     googleAuthError,
     clearGoogleAuthError,
+    sessionExpiredNotice,
+    clearSessionExpiredNotice,
     systemSettings,
     churchGroups,
     showToast,
@@ -74,7 +77,16 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
   const [orgPhone, setOrgPhone] = useState('+233 ');
   const [orgPassword, setOrgPassword] = useState('');
   const [orgConfirmPassword, setOrgConfirmPassword] = useState('');
-  const [orgTrialPlan, setOrgTrialPlan] = useState<LicenseTier>('ministry_pro');
+  const resolvePlanFromUrl = (): LicenseTier => {
+    if (typeof window === 'undefined') return 'ministry_pro';
+    const raw = new URLSearchParams(window.location.search).get('plan');
+    if (raw === 'grace_starter' || raw === 'ministry_pro' || raw === 'cathedral_enterprise') {
+      return raw;
+    }
+    return 'ministry_pro';
+  };
+
+  const [orgTrialPlan, setOrgTrialPlan] = useState<LicenseTier>(resolvePlanFromUrl);
   const [showOrgPassword, setShowOrgPassword] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -94,6 +106,14 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
     const syncTabFromUrl = () => {
       const resolved = resolveAuthTabFromLocation();
       setActiveTab(resolved);
+      const rawPlan = new URLSearchParams(window.location.search).get('plan');
+      if (
+        rawPlan === 'grace_starter' ||
+        rawPlan === 'ministry_pro' ||
+        rawPlan === 'cathedral_enterprise'
+      ) {
+        setOrgTrialPlan(rawPlan);
+      }
       setAuthError(null);
     };
     window.addEventListener('popstate', syncTabFromUrl);
@@ -142,6 +162,7 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
   const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    clearSessionExpiredNotice();
 
     if (!loginEmail.trim()) {
       setAuthError('Please enter your account email, phone number, or username.');
@@ -262,8 +283,8 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
           <div className="absolute right-0 top-0 translate-x-10 -translate-y-10 w-72 h-72 bg-[#6D5CF2]/15 dark:bg-[#6D5CF2]/20 rounded-full blur-3xl pointer-events-none" />
 
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center gap-2.5">
                 {onBackToLanding && (
                   <button
                     type="button"
@@ -274,6 +295,7 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
                     <span>Home</span>
                   </button>
                 )}
+                <BrandLogo size="sm" surface="auto" />
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-md border border-indigo-200/80 dark:border-white/15 text-xs font-semibold text-slate-800 dark:text-white shadow-xs">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span>Verified Identity Gateway</span>
@@ -446,6 +468,31 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
 
         {/* Content Body */}
         <div className="p-6 sm:p-8">
+          {sessionExpiredNotice && (
+            <div
+              role="status"
+              className="max-w-lg mx-auto mb-5 p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/70 flex items-start justify-between gap-2.5 text-xs text-amber-950 dark:text-amber-200"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Session Expired</p>
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-0.5">
+                    {sessionExpiredNotice}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearSessionExpiredNotice}
+                aria-label="Dismiss session timeout notice"
+                className="text-amber-700 dark:text-amber-300 hover:text-amber-950 p-0.5 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {authError && (
             <div
               role="alert"

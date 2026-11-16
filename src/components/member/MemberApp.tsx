@@ -663,27 +663,47 @@ export const MemberApp: React.FC = () => {
         {/* Welcome & Member Identity Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-[#1C1C3C] p-4 sm:p-5 rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm min-w-0">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-1 text-xs">
-              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] truncate max-w-full">
-                {systemSettings.churchName}
-              </span>
-              <span className="text-[#5B5F7A] dark:text-[#A9ACC8]" aria-hidden="true">
-                ·
-              </span>
-              <span className="font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] truncate max-w-full">
-                {systemSettings.campusName}
-              </span>
-              <span className="text-[#5B5F7A] dark:text-[#A9ACC8]" aria-hidden="true">
-                ·
-              </span>
-              <span className="font-bold text-[#6C5CE7] dark:text-[#8C7DFF] truncate max-w-full">{memberGroup}</span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] break-words">
-              Welcome, {memberDisplayName}
-            </h1>
-            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-0.5 tabular-nums">
-              Member ID: <span className="font-mono font-bold">{memberCode}</span>
-            </p>
+            {(() => {
+              const tenantName = (
+                systemSettings.churchName ||
+                currentUser?.organizationName ||
+                ''
+              ).trim();
+              const campusLabel = (systemSettings.campusName || '').trim();
+              const showCampus =
+                Boolean(campusLabel) &&
+                campusLabel.toLowerCase() !== tenantName.toLowerCase();
+              return (
+                <>
+                  {tenantName && (
+                    <p
+                      title={tenantName}
+                      className="text-sm sm:text-base font-bold tracking-tight text-[#5E4AE3] dark:text-[#9D92FF] truncate mb-0.5"
+                    >
+                      {tenantName}
+                    </p>
+                  )}
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA] break-words">
+                    Welcome, {memberDisplayName}
+                  </h1>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-xs text-[#5B5F7A] dark:text-[#A9ACC8] tabular-nums">
+                    {showCampus && (
+                      <>
+                        <span className="font-medium truncate max-w-full">{campusLabel}</span>
+                        <span aria-hidden="true">·</span>
+                      </>
+                    )}
+                    <span className="font-semibold text-[#1D1B3A] dark:text-[#E2E4F3] truncate max-w-full">
+                      {memberGroup}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      ID: <span className="font-mono font-bold">{memberCode}</span>
+                    </span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-0 shrink-0">
@@ -1408,21 +1428,32 @@ export const MemberApp: React.FC = () => {
               </p>
             </div>
 
-            <div className="pt-3 border-t border-[#E3E5F2] dark:border-[#2D2D55] flex items-center justify-between">
+            <div className="pt-3 border-t border-[#E3E5F2] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-slate-400" />
                 <span>{ev.timeVenue}</span>
               </span>
-              <button
-                onClick={() => toggleRsvp(ev.title, ev.id)}
-                className={`text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm ${
-                  memberRsvps[ev.title]
-                    ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'
-                    : 'bg-[#6C5CE7] text-white hover:bg-[#5b4be0]'
-                }`}
-              >
-                {memberRsvps[ev.title] ? 'Reserved ✓' : 'RSVP Now'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsQrSheetOpen(true)}
+                  className="text-xs font-bold px-3 py-2 rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-[#F6F7FC] dark:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6C5CE7]/60 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <QrCode className="w-3.5 h-3.5 text-[#6C5CE7] dark:text-[#8C7DFF]" />
+                  <span>Scan QR</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleRsvp(ev.title, ev.id)}
+                  className={`text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer ${
+                    memberRsvps[ev.title]
+                      ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'
+                      : 'bg-[#6C5CE7] text-white hover:bg-[#5b4be0]'
+                  }`}
+                >
+                  {memberRsvps[ev.title] ? 'Reserved ✓' : 'RSVP Now'}
+                </button>
+              </div>
             </div>
           </div>
         ))}

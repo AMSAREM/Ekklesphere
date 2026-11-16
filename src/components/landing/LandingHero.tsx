@@ -13,9 +13,14 @@ import {
   Wallet,
 } from 'lucide-react';
 
+import type { LandingPageConfig, PublicLandingOverview } from '../../types/ekklesphere';
+import { BrandLogo } from '../common/BrandLogo';
+
 interface LandingHeroProps {
   onOpenDemo: () => void;
   onOpenQuickAdd: () => void;
+  landingConfig?: LandingPageConfig | null;
+  liveStats?: PublicLandingOverview['liveStats'] | null;
 }
 
 const HERO_SLIDES = [
@@ -68,7 +73,12 @@ const ACTIVITY_ROWS = [
   },
 ];
 
-export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenDemo, onOpenQuickAdd }) => {
+export const LandingHero: React.FC<LandingHeroProps> = ({
+  onOpenDemo,
+  onOpenQuickAdd,
+  landingConfig,
+  liveStats,
+}) => {
   const [heroIndex, setHeroIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<(typeof WORKSPACE_TABS)[number]['id']>('overview');
 
@@ -83,23 +93,51 @@ export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenDemo, onOpenQuic
     setHeroIndex((prev) => (prev + delta + HERO_SLIDES.length) % HERO_SLIDES.length);
   };
 
+  const kickerText =
+    landingConfig?.isAnnouncementActive && landingConfig.announcementBadge
+      ? landingConfig.announcementBadge
+      : 'Church operations, clarified';
+
+  const hasCustomCmsHero =
+    Boolean(landingConfig?.heroTitle) &&
+    landingConfig?.heroTitle !== 'Next-Gen Presence Radar & Sovereign Church Management';
+
+  const subtitleText =
+    landingConfig?.heroSubtitle &&
+    landingConfig.heroSubtitle !==
+      'Real-time automated geofence attendance, multi-role pastoral dashboards, usher door check-in station, and personal congregation mobile passes.'
+      ? landingConfig.heroSubtitle
+      : 'Ekklesphere brings people, plans, and pastoral care into one clear view—so your team can spend less time managing the details and more time being present.';
+
+  const churchesLabel =
+    liveStats && liveStats.activeChurchesCount > 0
+      ? `${liveStats.activeChurchesCount} active ${
+          liveStats.activeChurchesCount === 1 ? 'church workspace' : 'church workspaces'
+        }`
+      : 'Built with 120+ ministry teams';
+
   return (
     <section className="mx-auto max-w-[1360px] px-5 sm:px-8 lg:px-14 pt-12 pb-16 sm:pt-16 sm:pb-24 lg:pt-20 lg:pb-28">
       <div className="grid grid-cols-1 items-center gap-12 lg:grid-cols-12 lg:gap-14">
         {/* Left Copy Div */}
         <div className="lg:col-span-5 flex flex-col items-start">
           <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#647180]">
-            Church operations, clarified
+            {kickerText}
           </div>
 
           <h1 className="mt-5 text-[clamp(2.85rem,6vw,5.25rem)] font-bold leading-[0.95] tracking-[-0.04em] text-[#0b1f33] text-balance">
-            Make room for{' '}
-            <em className="font-display font-normal italic tracking-[-0.03em]">ministry.</em>
+            {hasCustomCmsHero ? (
+              landingConfig!.heroTitle
+            ) : (
+              <>
+                Make room for{' '}
+                <em className="font-display font-normal italic tracking-[-0.03em]">ministry.</em>
+              </>
+            )}
           </h1>
 
           <p className="mt-6 max-w-[460px] text-base leading-relaxed text-[#5c6876]">
-            Ekklesphere brings people, plans, and pastoral care into one clear view—so your team
-            can spend less time managing the details and more time being present.
+            {subtitleText}
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -123,7 +161,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenDemo, onOpenQuic
             </a>
           </div>
 
-          <div className="mt-10 flex items-center gap-3 text-xs text-[#647180]">
+          <div className="mt-10 flex items-center gap-3 text-xs text-[#647180] tabular-nums">
             <div className="flex -space-x-2" aria-hidden="true">
               <div className="grid h-7 w-7 place-items-center rounded-full border-2 border-[#f7f3ec] bg-[#e8b8a3] text-[10px] font-bold text-[#0b1f33]">
                 J
@@ -136,8 +174,14 @@ export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenDemo, onOpenQuic
               </div>
             </div>
             <div>
-              <span className="block">Built with 120+ ministry teams</span>
-              <strong className="font-semibold text-[#0b1f33]">who care about the details.</strong>
+              <span className="block">{churchesLabel}</span>
+              <strong className="font-semibold text-[#0b1f33]">
+                {liveStats && liveStats.activeSitesCount > 0
+                  ? `${liveStats.activeSitesCount} active sanctuary ${
+                      liveStats.activeSitesCount === 1 ? 'site' : 'sites'
+                    } connected.`
+                  : 'who care about the details.'}
+              </strong>
             </div>
           </div>
         </div>
@@ -223,11 +267,8 @@ export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenDemo, onOpenQuic
           <div className="relative z-20 -mt-10 sm:-mt-16 overflow-hidden rounded-xl border border-[#0b1f33]/15 bg-[#fbfaf6] shadow-[0_30px_80px_rgba(11,31,51,0.14)] lg:rotate-[0.8deg]">
             {/* Topbar Div */}
             <div className="flex h-11 items-center justify-between border-b border-[#e8e4dd] px-4">
-              <div className="flex items-center gap-2 text-[11px] font-extrabold tracking-tight text-[#0b1f33]">
-                <span className="grid h-4 w-4 place-items-center rounded-full bg-[#e1ad3f] text-[9px]">
-                  ✦
-                </span>
-                <span>Ekklesphere</span>
+              <div className="flex items-center">
+                <BrandLogo size="xs" surface="light" />
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-[11px] font-medium text-[#5e7a57]">Sunday workspace</span>

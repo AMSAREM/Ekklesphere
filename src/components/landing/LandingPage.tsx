@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
+import { BrandLogo } from '../common/BrandLogo';
 import {
   Radio,
   Users,
@@ -147,7 +148,7 @@ export const LandingPage: React.FC = () => {
         <header className="relative z-20 w-full pt-4 sm:pt-6 px-4 sm:px-8">
           <div className="w-full max-w-6xl mx-auto rounded-full bg-[#1A1A24]/75 backdrop-blur-xl border border-white/12 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-3 shadow-2xl">
             
-            {/* Brand Mark: Clean icon + wordmark */}
+            {/* Brand Mark: Official Ekklesphere logo */}
             <button
               onClick={() => {
                 setActiveNav('home');
@@ -156,17 +157,7 @@ export const LandingPage: React.FC = () => {
               className="flex items-center gap-2.5 group cursor-pointer focus:outline-none"
               aria-label="Ekklesphere Home"
             >
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#1877F2] to-[#6D5CF2] flex items-center justify-center text-white shadow-md shadow-blue-600/30 group-hover:scale-105 transition-transform">
-                <Radio className="w-4 h-4 animate-pulse" />
-              </div>
-              <div className="text-left">
-                <span className="text-sm sm:text-base font-bold tracking-tight text-white block leading-none">
-                  ekklesphere
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono tracking-wider uppercase block mt-0.5">
-                  sanctuary os
-                </span>
-              </div>
+              <BrandLogo size="sm" surface="dark" />
             </button>
 
             {/* Center Navigation Links with active highlight */}
@@ -920,10 +911,7 @@ export const LandingPage: React.FC = () => {
           ========================================================================= */}
       <footer className="w-full max-w-[1380px] mt-20 sm:mt-24 pt-8 pb-12 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-slate-400">
         <div className="flex items-center gap-3">
-          <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-[#1877F2] to-[#6D5CF2] flex items-center justify-center text-white">
-            <Radio className="w-3 h-3" />
-          </div>
-          <span className="font-bold text-white tracking-tight text-sm">ekklesphere sanctuary os</span>
+          <BrandLogo size="xs" surface="dark" />
           <span className="text-slate-600">·</span>
           <span>{currentChurchName}</span>
         </div>

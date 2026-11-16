@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowUpRight, Menu, X } from 'lucide-react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface LandingHeaderProps {
   onNavigate: (path: string) => void;
@@ -33,19 +34,9 @@ export const LandingHeader: React.FC<LandingHeaderProps> = ({ onNavigate, onOpen
           <a
             href="#top"
             aria-label="Ekklesphere home"
-            className="inline-flex items-center gap-2.5 text-[#0b1f33] no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e1ad3f]"
+            className="inline-flex items-center no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e1ad3f]"
           >
-            <div
-              aria-hidden="true"
-              className="flex h-7 w-7 -rotate-24 items-center justify-center gap-0.5 rounded-full border border-[#0b1f33]"
-            >
-              <span className="block h-3 w-0.5 rounded-full bg-[#0b1f33]" />
-              <span className="block h-4 w-0.5 rounded-full bg-[#0b1f33]" />
-              <span className="block h-2 w-0.5 rounded-full bg-[#0b1f33]" />
-            </div>
-            <span className="text-lg font-extrabold tracking-tight text-[#0b1f33]">
-              ekklesphere
-            </span>
+            <BrandLogo size="md" surface="light" />
           </a>
 
           <nav aria-label="Primary navigation" className="hidden md:flex items-center gap-7 lg:gap-9">

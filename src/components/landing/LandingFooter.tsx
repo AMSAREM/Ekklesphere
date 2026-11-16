@@ -1,10 +1,17 @@
 import React from 'react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface LandingFooterProps {
   onNavigate: (path: string) => void;
+  onOpenContact?: () => void;
+  contactSalesEmail?: string;
 }
 
-export const LandingFooter: React.FC<LandingFooterProps> = ({ onNavigate }) => {
+export const LandingFooter: React.FC<LandingFooterProps> = ({
+  onNavigate,
+  onOpenContact,
+  contactSalesEmail = 'sales@ekklesphere.com',
+}) => {
   const handleRouteClick = (e: React.MouseEvent<HTMLAnchorElement>, path: string) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
     e.preventDefault();
@@ -19,19 +26,10 @@ export const LandingFooter: React.FC<LandingFooterProps> = ({ onNavigate }) => {
           <div className="lg:col-span-4">
             <a
               href="#top"
-              className="inline-flex items-center gap-2.5 text-white no-underline"
+              aria-label="Ekklesphere home"
+              className="inline-flex items-center no-underline"
             >
-              <div
-                aria-hidden="true"
-                className="flex h-7 w-7 -rotate-24 items-center justify-center gap-0.5 rounded-full border border-white"
-              >
-                <span className="block h-3 w-0.5 rounded-full bg-white" />
-                <span className="block h-4 w-0.5 rounded-full bg-white" />
-                <span className="block h-2 w-0.5 rounded-full bg-white" />
-              </div>
-              <span className="text-lg font-extrabold tracking-tight text-white">
-                ekklesphere
-              </span>
+              <BrandLogo size="md" surface="dark" />
             </a>
           </div>
 
@@ -93,11 +91,28 @@ export const LandingFooter: React.FC<LandingFooterProps> = ({ onNavigate }) => {
               >
                 Start church trial
               </a>
+              {onOpenContact ? (
+                <button
+                  type="button"
+                  onClick={onOpenContact}
+                  className="text-left text-xs text-[#bbc1be] transition-colors hover:text-[#f0c66a] cursor-pointer"
+                >
+                  Contact ({contactSalesEmail})
+                </button>
+              ) : (
+                <a
+                  href={`mailto:${contactSalesEmail}`}
+                  className="text-xs text-[#bbc1be] transition-colors hover:text-[#f0c66a]"
+                >
+                  Contact
+                </a>
+              )}
               <a
-                href="mailto:hello@ekklesphere.com"
-                className="text-xs text-[#bbc1be] transition-colors hover:text-[#f0c66a]"
+                href="/creator"
+                onClick={(e) => handleRouteClick(e, '/creator')}
+                className="text-xs text-[#8f9996] transition-colors hover:text-[#f0c66a]"
               >
-                Contact
+                Creator Console
               </a>
             </div>
           </div>

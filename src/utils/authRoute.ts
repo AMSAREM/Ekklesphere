@@ -60,7 +60,7 @@ export function isPublicLandingLocation(
   const normalizedPath = pathname.toLowerCase();
   if (normalizedPath !== '/' && normalizedPath !== '') return false;
   const params = new URLSearchParams(search);
-  if (params.has('view') || params.has('church') || params.has('auth')) return false;
+  if (params.has('view') || params.has('church') || params.has('auth') || params.has('checkin')) return false;
   return true;
 }
 

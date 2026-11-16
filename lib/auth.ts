@@ -1,6 +1,6 @@
 // lib/auth.ts - Ekklesphere Hardened Authentication, Supabase JWT Verification & RBAC Engine
 import type { Request, Response, NextFunction } from 'express';
-import { createHmac, randomBytes } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 export const PRIMARY_ORGANIZATION_ID = '';
@@ -28,6 +28,8 @@ export interface AuthUserPayload {
   name?: string;
   is_creator?: boolean;
   auth_provider?: 'supabase' | 'session_jwt';
+  sid?: string;
+  idle_timeout_minutes?: number;
   iat?: number;
   exp?: number;
 }
@@ -136,6 +138,174 @@ export function getJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * Generates a deterministic HMAC-SHA256 token scoped strictly to (organizationId, serviceId)
+ * so scheduled services can issue cryptographically verifiable check-in QR codes.
+ */
+export function createServiceQrToken(organizationId: string, serviceId: string): string {
+  const org = String(organizationId || '').trim().toLowerCase();
+  const svc = String(serviceId || '').trim().toLowerCase();
+  const secret = getJwtSecret();
+  return createHmac('sha256', secret)
+    .update(`ekklesphere-service-qr-v1:${org}:${svc}`)
+    .digest('base64url')
+    .slice(0, 24);
+}
+
+/**
+ * Timing-safe verification of a service check-in QR token against (organizationId, serviceId).
+ */
+export function verifyServiceQrToken(
+  organizationId: string,
+  serviceId: string,
+  candidateToken?: string | null
+): boolean {
+  const clean = typeof candidateToken === 'string' ? candidateToken.trim() : '';
+  if (!clean || !organizationId || !serviceId) return false;
+  const expected = createServiceQrToken(organizationId, serviceId);
+  const actualBuf = Buffer.from(clean, 'utf8');
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  if (actualBuf.length !== expectedBuf.length) return false;
+  return timingSafeEqual(actualBuf, expectedBuf);
+}
+
+export const DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES = 30;
+export const MAX_IDLE_SESSION_TIMEOUT_MINUTES = 480;
+
+export function normalizeIdleTimeoutMinutes(raw?: unknown): number {
+  if (raw === undefined || raw === null || raw === '') {
+    return DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES;
+  }
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES;
+  if (num <= 0) return 0; // Explicitly disabled idle timeout (falls back to 24h JWT)
+  return Math.max(1, Math.min(MAX_IDLE_SESSION_TIMEOUT_MINUTES, Math.round(num)));
+}
+
+interface ServerSessionEntry {
+  sid: string;
+  userId: string;
+  organizationId?: string;
+  idleTimeoutMs: number;
+  idleTimeoutMinutes: number;
+  lastActivityAt: number;
+  createdAt: number;
+  revoked: boolean;
+}
+
+const serverSessionRegistry = new Map<string, ServerSessionEntry>();
+const revokedSessionIds = new Set<string>();
+
+function pruneServerSessionRegistry(nowMs = Date.now()): void {
+  if (serverSessionRegistry.size <= 5000) return;
+  for (const [sid, entry] of serverSessionRegistry.entries()) {
+    const expiredIdle = entry.idleTimeoutMs > 0 && nowMs - entry.lastActivityAt > entry.idleTimeoutMs;
+    const staleAbsolute = nowMs - entry.lastActivityAt > 24 * 60 * 60 * 1000;
+    if (entry.revoked || expiredIdle || staleAbsolute) {
+      serverSessionRegistry.delete(sid);
+    }
+  }
+}
+
+export function resetSessionRegistryForTests(): void {
+  serverSessionRegistry.clear();
+  revokedSessionIds.clear();
+}
+
+export function registerServerSession(params: {
+  sid: string;
+  userId: string;
+  organizationId?: string;
+  idleTimeoutMinutes?: number;
+  nowMs?: number;
+}): ServerSessionEntry {
+  const nowMs = params.nowMs ?? Date.now();
+  const minutes = normalizeIdleTimeoutMinutes(params.idleTimeoutMinutes);
+  const idleTimeoutMs = minutes > 0 ? minutes * 60_000 : 0;
+  const entry: ServerSessionEntry = {
+    sid: params.sid,
+    userId: params.userId,
+    organizationId: params.organizationId,
+    idleTimeoutMs,
+    idleTimeoutMinutes: minutes,
+    lastActivityAt: nowMs,
+    createdAt: nowMs,
+    revoked: false,
+  };
+  revokedSessionIds.delete(params.sid);
+  serverSessionRegistry.set(params.sid, entry);
+  pruneServerSessionRegistry(nowMs);
+  return entry;
+}
+
+export function touchOrValidateServerSession(
+  user: AuthUserPayload,
+  nowMs: number = Date.now()
+): {
+  ok: boolean;
+  reason?: 'timed_out' | 'revoked';
+  lastActivityAt?: number;
+  idleTimeoutMinutes?: number;
+} {
+  if (!user.sid) {
+    return { ok: true };
+  }
+
+  if (revokedSessionIds.has(user.sid)) {
+    return { ok: false, reason: 'revoked' };
+  }
+
+  let entry = serverSessionRegistry.get(user.sid);
+  if (!entry) {
+    // Re-hydrate sliding tracker on cold server restarts for non-expired JWTs
+    entry = registerServerSession({
+      sid: user.sid,
+      userId: user.id,
+      organizationId: user.organization_id || user.tenant_id,
+      idleTimeoutMinutes: user.idle_timeout_minutes ?? DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
+      nowMs,
+    });
+    return {
+      ok: true,
+      lastActivityAt: entry.lastActivityAt,
+      idleTimeoutMinutes: entry.idleTimeoutMinutes,
+    };
+  }
+
+  if (entry.revoked) {
+    return { ok: false, reason: 'revoked' };
+  }
+
+  if (entry.idleTimeoutMs > 0 && nowMs - entry.lastActivityAt > entry.idleTimeoutMs) {
+    entry.revoked = true;
+    revokedSessionIds.add(entry.sid);
+    return { ok: false, reason: 'timed_out' };
+  }
+
+  entry.lastActivityAt = nowMs;
+  return {
+    ok: true,
+    lastActivityAt: entry.lastActivityAt,
+    idleTimeoutMinutes: entry.idleTimeoutMinutes,
+  };
+}
+
+export function revokeServerSession(sid?: string): void {
+  if (!sid) return;
+  revokedSessionIds.add(sid);
+  const existing = serverSessionRegistry.get(sid);
+  if (existing) {
+    existing.revoked = true;
+  }
+}
+
+export function expireServerSessionForTests(sid: string): void {
+  const entry = serverSessionRegistry.get(sid);
+  if (entry) {
+    entry.lastActivityAt = Date.now() - Math.max(entry.idleTimeoutMs, 60_000) - 5_000;
+  }
+}
+
+/**
  * Signs an authenticated payload into a cryptographically secured JWT.
  */
 export function signToken(
@@ -156,6 +326,35 @@ export function signToken(
     auth_provider: payload.auth_provider || 'session_jwt',
   };
   return jwt.sign(normalizedPayload, secret, { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] });
+}
+
+/**
+ * Issues a tracked user session JWT whose JWT expiry and server-side idle timeout match the organisation setting.
+ */
+export function signSessionToken(
+  payload: Omit<AuthUserPayload, 'iat' | 'exp' | 'sid' | 'idle_timeout_minutes'>,
+  idleTimeoutMinutes?: number
+): { token: string; sid: string; idleTimeoutMinutes: number; expiresAt: string } {
+  const minutes = normalizeIdleTimeoutMinutes(idleTimeoutMinutes);
+  const sid = randomBytes(16).toString('hex');
+  registerServerSession({
+    sid,
+    userId: payload.id,
+    organizationId: payload.organization_id || payload.tenant_id,
+    idleTimeoutMinutes: minutes,
+  });
+  const jwtMinutes = minutes > 0 ? minutes : 24 * 60;
+  const expiresIn = `${jwtMinutes}m`;
+  const expiresAt = new Date(Date.now() + jwtMinutes * 60_000).toISOString();
+  const token = signToken(
+    {
+      ...payload,
+      sid,
+      idle_timeout_minutes: minutes,
+    },
+    expiresIn
+  );
+  return { token, sid, idleTimeoutMinutes: minutes, expiresAt };
 }
 
 /**
@@ -239,6 +438,18 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
 
   try {
     const decoded = await resolveVerifiedUserFromToken(token);
+    const sessionCheck = touchOrValidateServerSession(decoded);
+    if (!sessionCheck.ok) {
+      const isTimeout = sessionCheck.reason === 'timed_out';
+      res.status(401).json({
+        error: isTimeout ? 'session_timed_out' : 'unauthorized',
+        code: isTimeout ? 'SESSION_TIMEOUT' : 'SESSION_REVOKED',
+        message: isTimeout
+          ? 'Your session timed out due to inactivity. Please sign in again.'
+          : 'Your session has ended. Please sign in again.',
+      });
+      return;
+    }
     req.user = decoded;
     const orgId = decoded.organization_id || decoded.tenant_id;
     req.organizationId = orgId;
@@ -246,9 +457,11 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
     req.campus_id = decoded.campus_id;
     next();
   } catch (err: any) {
+    const expired = err?.name === 'TokenExpiredError';
     res.status(401).json({
-      error: 'unauthorized',
-      message: err?.name === 'TokenExpiredError' ? 'Token has expired' : 'Invalid token signature',
+      error: expired ? 'session_timed_out' : 'unauthorized',
+      code: expired ? 'SESSION_TIMEOUT' : 'INVALID_TOKEN',
+      message: expired ? 'Your session has expired. Please sign in again.' : 'Invalid token signature',
     });
   }
 }

@@ -58,12 +58,18 @@ import {
   ChevronDown,
   Ban,
   Trash2,
+  Inbox,
+  Send,
+  Phone,
+  MessageSquare,
 } from 'lucide-react';
 import type {
   ConsoleAlert,
   ConsoleDashboardSummary,
   ConsolePlan,
   DataPrivacyRequest,
+  LandingLeadRecord,
+  LandingLeadStatus,
   LandingPageConfig,
   LicensePaymentRecord,
   LicenseStatus,
@@ -76,6 +82,7 @@ import type {
   TenantChurch,
   UsageDailyAggregate,
 } from '../../types/ekklesphere';
+import { BrandLogo } from '../common/BrandLogo';
 
 // ============================================================================
 // DEFAULT FALLBACK MODELS (Guarantees all 11 modules always render data)
@@ -294,6 +301,7 @@ export const CreatorsPanel: React.FC = () => {
     | 'feature_flags'
     | 'data_requests'
     | 'audit_log'
+    | 'landing_leads'
     | 'landing_cms'
     | 'profile';
 
@@ -337,8 +345,21 @@ export const CreatorsPanel: React.FC = () => {
   const [featureFlags, setFeatureFlags] = useState<PlatformFeatureFlag[]>(DEFAULT_FEATURE_FLAGS);
   const [dataRequests, setDataRequests] = useState<DataPrivacyRequest[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [landingLeads, setLandingLeads] = useState<LandingLeadRecord[]>([]);
   const [landingCms, setLandingCms] = useState<LandingPageConfig | null>(DEFAULT_LANDING_CONFIG);
   const [activeSupportGrant, setActiveSupportGrant] = useState<SupportGrantSession | null>(null);
+
+  // Landing Leads Triage & Reply State
+  const [leadStatusFilter, setLeadStatusFilter] = useState<string>('all');
+  const [leadTypeFilter, setLeadTypeFilter] = useState<string>('all');
+  const [leadSearch, setLeadSearch] = useState<string>('');
+  const [leadNotesDraft, setLeadNotesDraft] = useState<Record<string, string>>({});
+  const [savingLeadId, setSavingLeadId] = useState<string | null>(null);
+  const [convertingLeadId, setConvertingLeadId] = useState<string | null>(null);
+  const [replyTargetLead, setReplyTargetLead] = useState<LandingLeadRecord | null>(null);
+  const [replySubject, setReplySubject] = useState<string>('');
+  const [replyMessage, setReplyMessage] = useState<string>('');
+  const [sendingReplyLead, setSendingReplyLead] = useState<boolean>(false);
 
   // Selected Organisation 6-Tab Workspace
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
@@ -683,6 +704,7 @@ export const CreatorsPanel: React.FC = () => {
           cmsRes,
           grantsRes,
           credRes,
+          leadsRes,
         ] = await Promise.all([
           safeFetchJson('/api/console/dashboard', headers),
           safeFetchJson('/api/console/organisations', headers),
@@ -697,6 +719,7 @@ export const CreatorsPanel: React.FC = () => {
           safeFetchJson('/api/console/landing-cms', headers),
           safeFetchJson('/api/console/support-grants', headers),
           safeFetchJson('/api/console/profile/credentials', headers),
+          safeFetchJson('/api/console/landing-leads', headers),
         ]);
 
         if (dashRes) setSummary(dashRes);
@@ -722,6 +745,9 @@ export const CreatorsPanel: React.FC = () => {
         if (drRes?.dataRequests) setDataRequests(drRes.dataRequests);
         if (auditRes?.auditLogs) setAuditLogs(auditRes.auditLogs);
         if (cmsRes?.landingConfig) setLandingCms(cmsRes.landingConfig);
+        if (Array.isArray(leadsRes?.leads)) {
+          setLandingLeads(leadsRes.leads);
+        }
 
         if (grantsRes?.supportGrants) {
           const active = grantsRes.supportGrants.find((g: SupportGrantSession) => g.active);
@@ -1428,6 +1454,107 @@ export const CreatorsPanel: React.FC = () => {
     }
   };
 
+  // Landing Lead Inbox Actions
+  const handleUpdateLandingLead = async (
+    leadId: string,
+    payload: { status?: LandingLeadStatus; creatorNotes?: string }
+  ) => {
+    setSavingLeadId(leadId);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(`/api/console/landing-leads/${leadId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.lead) {
+        setLandingLeads((prev) => prev.map((l) => (l.id === leadId ? data.lead : l)));
+        showToast('Lead updated in Supabase.');
+        loadConsoleData(true);
+      } else {
+        showToast(data?.message || 'Unable to update lead.');
+      }
+    } catch {
+      showToast('Network error updating lead.');
+    } finally {
+      setSavingLeadId(null);
+    }
+  };
+
+  const handleConvertLeadToTrial = async (lead: LandingLeadRecord) => {
+    setConvertingLeadId(lead.id);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(`/api/console/landing-leads/${lead.id}/convert`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.organisation) {
+        showToast(
+          `Converted ${lead.churchName || lead.email} into a 14-day trial organisation (${data.license?.key || 'Trial'})!`
+        );
+        await loadConsoleData(true);
+        setSelectedOrgId(data.organisation.id);
+      } else {
+        showToast(data?.message || 'Could not convert lead.');
+      }
+    } catch {
+      showToast('Network error converting lead.');
+    } finally {
+      setConvertingLeadId(null);
+    }
+  };
+
+  const openLeadReplyModal = (lead: LandingLeadRecord) => {
+    setReplyTargetLead(lead);
+    setReplySubject(
+      `Re: ${lead.churchName ? `${lead.churchName} — ` : ''}Ekklesphere Walkthrough`
+    );
+    setReplyMessage(
+      `Hello ${lead.fullName || 'Pastor / Ministry Team'},\n\nThank you for reaching out from the Ekklesphere platform page regarding "${lead.interest || 'Church Workspace'}".\n\nWe would love to help set up ${lead.churchName || 'your church'} on a 14-day trial or schedule a guided walkthrough.\n\nWarm regards,\nEkklesphere Platform Team`
+    );
+  };
+
+  const handleSendLeadReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyTargetLead) return;
+    setSendingReplyLead(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(`/api/console/landing-leads/${replyTargetLead.id}/reply`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          subject: replySubject.trim(),
+          message: replyMessage.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.lead) {
+        setLandingLeads((prev) =>
+          prev.map((l) => (l.id === replyTargetLead.id ? data.lead : l))
+        );
+        const sentOk = Boolean(data?.emailResult?.ok);
+        showToast(
+          sentOk
+            ? `Email sent via Resend to ${replyTargetLead.email} and marked contacted.`
+            : 'Reply logged & lead marked contacted (configure RESEND_API_KEY for live email delivery).'
+        );
+        setReplyTargetLead(null);
+        loadConsoleData(true);
+      } else {
+        showToast(data?.message || 'Failed to send reply.');
+      }
+    } catch {
+      showToast('Network error sending reply.');
+    } finally {
+      setSendingReplyLead(false);
+    }
+  };
+
   // Audited Support Access ("View as Organisation Admin")
   const handleCreateSupportGrant = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1539,6 +1666,30 @@ export const CreatorsPanel: React.FC = () => {
     });
   }, [auditLogs, auditSearch]);
 
+  const filteredLandingLeads = useMemo(() => {
+    return landingLeads.filter((lead) => {
+      const q = leadSearch.trim().toLowerCase();
+      const matchSearch =
+        !q ||
+        lead.email.toLowerCase().includes(q) ||
+        (lead.fullName && lead.fullName.toLowerCase().includes(q)) ||
+        (lead.churchName && lead.churchName.toLowerCase().includes(q)) ||
+        (lead.interest && lead.interest.toLowerCase().includes(q)) ||
+        (lead.message && lead.message.toLowerCase().includes(q));
+      const matchStatus = leadStatusFilter === 'all' || lead.status === leadStatusFilter;
+      const matchType = leadTypeFilter === 'all' || lead.leadType === leadTypeFilter;
+      return matchSearch && matchStatus && matchType;
+    });
+  }, [landingLeads, leadSearch, leadStatusFilter, leadTypeFilter]);
+
+  const newLandingLeadsCount = useMemo(
+    () =>
+      landingLeads.filter((l) => l.status === 'new').length ||
+      activeSummary.newLandingLeadsCount ||
+      0,
+    [landingLeads, activeSummary.newLandingLeadsCount]
+  );
+
   const moduleItems: Array<{
     id: ConsoleTab;
     label: string;
@@ -1565,6 +1716,12 @@ export const CreatorsPanel: React.FC = () => {
       count: dataRequests.filter((d) => d.status === 'pending').length,
     },
     { id: 'audit_log', label: 'Audit Trail', icon: ShieldCheck },
+    {
+      id: 'landing_leads',
+      label: 'Landing Leads & Inquiries',
+      icon: Inbox,
+      count: newLandingLeadsCount,
+    },
     { id: 'landing_cms', label: 'Landing Page CMS', icon: Globe2 },
     { id: 'profile', label: 'Profile & Sign Out', icon: User },
   ];
@@ -1599,9 +1756,10 @@ export const CreatorsPanel: React.FC = () => {
       <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#151532]/95 backdrop-blur-md border-b border-[#D8DAE8] dark:border-[#202046] px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-4 shadow-2xs transition-colors shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           {/* Clean Brand Wordmark & Active View Breadcrumb */}
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] tracking-tight whitespace-nowrap">
-              Ekklesphere Console
+          <div className="flex items-center gap-2.5 min-w-0">
+            <BrandLogo size="sm" surface="auto" />
+            <span className="hidden xs:inline-block px-2 py-0.5 rounded-lg bg-[#EFEDFF] dark:bg-[#202046] text-[10px] font-bold uppercase tracking-wider text-[#6D5CF2] dark:text-[#A594FD] shrink-0">
+              Console
             </span>
             <span className="hidden sm:inline text-xs text-[#666A86]/40 dark:text-[#8D92B5]/40 select-none">/</span>
             <span className="hidden sm:inline text-xs font-medium text-[#666A86] dark:text-[#8D92B5] truncate">
@@ -1999,6 +2157,45 @@ export const CreatorsPanel: React.FC = () => {
                 <div className="text-[11px] text-[#666A86] mt-0.5 font-mono truncate">
                   {activeSummary.storageBackend === 'supabase' ? 'Supabase Postgres 16' : 'Relational Dev Engine'}
                 </div>
+              </div>
+            </div>
+
+            {/* Inbound Landing Funnel Bridge Bar */}
+            <div className="rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-[#6D5CF2] flex items-center justify-center shrink-0">
+                  <Inbox className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="font-extrabold text-sm text-[#1D1B3A] dark:text-white">
+                      Public Landing Funnel &amp; Supabase Lead Inbox
+                    </h4>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-500/15 text-[#6D5CF2]">
+                      {newLandingLeadsCount} New Leads
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    {landingLeads.length} total inquiries captured from `/` · Plans &amp; CMS synced live with landing page.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('landing_leads')}
+                  className="px-3.5 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Inbox className="w-3.5 h-3.5" />
+                  <span>Open Lead Inbox</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('landing_cms')}
+                  className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-bold hover:bg-slate-200 dark:hover:bg-white/15 cursor-pointer"
+                >
+                  Edit Landing CMS
+                </button>
               </div>
             </div>
 
@@ -3866,10 +4063,15 @@ export const CreatorsPanel: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setViewMode('home')}
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.history.pushState({}, '', '/');
+                      window.dispatchEvent(new PopStateEvent('popstate'));
+                    }
+                  }}
                   className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Eye className="w-3.5 h-3.5" /> Preview
+                  <Eye className="w-3.5 h-3.5" /> Preview /
                 </button>
                 <button
                   type="submit"
@@ -3992,6 +4194,244 @@ export const CreatorsPanel: React.FC = () => {
               </div>
             </div>
           </form>
+        )}
+
+        {/* ============================================================== */}
+        {/* MODULE 11A: LANDING LEADS & INQUIRIES INBOX */}
+        {/* ============================================================== */}
+        {activeTab === 'landing_leads' && (
+          <div className="space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-extrabold text-base text-[#1D1B3A] dark:text-white">
+                  Landing Leads &amp; Inquiries
+                </h4>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Every demo request, contact inquiry, quick-add capture, and trial intent submitted from the public landing page reaches Supabase here.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={leadSearch}
+                    onChange={(e) => setLeadSearch(e.target.value)}
+                    placeholder="Search email, church, interest..."
+                    className="pl-8 pr-3 py-2 text-xs rounded-xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] w-52"
+                  />
+                </div>
+                <select
+                  value={leadStatusFilter}
+                  onChange={(e) => setLeadStatusFilter(e.target.value)}
+                  className="px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] font-semibold"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="new">New</option>
+                  <option value="contacted">Contacted</option>
+                  <option value="qualified">Qualified</option>
+                  <option value="converted">Converted</option>
+                  <option value="archived">Archived</option>
+                </select>
+                <select
+                  value={leadTypeFilter}
+                  onChange={(e) => setLeadTypeFilter(e.target.value)}
+                  className="px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] font-semibold"
+                >
+                  <option value="all">All Channels</option>
+                  <option value="demo_request">Demo Requests</option>
+                  <option value="contact_inquiry">Contact Inquiries</option>
+                  <option value="quick_interest">Quick Add</option>
+                  <option value="trial_intent">Trial Intent</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => loadConsoleData(true)}
+                  className="px-3 py-2 rounded-xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            {filteredLandingLeads.length === 0 ? (
+              <div className="rounded-3xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] p-10 text-center space-y-2">
+                <Inbox className="w-8 h-8 text-[#6D5CF2] mx-auto opacity-70" />
+                <div className="font-bold text-sm">No landing leads match the current filter</div>
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Submissions from &ldquo;Book a demo&rdquo;, &ldquo;Contact&rdquo;, or &ldquo;Quick add&rdquo; on `/` will appear here immediately.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3.5">
+                {filteredLandingLeads.map((lead) => {
+                  const notesVal =
+                    leadNotesDraft[lead.id] !== undefined
+                      ? leadNotesDraft[lead.id]
+                      : lead.creatorNotes || '';
+                  const isBusy = savingLeadId === lead.id || convertingLeadId === lead.id;
+
+                  return (
+                    <div
+                      key={lead.id}
+                      className="rounded-2xl bg-white dark:bg-[#181838] border border-[#D8DAE8] dark:border-[#25254A] p-4 sm:p-5 space-y-3 shadow-xs"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-extrabold text-sm text-[#1D1B3A] dark:text-white">
+                              {lead.churchName || lead.fullName || lead.email}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-indigo-500/10 text-[#6D5CF2]">
+                              {lead.leadType.replace('_', ' ')}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                                lead.status === 'new'
+                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                  : lead.status === 'converted'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : lead.status === 'contacted'
+                                  ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                                  : 'bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {lead.status}
+                            </span>
+                            {lead.sourceSection && (
+                              <span className="text-[11px] font-mono text-[#666A86]">
+                                src: {lead.sourceSection}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                            <span className="inline-flex items-center gap-1 font-medium text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              <Mail className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                              {lead.email}
+                            </span>
+                            {lead.fullName && (
+                              <span className="inline-flex items-center gap-1">
+                                <User className="w-3.5 h-3.5" />
+                                {lead.fullName}
+                              </span>
+                            )}
+                            {lead.phone && (
+                              <span className="inline-flex items-center gap-1 font-mono">
+                                <Phone className="w-3.5 h-3.5" />
+                                {lead.phone}
+                              </span>
+                            )}
+                            {lead.interest && (
+                              <span className="inline-flex items-center gap-1">
+                                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                                {lead.interest}
+                              </span>
+                            )}
+                            <span className="font-mono text-[11px]">
+                              {new Date(lead.createdAt).toLocaleString()}
+                            </span>
+                          </div>
+
+                          {lead.message && (
+                            <div className="mt-2 p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/70 dark:border-white/10 text-xs text-[#1D1B3A] dark:text-[#F2F2FA] flex items-start gap-2">
+                              <MessageSquare className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0 mt-0.5" />
+                              <span>{lead.message}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <select
+                            aria-label={`Lead status for ${lead.email}`}
+                            disabled={isBusy}
+                            value={lead.status}
+                            onChange={(e) =>
+                              handleUpdateLandingLead(lead.id, {
+                                status: e.target.value as LandingLeadStatus,
+                              })
+                            }
+                            className="px-2.5 py-1.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-bold"
+                          >
+                            <option value="new">New</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="qualified">Qualified</option>
+                            <option value="converted">Converted</option>
+                            <option value="archived">Archived</option>
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => openLeadReplyModal(lead)}
+                            className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Send className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                            <span>Reply</span>
+                          </button>
+
+                          {lead.assignedOrganizationId ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                loadOrgDetail(lead.assignedOrganizationId!);
+                                setActiveTab('organisations');
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>View Trial Org</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleConvertLeadToTrial(lead)}
+                              className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60 cursor-pointer"
+                            >
+                              <Building2 className="w-3.5 h-3.5" />
+                              <span>
+                                {convertingLeadId === lead.id
+                                  ? 'Provisioning...'
+                                  : 'Convert to Trial Org'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
+                        <input
+                          type="text"
+                          value={notesVal}
+                          onChange={(e) =>
+                            setLeadNotesDraft((prev) => ({
+                              ...prev,
+                              [lead.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="Creator private triage notes (follow-up date, plan fit, campus size)..."
+                          className="flex-1 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs"
+                        />
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() =>
+                            handleUpdateLandingLead(lead.id, {
+                              creatorNotes: notesVal,
+                            })
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-white/15 text-white text-xs font-bold hover:opacity-90 disabled:opacity-60 cursor-pointer shrink-0"
+                        >
+                          {savingLeadId === lead.id ? 'Saving...' : 'Save Note'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         {/* ============================================================== */}
@@ -5617,6 +6057,86 @@ export const CreatorsPanel: React.FC = () => {
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>{isDeletingOrg ? 'Deleting...' : 'Delete Forever'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REPLY TO LANDING LEAD VIA RESEND */}
+      {replyTargetLead && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="max-w-lg w-full bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-[#D8DAE8] dark:border-[#25254A] space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send className="w-5 h-5 text-[#6D5CF2]" />
+                <div>
+                  <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                    Reply to {replyTargetLead.churchName || replyTargetLead.email}
+                  </h3>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Sends directly via Resend &amp; marks lead as contacted
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReplyTargetLead(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendLeadReply} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">Recipient</label>
+                <input
+                  type="text"
+                  readOnly
+                  value={replyTargetLead.email}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono text-[#666A86]"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold block mb-1">Subject *</label>
+                <input
+                  type="text"
+                  required
+                  value={replySubject}
+                  onChange={(e) => setReplySubject(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold block mb-1">Message *</label>
+                <textarea
+                  rows={6}
+                  required
+                  value={replyMessage}
+                  onChange={(e) => setReplyMessage(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 leading-relaxed"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReplyTargetLead(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={sendingReplyLead}
+                  className="px-4 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-black hover:bg-[#5b4be0] disabled:opacity-60 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{sendingReplyLead ? 'Sending...' : 'Send Reply'}</span>
                 </button>
               </div>
             </form>

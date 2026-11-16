@@ -17,6 +17,7 @@ import {
   UserPlus,
   UserMinus,
   ClipboardList,
+  QrCode,
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { MemberAvatar } from '../common/MemberAvatar';
@@ -27,6 +28,7 @@ import {
   formatAllowanceDeadline,
 } from '../../utils/serviceStatus';
 import { EditableServiceTarget, EditServiceModal } from './AdminDashboardModals';
+import { ServiceQrModal, ServiceQrTarget } from './ServiceQrModal';
 
 export interface ServiceHistoryAttendee {
   id: string;
@@ -186,6 +188,7 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
 
   // Action controls state
   const [editingTarget, setEditingTarget] = useState<EditableServiceTarget | null>(null);
+  const [qrTargetService, setQrTargetService] = useState<ServiceQrTarget | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
@@ -942,6 +945,27 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
 
                             <button
                               type="button"
+                              onClick={() =>
+                                setQrTargetService({
+                                  id: svc.id,
+                                  name: svc.name,
+                                  date: svc.date,
+                                  startsAt: svc.startsAt,
+                                  endsAt: svc.endsAt,
+                                  dwellMinutes: allowanceMin,
+                                  status: svc.status,
+                                })
+                              }
+                              title="Show Service Check-In QR Code"
+                              aria-label={`Show check-in QR for ${svc.name}`}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 text-[11px] font-semibold transition-colors cursor-pointer"
+                            >
+                              <QrCode className="w-3 h-3 text-[#6D5CF2]" />
+                              <span>QR</span>
+                            </button>
+
+                            <button
+                              type="button"
                               disabled={isBusy}
                               onClick={() => handleToggleBinaryStatus(svc)}
                               title={
@@ -1117,6 +1141,28 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
                   >
                     <UserPlus className="w-3.5 h-3.5" />
                     <span>{isQuickCheckinOpen ? 'Close Check-In' : 'Check In Member'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setQrTargetService({
+                        id: selectedService.id,
+                        name: selectedService.name,
+                        date: selectedService.date,
+                        startsAt: selectedService.startsAt,
+                        endsAt: selectedService.endsAt,
+                        dwellMinutes:
+                          selectedService.allowanceMinutes ??
+                          systemSettings.dwellTimeMinutes ??
+                          5,
+                        status: selectedService.status,
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#14142E] text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <QrCode className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                    <span>Check-in QR</span>
                   </button>
 
                   <button
@@ -1327,6 +1373,12 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
         onSaveService={handleSaveEditedService}
         onNotify={showToast}
         formatDateLabel={formatDateInputLabel}
+      />
+
+      <ServiceQrModal
+        isOpen={Boolean(qrTargetService)}
+        service={qrTargetService}
+        onClose={() => setQrTargetService(null)}
       />
     </div>
   );

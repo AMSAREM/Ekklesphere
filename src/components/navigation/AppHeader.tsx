@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { UserRole } from '../../types/ekklesphere';
 import {
-  Radio,
   Sun,
   Moon,
   HelpCircle,
@@ -20,6 +19,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { BrandLogo } from '../common/BrandLogo';
 
 export const AppHeader: React.FC = () => {
   const {
@@ -112,22 +112,9 @@ export const AppHeader: React.FC = () => {
   return (
     <header className="sticky top-0 z-50 w-full bg-white/95 dark:bg-[#14142E]/95 backdrop-blur-md border-b border-[#E9EBF5] dark:border-[#2D2D55] transition-colors duration-150">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-13 sm:h-14 flex items-center justify-between gap-3">
-        {/* Left: Simple, minimal brand identity */}
+        {/* Left: Official Ekklesphere brand identity */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#6D5CF2] text-white flex items-center justify-center shadow-xs">
-            <Radio className="w-4 h-4" />
-          </div>
-          <span className="font-bold text-sm sm:text-base tracking-tight text-[#1D1B3A] dark:text-[#F2F2FA]">
-            Ekklesphere
-          </span>
-          {systemSettings?.campusName?.trim() && systemSettings.campusName.trim() !== 'Accra Central' && (
-            <>
-              <span className="hidden md:inline-block text-[#C5C8DE] dark:text-[#3D3D66]">/</span>
-              <span className="hidden md:inline text-xs font-medium text-[#666A86] dark:text-[#A9ACC8] truncate max-w-[160px]">
-                {systemSettings.campusName.trim()}
-              </span>
-            </>
-          )}
+          <BrandLogo size="sm" surface="auto" />
         </div>
 
         {/* Center: Minimal live attendance indicator */}
@@ -190,17 +177,6 @@ export const AppHeader: React.FC = () => {
                 })}
               </div>
             )}
-
-          {/* Authenticated Church Home Preview Button */}
-          {currentUser && (
-            <button
-              onClick={() => setViewMode('home')}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-all cursor-pointer"
-              title="Open Church Public Home Screen (/home)"
-            >
-              <span>Church Home</span>
-            </button>
-          )}
 
           {/* Platform Creator Quick Access Button */}
           {currentUser &&

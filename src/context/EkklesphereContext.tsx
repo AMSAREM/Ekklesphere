@@ -54,6 +54,19 @@ import {
   type SettingsGroupIntent,
   type SettingsTabId,
 } from '../utils/settingsConnections';
+import {
+  parseServiceQrPayload,
+  type ParsedServiceQrPayload,
+} from '../utils/serviceQr';
+
+export interface ServiceQrCheckInResult {
+  ok: boolean;
+  message: string;
+  alreadyCheckedIn?: boolean;
+  serviceId?: string;
+  serviceName?: string;
+  record?: AttendanceRecord;
+}
 
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -81,6 +94,7 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   autoAssignCellLeaders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
+  sessionTimeoutMinutes: 30,
   smsGatewayProvider: 'Arkesel SMS',
   smsSenderId: 'EKKLESPHERE',
   emailGatewayProvider: 'Resend Email',
@@ -151,7 +165,7 @@ interface EkklesphereContextType {
   currentUser: AuthUser | null;
   isSessionVerified: boolean;
   isVerifyingSession: boolean;
-  handleUnauthorizedSession: (status: number) => boolean;
+  handleUnauthorizedSession: (status: number, reason?: 'timeout' | 'unauthorized') => boolean;
   setCurrentUser: (user: AuthUser | null) => void;
   login: (user: AuthUser) => void;
   loginWithCredentials: (identifier: string, password: string) => Promise<AuthActionResult>;
@@ -181,7 +195,12 @@ interface EkklesphereContextType {
     password: string;
     trialPlan?: LicenseTier;
   }) => Promise<AuthActionResult>;
-  logout: () => void;
+  logout: (options?: { reason?: 'manual' | 'timeout' }) => void;
+  sessionTimeoutMinutes: number;
+  sessionWarningSecondsLeft: number | null;
+  sessionExpiredNotice: string | null;
+  clearSessionExpiredNotice: () => void;
+  extendUserSession: () => Promise<void>;
   changePassword: (
     currentPassword: string,
     newPassword: string,
@@ -376,6 +395,10 @@ interface EkklesphereContextType {
     note?: string,
     serviceIdOverride?: string
   ) => Promise<boolean>;
+  checkInWithServiceQr: (
+    payload: string | ParsedServiceQrPayload,
+    targetPersonIdOverride?: string
+  ) => Promise<ServiceQrCheckInResult>;
   removeCheckIn: (personId: string, serviceIdOverride?: string) => Promise<void>;
 
   // Usher PWA Offline simulation
@@ -537,6 +560,17 @@ const getUsableLocalToken = (): string | null => {
   }
 };
 
+const SESSION_LAST_ACTIVITY_KEY = 'ekklesphere_last_activity_at';
+const SESSION_EXPIRED_NOTICE_KEY = 'ekklesphere_session_timeout_notice';
+const DEFAULT_IDLE_TIMEOUT_MINUTES = 30;
+
+function normalizeClientSessionTimeoutMinutes(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return DEFAULT_IDLE_TIMEOUT_MINUTES;
+  if (num <= 0) return 0;
+  return Math.max(1, Math.min(480, Math.round(num)));
+}
+
 export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
@@ -561,6 +595,30 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [isSessionVerified, setIsSessionVerified] = useState<boolean>(false);
   const [isVerifyingSession, setIsVerifyingSession] = useState<boolean>(() => Boolean(getUsableLocalToken()));
+  const [sessionWarningSecondsLeft, setSessionWarningSecondsLeft] = useState<number | null>(null);
+  const [sessionTimeoutOverrideMinutes, setSessionTimeoutOverrideMinutes] = useState<number | null>(null);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(() => {
+    try {
+      return typeof window !== 'undefined' ? sessionStorage.getItem(SESSION_EXPIRED_NOTICE_KEY) : null;
+    } catch {
+      return null;
+    }
+  });
+  const currentUserRef = useRef<AuthUser | null>(currentUser);
+  currentUserRef.current = currentUser;
+  const lastActivityAtRef = useRef<number>(Date.now());
+  const lastKeepaliveAtRef = useRef<number>(Date.now());
+  const keepaliveInFlightRef = useRef<boolean>(false);
+
+  const clearSessionExpiredNotice = () => {
+    setSessionExpiredNotice(null);
+    try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem(SESSION_EXPIRED_NOTICE_KEY);
+      }
+    } catch {}
+  };
+
   const [activePortalState, setActivePortalState] = useState<'admin' | 'member' | 'usher' | 'simulator'>('admin');
 
   // Role-enforced portal switcher: prevents unauthorized role traversal
@@ -749,14 +807,29 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return headers;
   };
 
-  const handleUnauthorizedSession = (status: number): boolean => {
+  const handleUnauthorizedSession = (
+    status: number,
+    reason?: 'timeout' | 'unauthorized'
+  ): boolean => {
     if (status !== 401) return false;
     setIsSessionVerified(false);
     setIsVerifyingSession(false);
+    setSessionWarningSecondsLeft(null);
+    setSessionTimeoutOverrideMinutes(null);
     setCurrentUser(null);
+    if (reason === 'timeout') {
+      const msg = 'Your session timed out due to inactivity. Please sign in again to continue.';
+      setSessionExpiredNotice(msg);
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, msg);
+        }
+      } catch {}
+    }
     try {
       localStorage.removeItem('ekklesphere_token');
       localStorage.removeItem('ekklesphere_user');
+      localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
     } catch {}
     return true;
   };
@@ -841,6 +914,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const impersonateTenant = (target: TenantChurch | string) => {
     const tenant = typeof target === 'string' ? tenants.find((t) => t.id === target) : target;
     if (!tenant) return;
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const updated: AuthUser = { ...prev, organizationName: tenant.name };
+      try {
+        localStorage.setItem('ekklesphere_user', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     updateSystemSettings({
       churchName: tenant.name,
       campusName: `${tenant.name} (${tenant.campusCode})`,
@@ -976,6 +1057,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       role: UserRole;
       organizationId?: string;
       organization_id?: string;
+      organizationName?: string;
       tenant_id?: string;
       isCreator?: boolean;
       is_creator?: boolean;
@@ -984,13 +1066,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       mustChangePassword?: boolean;
     },
     token: string,
-    campusNameOverride?: string
+    orgNameOverride?: string
   ): AuthUser => {
     const role = payload.role;
     const isCreator = Boolean(
       payload.isCreator || payload.is_creator || role === 'creator' || role === 'super_admin'
     );
     const orgId = (payload.organizationId || payload.organization_id || payload.tenant_id || '').toLowerCase() || undefined;
+    const resolvedOrgName =
+      (orgNameOverride || payload.organizationName || systemSettings.churchName || '').trim() || undefined;
     const matchedMember = members.find(
       (m) => m.id === payload.id || (payload.email && (m.email || '').toLowerCase() === payload.email.toLowerCase())
     );
@@ -1019,7 +1103,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       memberId: matchedMember?.id || payload.id,
       organization_id: orgId,
       tenant_id: orgId,
-      campusName: campusNameOverride || systemSettings.campusName || 'Main Campus',
+      organizationName: resolvedOrgName,
+      campusName: systemSettings.campusName || 'Main Campus',
       title:
         role === 'creator' || role === 'super_admin'
           ? 'Platform Creator & Owner'
@@ -1046,6 +1131,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ...user,
       verifiedRole: user.verifiedRole || user.role,
     };
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    lastKeepaliveAtRef.current = now;
+    setSessionWarningSecondsLeft(null);
+    clearSessionExpiredNotice();
     setCurrentUser(verifiedUser);
     setIsVerifyingSession(false);
     setIsSessionVerified(Boolean(verifiedUser.token));
@@ -1056,6 +1146,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     try {
       localStorage.setItem('ekklesphere_user', JSON.stringify(verifiedUser));
+      localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(now));
       if (verifiedUser.token) {
         localStorage.setItem('ekklesphere_token', verifiedUser.token);
       }
@@ -1091,7 +1182,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const data = await res.json();
     if (!data?.token || !data?.user) return false;
 
-    const authUser = buildAuthUserFromServer(data.user, data.token);
+    if (typeof data.idleTimeoutMinutes === 'number') {
+      setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+    }
+    const resolvedOrgName = (data.organization?.name || data.organizationName || data.user?.organizationName || '').trim();
+    if (resolvedOrgName) {
+      setSystemSettings((prev) => {
+        const nextSettings: SystemSettings = { ...prev, churchName: resolvedOrgName };
+        try {
+          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+        } catch {}
+        return nextSettings;
+      });
+    }
+    const authUser = buildAuthUserFromServer(data.user, data.token, resolvedOrgName || undefined);
     login(authUser);
     showToast(`Signed in as ${authUser.name}`);
     return true;
@@ -1118,8 +1222,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  const logout = () => {
+  const logout = (options?: { reason?: 'manual' | 'timeout' }) => {
+    const reason = options?.reason || 'manual';
     const existingToken =
+      currentUserRef.current?.token ||
       currentUser?.token ||
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
     if (existingToken) {
@@ -1130,6 +1236,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     setIsSessionVerified(false);
     setIsVerifyingSession(false);
+    setSessionWarningSecondsLeft(null);
+    setSessionTimeoutOverrideMinutes(null);
     setCurrentUser(null);
     setGoogleAuthError(null);
     setIsChangePasswordModalOpen(false);
@@ -1149,6 +1257,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       signOutSupabaseBrowser().catch(() => {});
       localStorage.removeItem('ekklesphere_user');
       localStorage.removeItem('ekklesphere_token');
+      localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
       localStorage.removeItem('ekklesphere_view_mode');
       localStorage.removeItem('ekklesphere_system_settings');
       localStorage.removeItem('ekklesphere_church_groups');
@@ -1160,6 +1269,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       localStorage.removeItem('ekklesphere_landing_config');
     } catch {
       // ignore
+    }
+    if (reason === 'timeout') {
+      const timeoutMsg =
+        'Your session timed out due to inactivity. Please sign in again to continue.';
+      setSessionExpiredNotice(timeoutMsg);
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, timeoutMsg);
+        }
+      } catch {}
+    } else {
+      clearSessionExpiredNotice();
     }
     setViewModeState('app');
     try {
@@ -1173,7 +1294,64 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } catch {
       // ignore
     }
-    showToast('Signed out of Ekklesphere');
+    showToast(
+      reason === 'timeout'
+        ? 'Session timed out due to inactivity.'
+        : 'Signed out of Ekklesphere'
+    );
+  };
+
+  const extendUserSession = async (): Promise<void> => {
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    setSessionWarningSecondsLeft(null);
+    try {
+      localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(now));
+    } catch {}
+
+    const activeUser = currentUserRef.current;
+    const token =
+      activeUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token || keepaliveInFlightRef.current) return;
+
+    keepaliveInFlightRef.current = true;
+    try {
+      const res = await fetch('/api/auth/session/keepalive', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.status === 401) {
+        logout({ reason: 'timeout' });
+        return;
+      }
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      lastKeepaliveAtRef.current = Date.now();
+      if (typeof data?.idleTimeoutMinutes === 'number') {
+        setSessionTimeoutOverrideMinutes(
+          normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes)
+        );
+      }
+      if (data?.token && typeof data.token === 'string') {
+        setCurrentUser((prev) => {
+          if (!prev) return prev;
+          const updated: AuthUser = { ...prev, token: data.token };
+          try {
+            localStorage.setItem('ekklesphere_token', data.token);
+            localStorage.setItem('ekklesphere_user', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+      }
+    } catch {
+      // ignore transient keepalive errors; client countdown keeps running safely
+    } finally {
+      keepaliveInFlightRef.current = false;
+    }
   };
 
   const changePassword = async (
@@ -1297,13 +1475,26 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
       }
 
+      if (typeof data.idleTimeoutMinutes === 'number') {
+        setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+      }
+      const resolvedOrgName = (data.organization?.name || data.organizationName || data.user?.organizationName || '').trim();
+      if (resolvedOrgName) {
+        setSystemSettings((prev) => {
+          const nextSettings: SystemSettings = { ...prev, churchName: resolvedOrgName };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+          } catch {}
+          return nextSettings;
+        });
+      }
       const authUser = buildAuthUserFromServer(
         {
           ...data.user,
           mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
         },
         data.token,
-        data.organization?.name
+        resolvedOrgName || undefined
       );
       login(authUser);
       if (authUser.mustChangePassword) {
@@ -1370,13 +1561,26 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
       setMembers((prev) => [savedPerson, ...prev.filter((m) => m.id !== savedPerson.id)]);
 
+      if (typeof data.idleTimeoutMinutes === 'number') {
+        setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+      }
+      const resolvedOrgName = (data.organization?.name || data.organizationName || data.user?.organizationName || '').trim();
+      if (resolvedOrgName) {
+        setSystemSettings((prev) => {
+          const nextSettings: SystemSettings = { ...prev, churchName: resolvedOrgName };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+          } catch {}
+          return nextSettings;
+        });
+      }
       const authUser = buildAuthUserFromServer(
         data.user,
         data.token,
-        data.organization?.name
+        resolvedOrgName || undefined
       );
       login(authUser);
-      showToast(`Welcome to ${data.organization?.name || systemSettings.churchName || 'Ekklesphere'}, ${params.firstName.trim()}!`);
+      showToast(`Welcome to ${resolvedOrgName || systemSettings.churchName || 'Ekklesphere'}, ${params.firstName.trim()}!`);
       return { ok: true };
     } catch {
       const msg = 'Unable to reach the registration server. Please try again.';
@@ -1459,6 +1663,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
       setMembers([founderMember]);
 
+      if (typeof data.idleTimeoutMinutes === 'number') {
+        setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+      }
       const authUser = buildAuthUserFromServer(
         data.user,
         data.token,
@@ -1574,14 +1781,56 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         .then(async (res) => {
           if (!active) return;
           if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            const timedOut =
+              errData?.error === 'session_timed_out' || errData?.code === 'SESSION_TIMEOUT';
+            if (timedOut) {
+              const timeoutMsg =
+                'Your previous session timed out due to inactivity. Please sign in again.';
+              setSessionExpiredNotice(timeoutMsg);
+              try {
+                sessionStorage.setItem(SESSION_EXPIRED_NOTICE_KEY, timeoutMsg);
+              } catch {}
+            }
             localStorage.removeItem('ekklesphere_token');
             localStorage.removeItem('ekklesphere_user');
+            localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
             setIsSessionVerified(false);
             setCurrentUser(null);
             return;
           }
           const data = await res.json();
           if (data?.user && active) {
+            const now = Date.now();
+            lastActivityAtRef.current = now;
+            lastKeepaliveAtRef.current = now;
+            try {
+              localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(now));
+            } catch {}
+            if (typeof data.idleTimeoutMinutes === 'number') {
+              setSessionTimeoutOverrideMinutes(
+                normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes)
+              );
+            }
+            const resolvedOrgName = (
+              data.organization?.name ||
+              data.organizationName ||
+              data.user?.organizationName ||
+              ''
+            ).trim();
+            if (resolvedOrgName) {
+              setSystemSettings((prev) => {
+                if (prev.churchName?.trim() === resolvedOrgName) return prev;
+                const nextSettings: SystemSettings = {
+                  ...prev,
+                  churchName: prev.churchName?.trim() || resolvedOrgName,
+                };
+                try {
+                  localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+                } catch {}
+                return nextSettings;
+              });
+            }
             const hydrated = buildAuthUserFromServer(
               {
                 id: data.user.id,
@@ -1589,11 +1838,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 name: data.user.name,
                 role: data.user.role,
                 organizationId: data.organizationId || data.user.organization_id,
+                organizationName: resolvedOrgName || undefined,
                 isCreator: data.isCreator,
                 avatar: data.user.avatar || data.memberProfile?.imageUrl,
                 mustChangePassword: Boolean(data.mustChangePassword ?? data.user.mustChangePassword),
               },
-              storedToken
+              storedToken,
+              resolvedOrgName || undefined
             );
             setCurrentUser(hydrated);
             setIsSessionVerified(true);
@@ -1662,6 +1913,157 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       authSub?.subscription?.unsubscribe();
     };
   }, []);
+
+  const effectiveSessionTimeoutMinutes = normalizeClientSessionTimeoutMinutes(
+    sessionTimeoutOverrideMinutes ??
+      systemSettings.sessionTimeoutMinutes ??
+      DEFAULT_IDLE_TIMEOUT_MINUTES
+  );
+
+  // Sync override whenever org system settings load or update
+  useEffect(() => {
+    if (typeof systemSettings.sessionTimeoutMinutes === 'number') {
+      setSessionTimeoutOverrideMinutes(
+        normalizeClientSessionTimeoutMinutes(systemSettings.sessionTimeoutMinutes)
+      );
+    }
+  }, [systemSettings.sessionTimeoutMinutes]);
+
+  // Idle session timeout tracker across Member, Usher, Admin, and Creator sessions
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!currentUser?.token || effectiveSessionTimeoutMinutes <= 0) {
+      setSessionWarningSecondsLeft(null);
+      return;
+    }
+
+    const timeoutMs = effectiveSessionTimeoutMinutes * 60 * 1000;
+    const warningWindowMs = timeoutMs <= 120_000 ? 20_000 : 60_000;
+    const keepaliveIntervalMs = Math.min(4 * 60_000, Math.max(30_000, Math.floor(timeoutMs * 0.4)));
+
+    const seedTimestamp = () => {
+      const now = Date.now();
+      let stored = 0;
+      try {
+        stored = Number(localStorage.getItem(SESSION_LAST_ACTIVITY_KEY) || 0);
+      } catch {}
+      if (!Number.isFinite(stored) || stored <= 0) {
+        lastActivityAtRef.current = now;
+        try {
+          localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(now));
+        } catch {}
+      } else {
+        lastActivityAtRef.current = Math.max(lastActivityAtRef.current, stored);
+      }
+    };
+    seedTimestamp();
+
+    let lastMouseRecordAt = 0;
+    let isWarningVisible = false;
+
+    const recordUserActivity = (throttleMouse: boolean) => {
+      // Once warning modal is visible, require deliberate Stay Signed In action or another tab activity
+      if (isWarningVisible) return;
+      const now = Date.now();
+      if (throttleMouse && now - lastMouseRecordAt < 5000) return;
+      if (throttleMouse) lastMouseRecordAt = now;
+      lastActivityAtRef.current = now;
+      try {
+        localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(now));
+      } catch {}
+    };
+
+    const onExplicitActivity = () => recordUserActivity(false);
+    const onPointerMove = () => recordUserActivity(true);
+
+    const onStorageSync = (e: StorageEvent) => {
+      if (e.key === 'ekklesphere_token' && !e.newValue) {
+        handleUnauthorizedSession(401);
+        return;
+      }
+      if (e.key === SESSION_LAST_ACTIVITY_KEY && e.newValue) {
+        const parsed = Number(e.newValue);
+        if (Number.isFinite(parsed) && parsed > lastActivityAtRef.current) {
+          lastActivityAtRef.current = parsed;
+          isWarningVisible = false;
+          setSessionWarningSecondsLeft(null);
+        }
+      }
+    };
+
+    const evaluateSession = () => {
+      if (!currentUserRef.current?.token) {
+        setSessionWarningSecondsLeft(null);
+        return;
+      }
+      const now = Date.now();
+      const elapsedMs = now - lastActivityAtRef.current;
+      const remainingMs = timeoutMs - elapsedMs;
+
+      if (remainingMs <= 0) {
+        isWarningVisible = false;
+        setSessionWarningSecondsLeft(null);
+        logout({ reason: 'timeout' });
+        return;
+      }
+
+      if (remainingMs <= warningWindowMs) {
+        isWarningVisible = true;
+        setSessionWarningSecondsLeft(Math.max(1, Math.ceil(remainingMs / 1000)));
+        return;
+      }
+
+      if (isWarningVisible) {
+        isWarningVisible = false;
+        setSessionWarningSecondsLeft(null);
+      }
+
+      // Periodically refresh sliding session token when user has been active recently
+      if (
+        now - lastActivityAtRef.current < 30_000 &&
+        now - lastKeepaliveAtRef.current >= keepaliveIntervalMs &&
+        !keepaliveInFlightRef.current
+      ) {
+        void extendUserSession();
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const stored = Number(localStorage.getItem(SESSION_LAST_ACTIVITY_KEY) || 0);
+          if (Number.isFinite(stored) && stored > lastActivityAtRef.current) {
+            lastActivityAtRef.current = stored;
+          }
+        } catch {}
+        evaluateSession();
+      }
+    };
+
+    window.addEventListener('mousedown', onExplicitActivity, { passive: true });
+    window.addEventListener('keydown', onExplicitActivity, { passive: true });
+    window.addEventListener('touchstart', onExplicitActivity, { passive: true });
+    window.addEventListener('pointerdown', onExplicitActivity, { passive: true });
+    window.addEventListener('scroll', onExplicitActivity, { passive: true });
+    window.addEventListener('mousemove', onPointerMove, { passive: true });
+    window.addEventListener('storage', onStorageSync);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    evaluateSession();
+    const intervalId = window.setInterval(evaluateSession, 1000);
+
+    return () => {
+      window.removeEventListener('mousedown', onExplicitActivity);
+      window.removeEventListener('keydown', onExplicitActivity);
+      window.removeEventListener('touchstart', onExplicitActivity);
+      window.removeEventListener('pointerdown', onExplicitActivity);
+      window.removeEventListener('scroll', onExplicitActivity);
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('storage', onStorageSync);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.clearInterval(intervalId);
+    };
+  }, [currentUser?.id, currentUser?.token, effectiveSessionTimeoutMinutes]);
 
   const [churchGroups, setChurchGroups] = useState<ChurchGroup[]>(() => {
     try {
@@ -2113,6 +2515,225 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const { promise } = executeCheckIn(personId, method, confidence, note, serviceIdOverride);
     return promise;
   };
+
+  const checkInWithServiceQr = async (
+    payload: string | ParsedServiceQrPayload,
+    targetPersonIdOverride?: string
+  ): Promise<ServiceQrCheckInResult> => {
+    const parsed: ParsedServiceQrPayload | null =
+      typeof payload === 'string'
+        ? parseServiceQrPayload(payload, services)
+        : payload?.serviceId
+        ? payload
+        : null;
+
+    if (!parsed || !parsed.serviceId || isPlaceholderServiceId(parsed.serviceId)) {
+      const msg = 'Unrecognized service QR code. Please scan an active service check-in QR.';
+      showToast(msg);
+      return { ok: false, message: msg };
+    }
+
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) {
+      const msg = 'Please sign in first to complete service QR check-in.';
+      showToast(msg);
+      return { ok: false, message: msg, serviceId: parsed.serviceId };
+    }
+
+    const serviceId = parsed.serviceId.trim();
+
+    if (!isUsherOnline) {
+      const selfId =
+        targetPersonIdOverride ||
+        members.find(
+          (m) =>
+            m.id === currentUser?.id ||
+            (currentUser?.email && m.email?.toLowerCase() === currentUser.email.toLowerCase())
+        )?.id ||
+        currentUser?.id;
+      if (!selfId) {
+        const msg = 'Cannot complete offline QR check-in without a member profile.';
+        showToast(msg);
+        return { ok: false, message: msg, serviceId };
+      }
+      const queued = await checkInPersonAsync(
+        selfId,
+        'posted_qr',
+        99,
+        'Queued via Service QR Check-in',
+        serviceId
+      );
+      const localSvc = services.find((s) => s.id === serviceId);
+      return {
+        ok: queued,
+        serviceId,
+        serviceName: localSvc?.name,
+        message: queued
+          ? `Saved QR check-in locally for ${localSvc?.name || 'scheduled service'}.`
+          : 'Service is not currently open for check-in.',
+      };
+    }
+
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(serviceId)}/qr-checkin`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          qrToken: parsed.token || undefined,
+          memberId: targetPersonIdOverride || undefined,
+        }),
+      });
+      if (handleUnauthorizedSession(res.status)) {
+        return { ok: false, message: 'Your session expired. Please sign in again.', serviceId };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errMsg =
+          data?.message || `Could not complete Service QR check-in (HTTP ${res.status}).`;
+        showToast(errMsg);
+        return { ok: false, message: errMsg, serviceId };
+      }
+
+      const returnedRecord = data?.record as AttendanceRecord | undefined;
+      const serviceName = String(
+        data?.service?.name ||
+          services.find((s) => s.id === serviceId)?.name ||
+          'Scheduled Service'
+      );
+
+      if (Array.isArray(data?.liveCheckins)) {
+        setAttendanceRecords((prev) => {
+          const pendingOffline = prev.filter((r) => r.waitingToSync);
+          const merged = [...data.liveCheckins];
+          for (const offlineRec of pendingOffline) {
+            if (
+              !merged.some(
+                (r) =>
+                  r.personId === offlineRec.personId &&
+                  r.serviceInstanceId === offlineRec.serviceInstanceId
+              )
+            ) {
+              merged.unshift(offlineRec);
+            }
+          }
+          return merged;
+        });
+      } else if (returnedRecord) {
+        setAttendanceRecords((prev) => [
+          returnedRecord,
+          ...prev.filter(
+            (r) =>
+              !(
+                r.personId === returnedRecord.personId &&
+                r.serviceInstanceId === returnedRecord.serviceInstanceId
+              )
+          ),
+        ]);
+      }
+
+      if (services.some((s) => s.id === serviceId)) {
+        setActiveServiceId(serviceId);
+      }
+
+      const alreadyCheckedIn = Boolean(data?.alreadyCheckedIn);
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const msg = alreadyCheckedIn
+        ? `Already checked into ${serviceName}.`
+        : `Checked into ${serviceName} via Service QR!`;
+
+      if (!alreadyCheckedIn) {
+        setAuditLogs((prev) => [
+          {
+            id: `log-qr-${Date.now()}`,
+            actor: currentUser?.name || 'Member Device',
+            action: 'Service QR Check-In',
+            entityType: 'AttendanceRecord' as const,
+            timestamp: nowTime,
+            details: `${returnedRecord?.personName || currentUser?.name || 'Member'} · ${serviceName}`,
+          },
+          ...prev,
+        ]);
+
+        if (systemSettings.enablePushNotifications && memberConsents.push) {
+          pushNotificationService
+            .notifyArrivalCheckin(
+              returnedRecord?.personName || currentUser?.name || 'Member',
+              serviceName,
+              'posted_qr'
+            )
+            .catch(() => {});
+        }
+      }
+
+      showToast(msg);
+      return {
+        ok: true,
+        alreadyCheckedIn,
+        serviceId,
+        serviceName,
+        record: returnedRecord,
+        message: msg,
+      };
+    } catch {
+      const msg = 'Network error while verifying Service QR code.';
+      showToast(msg);
+      return { ok: false, message: msg, serviceId };
+    }
+  };
+
+  // Capture deep-link Service QR check-in query params on load and execute once authenticated
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const checkinKind = (sp.get('checkin') || '').trim().toLowerCase();
+      const serviceId = (sp.get('serviceId') || sp.get('eventId') || '').trim();
+      const token = (sp.get('token') || sp.get('qrToken') || '').trim();
+      const orgId = (sp.get('orgId') || sp.get('organizationId') || '').trim();
+      if (checkinKind === 'service' && serviceId) {
+        sessionStorage.setItem(
+          'ekklesphere_pending_qr_checkin',
+          JSON.stringify({ serviceId, token: token || undefined, orgId: orgId || undefined })
+        );
+        sp.delete('checkin');
+        sp.delete('serviceId');
+        sp.delete('eventId');
+        sp.delete('token');
+        sp.delete('qrToken');
+        sp.delete('orgId');
+        sp.delete('organizationId');
+        const nextQs = sp.toString();
+        const targetPath = window.location.pathname === '/' ? '/app' : window.location.pathname;
+        window.history.replaceState({}, '', `${targetPath}${nextQs ? `?${nextQs}` : ''}${window.location.hash}`);
+      }
+    } catch {
+      // ignore sessionStorage / URL parse issues
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSessionVerified || !currentUser?.token || typeof window === 'undefined') return;
+    let rawPending: string | null = null;
+    try {
+      rawPending = sessionStorage.getItem('ekklesphere_pending_qr_checkin');
+      if (rawPending) {
+        sessionStorage.removeItem('ekklesphere_pending_qr_checkin');
+      }
+    } catch {
+      rawPending = null;
+    }
+    if (!rawPending) return;
+    try {
+      const parsed = JSON.parse(rawPending) as ParsedServiceQrPayload;
+      if (parsed?.serviceId) {
+        void checkInWithServiceQr(parsed);
+      }
+    } catch {
+      // ignore malformed payload
+    }
+  }, [isSessionVerified, currentUser?.id, currentUser?.token]);
 
   const removeCheckIn = async (personId: string, serviceIdOverride?: string): Promise<void> => {
     const targetServiceId = serviceIdOverride || activeServiceId;
@@ -2934,9 +3555,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setSystemSettingsStorageBackend(data.storageBackend);
       }
       if (data?.settings) {
+        const fallbackOrgName = (
+          data.settings.churchName ||
+          data.organization?.name ||
+          currentUserRef.current?.organizationName ||
+          ''
+        ).trim();
         const merged: SystemSettings = {
           ...DEFAULT_SYSTEM_SETTINGS,
           ...data.settings,
+          churchName: fallbackOrgName,
         };
         setSystemSettings(merged);
         try {
@@ -4819,6 +5447,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       registerMember,
       registerOrganisation,
       logout,
+      sessionTimeoutMinutes: effectiveSessionTimeoutMinutes,
+      sessionWarningSecondsLeft,
+      sessionExpiredNotice,
+      clearSessionExpiredNotice,
+      extendUserSession,
       changePassword,
       switchUserRole,
       pushPermissionStatus,
@@ -4912,6 +5545,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       telemetrySummary,
       checkInPerson,
       checkInPersonAsync,
+      checkInWithServiceQr,
       removeCheckIn,
       isUsherOnline,
       setIsUsherOnline,
@@ -4964,6 +5598,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       currentUser,
       isSessionVerified,
       isVerifyingSession,
+      effectiveSessionTimeoutMinutes,
+      sessionWarningSecondsLeft,
+      sessionExpiredNotice,
       isGoogleAuthLoading,
       googleAuthError,
       pushPermissionStatus,

@@ -15,6 +15,7 @@ import {
   resolveVerifiedUserFromToken,
 } from '../../lib/auth.ts';
 import { platformStore } from './platformStore.ts';
+import { buildHtmlFromPlainText, sendResendEmail } from './communicationsService.ts';
 import type { LicenseTier } from '../types/ekklesphere.ts';
 
 export const consoleRouter = express.Router();
@@ -1197,6 +1198,135 @@ consoleRouter.put(['/landing-config', '/landing-cms'], async (req: Request, res:
   });
 
   return res.status(200).json({ landingConfig: updated });
+});
+
+// 14b. Landing Page Leads & Inquiries Inbox (Stored in Supabase public.landing_leads)
+const UpdateLandingLeadSchema = z.object({
+  status: z.enum(['new', 'contacted', 'qualified', 'converted', 'archived']).optional(),
+  creatorNotes: z.string().trim().max(2000).nullable().optional(),
+});
+
+const ReplyLandingLeadSchema = z.object({
+  subject: z.string().trim().min(2).max(160),
+  message: z.string().trim().min(2).max(4000),
+});
+
+consoleRouter.get('/landing-leads', async (req: Request, res: Response) => {
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  const leadType = typeof req.query.leadType === 'string' ? req.query.leadType : undefined;
+  const leads = await platformStore.listLandingLeads({ status, leadType });
+  return res.status(200).json({ leads });
+});
+
+consoleRouter.patch('/landing-leads/:id', async (req: Request, res: Response) => {
+  const parsed = UpdateLandingLeadSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'validation_error', details: parsed.error.flatten() });
+  }
+
+  try {
+    const lead = await platformStore.updateLandingLead(req.params.id, {
+      status: parsed.data.status,
+      creatorNotes: parsed.data.creatorNotes,
+    });
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'landing_lead.updated',
+      targetType: 'landing_lead',
+      targetId: lead.id,
+      metadata: parsed.data,
+      ipAddress: clientIp(req),
+    });
+    return res.status(200).json({ lead });
+  } catch (err: any) {
+    return res.status(err?.status || 404).json({
+      error: err?.code || 'not_found',
+      message: err?.message || 'Landing lead not found.',
+    });
+  }
+});
+
+consoleRouter.post('/landing-leads/:id/convert', async (req: Request, res: Response) => {
+  try {
+    const result = await platformStore.convertLandingLeadToOrganization(
+      req.params.id,
+      req.user!.email
+    );
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'landing_lead.converted_to_trial',
+      targetType: 'organization',
+      targetId: result.organisation.id,
+      organizationId: result.organisation.id,
+      metadata: {
+        leadId: result.lead.id,
+        churchName: result.organisation.name,
+        licenseKey: result.license.key,
+      },
+      ipAddress: clientIp(req),
+    });
+    return res.status(201).json(result);
+  } catch (err: any) {
+    return res.status(err?.status || 400).json({
+      error: err?.code || 'convert_failed',
+      message: err?.message || 'Unable to convert lead to organisation trial.',
+    });
+  }
+});
+
+consoleRouter.post('/landing-leads/:id/reply', async (req: Request, res: Response) => {
+  const parsed = ReplyLandingLeadSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'validation_error', details: parsed.error.flatten() });
+  }
+
+  try {
+    const leads = await platformStore.listLandingLeads();
+    const lead = leads.find((l) => l.id === req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: 'not_found', message: 'Landing lead not found.' });
+    }
+
+    const emailResult = await sendResendEmail({
+      to: [lead.email],
+      subject: parsed.data.subject,
+      text: parsed.data.message,
+      html: buildHtmlFromPlainText(parsed.data.subject, parsed.data.message, 'Ekklesphere Platform'),
+      replyTo: req.user!.email,
+    });
+
+    const updated = await platformStore.updateLandingLead(lead.id, {
+      status: lead.status === 'converted' ? 'converted' : 'contacted',
+      creatorNotes:
+        lead.creatorNotes ||
+        `Replied by ${req.user!.email}: "${parsed.data.subject}"`,
+    });
+
+    await platformStore.appendAuditLog({
+      actorId: req.user!.id,
+      actorEmail: req.user!.email,
+      actorRole: req.user!.role,
+      action: 'landing_lead.replied',
+      targetType: 'landing_lead',
+      targetId: lead.id,
+      metadata: {
+        subject: parsed.data.subject,
+        emailSent: emailResult.ok,
+      },
+      ipAddress: clientIp(req),
+    });
+
+    return res.status(200).json({ lead: updated, emailResult });
+  } catch (err: any) {
+    return res.status(err?.status || 500).json({
+      error: err?.code || 'reply_failed',
+      message: err?.message || 'Failed to reply to landing lead.',
+    });
+  }
 });
 
 // 15. Safe Re-Runnable Legacy Tenants -> Organizations Migration (Dry-Run Default)

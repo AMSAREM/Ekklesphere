@@ -1,14 +1,19 @@
 import React from 'react';
 import { ArrowUpRight } from 'lucide-react';
+import type { ConsolePlan, LandingPageConfig } from '../../types/ekklesphere';
 
 interface LandingDemoBannerProps {
   onNavigate: (path: string) => void;
   onOpenDemo: () => void;
+  landingConfig?: LandingPageConfig | null;
+  plans?: ConsolePlan[];
 }
 
 export const LandingDemoBanner: React.FC<LandingDemoBannerProps> = ({
   onNavigate,
   onOpenDemo,
+  landingConfig,
+  plans = [],
 }) => {
   const handleRouteClick = (e: React.MouseEvent<HTMLAnchorElement>, path: string) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
@@ -18,12 +23,57 @@ export const LandingDemoBanner: React.FC<LandingDemoBannerProps> = ({
 
   return (
     <section id="demo" className="bg-[#eee8dc] py-16 sm:py-24">
-      <div className="mx-auto max-w-[1360px] px-5 sm:px-8 lg:px-14">
+      <div className="mx-auto max-w-[1360px] px-5 sm:px-8 lg:px-14 space-y-10">
+        {/* Live Commercial Plans Catalog synchronized from Supabase public.plans */}
+        {plans.length > 0 && (
+          <div id="pricing" className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {plans.map((plan) => (
+              <div
+                key={plan.id}
+                className="flex flex-col justify-between rounded-xl border border-[#d6cfc2] bg-[#fffdf9] p-6 text-[#0b1f33] transition-colors hover:border-[#e1ad3f]"
+              >
+                <div>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h3 className="text-lg font-bold tracking-tight">{plan.name}</h3>
+                    <div className="text-right tabular-nums">
+                      <span className="text-2xl font-bold">${plan.monthlyCostUSD}</span>
+                      <span className="text-xs text-[#647180]">/mo</span>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-[#5c6876]">{plan.description}</p>
+                  <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold text-[#4f5c66] tabular-nums">
+                    <span>Up to {plan.seatsLimit.toLocaleString()} members</span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      {plan.sitesLimit} {plan.sitesLimit === 1 ? 'campus' : 'campuses'}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>{plan.monthlyCheckinsLimit.toLocaleString()} check-ins/mo</span>
+                  </div>
+                </div>
+
+                <a
+                  href={`/app?auth=org_signup&plan=${encodeURIComponent(plan.id)}`}
+                  onClick={(e) =>
+                    handleRouteClick(e, `/app?auth=org_signup&plan=${encodeURIComponent(plan.id)}`)
+                  }
+                  className="mt-5 inline-flex items-center justify-between border-t border-[#ece6da] pt-3.5 text-xs font-bold text-[#0b1f33] hover:text-[#9c6912]"
+                >
+                  <span>Start 14-day trial on {plan.name}</span>
+                  <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                </a>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="relative grid min-h-[420px] grid-cols-1 items-center overflow-hidden rounded-xl bg-[#0b1f33] p-8 sm:p-12 lg:grid-cols-12 lg:p-16 text-[#fffdf9]">
           {/* Content Div */}
           <div className="relative z-10 lg:col-span-7">
             <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#aeb5b6]">
-              Start with a conversation
+              {landingConfig?.contactSalesEmail
+                ? `Direct line · ${landingConfig.contactSalesEmail}`
+                : 'Start with a conversation'}
             </div>
             <h2 className="mt-4 text-[clamp(2.5rem,5vw,4.25rem)] font-bold leading-[0.98] tracking-[-0.04em] text-[#fffdf9] text-balance">
               Give your team
@@ -56,7 +106,7 @@ export const LandingDemoBanner: React.FC<LandingDemoBannerProps> = ({
               <button
                 type="button"
                 onClick={onOpenDemo}
-                className="border-b border-[#78838a] pb-0.5 text-xs font-semibold text-[#dfe2dc] transition-colors hover:border-[#f0bf55] hover:text-white"
+                className="border-b border-[#78838a] pb-0.5 text-xs font-semibold text-[#dfe2dc] transition-colors hover:border-[#f0bf55] hover:text-white cursor-pointer"
               >
                 Book a personal demo
               </button>

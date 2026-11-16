@@ -25,6 +25,7 @@ export interface AuthUser {
   tenant_id?: string;
   campus_id?: string;
   organization_id?: string;
+  organizationName?: string;
   username?: string;
   permissions: string[];
   token?: string;
@@ -376,6 +377,7 @@ export interface SystemSettings {
   autoAssignCellLeaders: boolean;
   requireExplicitConsent: boolean;
   auditLogRetentionDays: number;
+  sessionTimeoutMinutes?: number;
   smsGatewayProvider: string;
   smsSenderId: string;
   emailGatewayProvider?: string;
@@ -703,6 +705,7 @@ export interface ConsoleDashboardSummary {
     siteUtilizationPct: number;
   }>;
   openAlertsCount: number;
+  newLandingLeadsCount?: number;
   storageBackend: 'supabase' | 'sandbox_ephemeral';
   generatedAt: string;
 }
@@ -746,6 +749,39 @@ export interface LandingPageConfig {
     checkinsRecorded: string;
     proximityAccuracy: string;
     networkUptime: string;
+  };
+}
+
+export type LandingLeadType = 'demo_request' | 'contact_inquiry' | 'quick_interest' | 'trial_intent';
+export type LandingLeadStatus = 'new' | 'contacted' | 'qualified' | 'converted' | 'archived';
+
+export interface LandingLeadRecord {
+  id: string;
+  leadType: LandingLeadType;
+  email: string;
+  fullName?: string | null;
+  phone?: string | null;
+  churchName: string;
+  interest?: string | null;
+  message?: string | null;
+  sourceSection?: string | null;
+  status: LandingLeadStatus;
+  creatorNotes?: string | null;
+  assignedOrganizationId?: string | null;
+  contactedAt?: string | null;
+  convertedAt?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicLandingOverview {
+  landingConfig: LandingPageConfig;
+  plans: ConsolePlan[];
+  liveStats: {
+    activeChurchesCount: number;
+    activeSitesCount: number;
+    totalCheckinsRecorded: number;
   };
 }
 

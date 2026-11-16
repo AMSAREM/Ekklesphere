@@ -11,6 +11,7 @@ import { SystemSettingsModal } from './components/settings/SystemSettingsModal';
 import { ChurchHomePage } from './components/home/ChurchHomePage';
 import { CreatorsPanel } from './components/creator/CreatorsPanel';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
+import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
 import { KeyRound } from 'lucide-react';
 import { PublicLandingPage } from './components/landing/PublicLandingPage';
 import { isPublicLandingLocation } from './utils/authRoute';
@@ -95,6 +96,7 @@ const EkklesphereMain: React.FC = () => {
     return (
       <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F8F9FD] dark:bg-[#0B0B1A] text-[#1D1B3A] dark:text-[#F2F2FA] transition-colors duration-200">
         {currentUser && <ChangePasswordModal />}
+        {currentUser && <SessionTimeoutModal />}
         <CreatorsPanel />
         {toastMessage && (
           <div
@@ -153,6 +155,9 @@ const EkklesphereMain: React.FC = () => {
 
       {/* Password Update Modal */}
       {currentUser && <ChangePasswordModal />}
+
+      {/* Idle Session Timeout Countdown Modal */}
+      {currentUser && <SessionTimeoutModal />}
 
       {/* Top Application Portal Header */}
       {currentUser && <AppHeader />}

@@ -7,11 +7,14 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID, createHash, scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 import {
+  DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
   PRIMARY_CAMPUS_SITE_ID,
   PRIMARY_ORGANIZATION_ID,
   TEST_ANCHOR_ORGANIZATION_ID,
   TEST_CAMPUS_SITE_ID,
-  signToken,
+  normalizeIdleTimeoutMinutes,
+  resetSessionRegistryForTests,
+  signSessionToken,
   type ActiveSupportGrantContext,
   type AuthUserPayload,
   type ChurchRole,
@@ -36,6 +39,9 @@ import type {
   FollowupReason,
   FollowupStatus,
   FollowupTask,
+  LandingLeadRecord,
+  LandingLeadStatus,
+  LandingLeadType,
   LandingPageConfig,
   LicenseEvaluationResult,
   LicenseOverrides,
@@ -49,6 +55,7 @@ import type {
   Person,
   PlatformAnnouncement,
   PlatformFeatureFlag,
+  PublicLandingOverview,
   SupportGrantSession,
   SystemLicense,
   SystemSettings,
@@ -287,6 +294,7 @@ export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   autoAssignCellLeaders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
+  sessionTimeoutMinutes: DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
   smsGatewayProvider: 'Arkesel SMS',
   smsSenderId: 'EKKLESPHERE',
   emailGatewayProvider: 'Resend Email',
@@ -428,6 +436,7 @@ class PlatformStore {
   private dataRequests = new Map<string, DataPrivacyRequest>();
   private supportGrants = new Map<string, SupportGrantSession>();
   private landingConfig: LandingPageConfig = { ...DEFAULT_LANDING_CMS };
+  private landingLeads = new Map<string, LandingLeadRecord>();
 
   // Org-scoped operational collections
   private sitesByOrg = new Map<string, RegisteredSiteRecord[]>();
@@ -565,6 +574,8 @@ class PlatformStore {
     this.userCredentials.clear();
     this.customSupabaseClientOverride = null;
     this.customSupabaseAuthVerifier = null;
+    this.landingLeads.clear();
+    resetSessionRegistryForTests();
     this.landingConfig = { ...DEFAULT_LANDING_CMS };
     this.seedBaselineState();
   }
@@ -2222,6 +2233,8 @@ class PlatformStore {
       isCreator: boolean;
     };
     token: string;
+    idleTimeoutMinutes: number;
+    sessionExpiresAt: string;
     persistedInSupabase: boolean;
   }> {
     this.assertDatabaseAvailable();
@@ -2370,15 +2383,19 @@ class PlatformStore {
       this.userCredentials.set(credId, updated);
     }
 
-    const token = signToken({
-      id: credId,
-      email,
-      role: 'creator',
-      organization_id: resolvedOrgId,
-      tenant_id: resolvedOrgId,
-      name,
-      is_creator: true,
-    });
+    const sessionTimeoutMinutes = await this.getOrganizationSessionTimeoutMinutes(resolvedOrgId);
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: credId,
+        email,
+        role: 'creator',
+        organization_id: resolvedOrgId,
+        tenant_id: resolvedOrgId,
+        name,
+        is_creator: true,
+      },
+      sessionTimeoutMinutes
+    );
 
     return {
       user: {
@@ -2392,6 +2409,8 @@ class PlatformStore {
         isCreator: true,
       },
       token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
       persistedInSupabase,
     };
   }
@@ -2510,6 +2529,8 @@ class PlatformStore {
     };
     organization: OrganizationRecord | null;
     token: string;
+    idleTimeoutMinutes: number;
+    sessionExpiresAt: string;
   }> {
     this.assertDatabaseAvailable();
     const identifier = (rawIdentifier || '').trim();
@@ -2835,15 +2856,21 @@ class PlatformStore {
       }
     }
 
-    const token = signToken({
-      id: foundCred.memberId || foundCred.id,
-      email: foundCred.email || `${foundCred.username || 'user'}@ekklesphere.church`,
-      role: foundCred.role,
-      organization_id: foundCred.organizationId,
-      tenant_id: foundCred.organizationId,
-      name: foundCred.name,
-      is_creator: foundCred.isCreator,
-    });
+    const sessionTimeoutMinutes = await this.getOrganizationSessionTimeoutMinutes(
+      foundCred.organizationId
+    );
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: foundCred.memberId || foundCred.id,
+        email: foundCred.email || `${foundCred.username || 'user'}@ekklesphere.church`,
+        role: foundCred.role,
+        organization_id: foundCred.organizationId,
+        tenant_id: foundCred.organizationId,
+        name: foundCred.name,
+        is_creator: foundCred.isCreator,
+      },
+      sessionTimeoutMinutes
+    );
 
     return {
       user: {
@@ -2859,6 +2886,8 @@ class PlatformStore {
       },
       organization,
       token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
     };
   }
 
@@ -2886,6 +2915,8 @@ class PlatformStore {
     };
     organization: OrganizationRecord | null;
     token: string;
+    idleTimeoutMinutes: number;
+    sessionExpiresAt: string;
   }> {
     this.assertDatabaseAvailable();
     const firstName = (params.firstName || '').trim();
@@ -3025,15 +3056,19 @@ class PlatformStore {
 
     const organization = await this.getOrganisationById(targetOrgId);
 
-    const token = signToken({
-      id: memberId,
-      email: email || `${normalizedPhone || 'member'}@ekklesphere.church`,
-      role: 'member',
-      organization_id: targetOrgId,
-      tenant_id: targetOrgId,
-      name: newCred.name,
-      is_creator: false,
-    });
+    const sessionTimeoutMinutes = await this.getOrganizationSessionTimeoutMinutes(targetOrgId);
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: memberId,
+        email: email || `${normalizedPhone || 'member'}@ekklesphere.church`,
+        role: 'member',
+        organization_id: targetOrgId,
+        tenant_id: targetOrgId,
+        name: newCred.name,
+        is_creator: false,
+      },
+      sessionTimeoutMinutes
+    );
 
     return {
       user: {
@@ -3048,6 +3083,8 @@ class PlatformStore {
       },
       organization,
       token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
     };
   }
 
@@ -3078,6 +3115,8 @@ class PlatformStore {
     license: SystemLicense | null;
     evaluation: LicenseEvaluationResult;
     token: string;
+    idleTimeoutMinutes: number;
+    sessionExpiresAt: string;
   }> {
     this.assertDatabaseAvailable();
     const orgName = (params.organizationName || '').trim();
@@ -3226,16 +3265,21 @@ class PlatformStore {
       ipAddress: params.ipAddress,
     });
 
+    await this.markMatchingLandingLeadsConverted(email, organisation.id).catch(() => {});
+
     const evaluation = await this.evaluateOrganizationLicense(organisation.id);
-    const token = signToken({
-      id: memberId,
-      email,
-      role: 'admin',
-      organization_id: organisation.id,
-      tenant_id: organisation.id,
-      name: fullName,
-      is_creator: false,
-    });
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: memberId,
+        email,
+        role: 'admin',
+        organization_id: organisation.id,
+        tenant_id: organisation.id,
+        name: fullName,
+        is_creator: false,
+      },
+      DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES
+    );
 
     return {
       user: {
@@ -3252,6 +3296,8 @@ class PlatformStore {
       license,
       evaluation,
       token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
     };
   }
 
@@ -3769,7 +3815,7 @@ class PlatformStore {
             : {};
 
         const settings: SystemSettings = {
-          churchName: String(orgRow.name ?? raw.church_name ?? ''),
+          churchName: String((orgRow.name && String(orgRow.name).trim()) || raw.church_name || ''),
           campusName: String(activeSite?.name ?? raw.campus_name ?? orgRow.name ?? ''),
           campusAddress: String(activeSite?.address ?? orgRow.premise_address ?? raw.campus_address ?? ''),
           campusLatitude: activeSite ? activeSite.lat : null,
@@ -3821,6 +3867,11 @@ class PlatformStore {
               : DEFAULT_ORG_SYSTEM_SETTINGS.requireExplicitConsent,
           auditLogRetentionDays: Number(
             raw.audit_log_retention_days ?? DEFAULT_ORG_SYSTEM_SETTINGS.auditLogRetentionDays
+          ),
+          sessionTimeoutMinutes: normalizeIdleTimeoutMinutes(
+            raw.session_timeout_minutes ??
+              orgRow.session_timeout_minutes ??
+              DEFAULT_ORG_SYSTEM_SETTINGS.sessionTimeoutMinutes
           ),
           smsGatewayProvider: String(
             raw.sms_gateway_provider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
@@ -3958,6 +4009,11 @@ class PlatformStore {
       7,
       Math.min(3650, Math.round(Number(patch.auditLogRetentionDays ?? current.auditLogRetentionDays) || 90))
     );
+    const sessionTimeoutMinutes = normalizeIdleTimeoutMinutes(
+      patch.sessionTimeoutMinutes !== undefined
+        ? patch.sessionTimeoutMinutes
+        : current.sessionTimeoutMinutes
+    );
     const smsSenderId = String(patch.smsSenderId ?? current.smsSenderId ?? 'EKKLESPHERE')
       .trim()
       .toUpperCase()
@@ -3983,6 +4039,7 @@ class PlatformStore {
       absenteeThresholdServices,
       firstTimerFollowupHours,
       auditLogRetentionDays,
+      sessionTimeoutMinutes,
       smsGatewayProvider: String(
         patch.smsGatewayProvider ?? current.smsGatewayProvider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
       ).trim(),
@@ -4062,6 +4119,7 @@ class PlatformStore {
         auto_assign_cell_leaders: merged.autoAssignCellLeaders,
         require_explicit_consent: merged.requireExplicitConsent,
         audit_log_retention_days: merged.auditLogRetentionDays,
+        session_timeout_minutes: merged.sessionTimeoutMinutes,
         sms_gateway_provider: merged.smsGatewayProvider,
         sms_sender_id: merged.smsSenderId,
         sms_configured: Boolean(merged.smsGatewayProvider && merged.smsSenderId),
@@ -4084,6 +4142,7 @@ class PlatformStore {
         inner_geofence_m: merged.innerGeofenceMeters,
         outer_geofence_m: merged.outerGeofenceMeters,
         dwell_time_min: merged.dwellTimeMinutes,
+        session_timeout_minutes: merged.sessionTimeoutMinutes,
         sms_configured: Boolean(merged.smsGatewayProvider && merged.smsSenderId),
         push_configured: merged.enablePushNotifications,
         settings: nextSettingsJson,
@@ -4215,6 +4274,7 @@ class PlatformStore {
         auto_assign_cell_leaders: DEFAULT_ORG_SYSTEM_SETTINGS.autoAssignCellLeaders,
         require_explicit_consent: DEFAULT_ORG_SYSTEM_SETTINGS.requireExplicitConsent,
         audit_log_retention_days: DEFAULT_ORG_SYSTEM_SETTINGS.auditLogRetentionDays,
+        session_timeout_minutes: DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
         sms_gateway_provider: DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider,
         sms_sender_id: DEFAULT_ORG_SYSTEM_SETTINGS.smsSenderId,
         enable_push_notifications: DEFAULT_ORG_SYSTEM_SETTINGS.enablePushNotifications,
@@ -9861,6 +9921,314 @@ class PlatformStore {
     return merged;
   }
 
+  private mapLandingLeadRow(row: Record<string, any>): LandingLeadRecord {
+    return {
+      id: String(row.id),
+      leadType: (row.lead_type || 'demo_request') as LandingLeadType,
+      email: String(row.email || ''),
+      fullName: row.full_name || null,
+      phone: row.phone || null,
+      churchName: String(row.church_name || ''),
+      interest: row.interest || null,
+      message: row.message || null,
+      sourceSection: row.source_section || null,
+      status: (row.status || 'new') as LandingLeadStatus,
+      creatorNotes: row.creator_notes || null,
+      assignedOrganizationId: row.assigned_organization_id || null,
+      contactedAt: row.contacted_at || null,
+      convertedAt: row.converted_at || null,
+      metadata: (row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<string, unknown>,
+      createdAt: String(row.created_at || new Date().toISOString()),
+      updatedAt: String(row.updated_at || row.created_at || new Date().toISOString()),
+    };
+  }
+
+  public async createLandingLead(input: {
+    leadType?: LandingLeadType;
+    email: string;
+    fullName?: string;
+    phone?: string;
+    churchName: string;
+    interest?: string;
+    message?: string;
+    sourceSection?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<LandingLeadRecord> {
+    this.assertDatabaseAvailable();
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const cleanEmail = input.email.trim().toLowerCase();
+    const cleanChurch = input.churchName.trim() || 'Prospective Church';
+    const record: LandingLeadRecord = {
+      id,
+      leadType: input.leadType || 'demo_request',
+      email: cleanEmail,
+      fullName: input.fullName?.trim() || null,
+      phone: input.phone?.trim() || null,
+      churchName: cleanChurch,
+      interest: input.interest?.trim() || null,
+      message: input.message?.trim() || null,
+      sourceSection: input.sourceSection?.trim() || 'landing_page',
+      status: 'new',
+      creatorNotes: null,
+      assignedOrganizationId: null,
+      contactedAt: null,
+      convertedAt: null,
+      metadata: input.metadata || {},
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (this.supabase) {
+      const { data, error } = await this.supabase
+        .from('landing_leads')
+        .insert({
+          id: record.id,
+          lead_type: record.leadType,
+          email: record.email,
+          full_name: record.fullName,
+          phone: record.phone,
+          church_name: record.churchName,
+          interest: record.interest,
+          message: record.message,
+          source_section: record.sourceSection,
+          status: 'new',
+          metadata: record.metadata,
+          created_at: now,
+          updated_at: now,
+        })
+        .select('*')
+        .single();
+
+      if (!error && data) {
+        const mapped = this.mapLandingLeadRow(data);
+        this.landingLeads.set(mapped.id, mapped);
+        return mapped;
+      }
+
+      if (error && !/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+        throw new Error(`Failed to persist landing lead in Supabase: ${error.message}`);
+      }
+    }
+
+    this.landingLeads.set(record.id, record);
+    return record;
+  }
+
+  public async listLandingLeads(filter?: {
+    status?: string;
+    leadType?: string;
+  }): Promise<LandingLeadRecord[]> {
+    this.assertDatabaseAvailable();
+    let list: LandingLeadRecord[] = Array.from(this.landingLeads.values());
+
+    if (this.supabase) {
+      const { data, error } = await this.supabase
+        .from('landing_leads')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(250);
+
+      if (!error && Array.isArray(data)) {
+        const fromDb = data.map((r) => this.mapLandingLeadRow(r));
+        const seen = new Set(fromDb.map((r) => r.id));
+        list = [...fromDb, ...list.filter((local) => !seen.has(local.id))];
+      } else if (error && !/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+        throw new Error(`Failed to load landing leads from Supabase: ${error.message}`);
+      }
+    }
+
+    return list
+      .filter((item) => {
+        if (filter?.status && filter.status !== 'all' && item.status !== filter.status) return false;
+        if (filter?.leadType && filter.leadType !== 'all' && item.leadType !== filter.leadType) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateLandingLead(
+    id: string,
+    patch: {
+      status?: LandingLeadStatus;
+      creatorNotes?: string | null;
+      assignedOrganizationId?: string | null;
+    }
+  ): Promise<LandingLeadRecord> {
+    this.assertDatabaseAvailable();
+    const now = new Date().toISOString();
+    const existingList = await this.listLandingLeads();
+    const current = existingList.find((l) => l.id === id);
+    if (!current) {
+      const err: any = new Error('Landing lead not found.');
+      err.status = 404;
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
+
+    const nextStatus = patch.status ?? current.status;
+    const contactedAt =
+      nextStatus === 'contacted' && !current.contactedAt ? now : current.contactedAt || null;
+    const convertedAt =
+      nextStatus === 'converted' && !current.convertedAt ? now : current.convertedAt || null;
+
+    const updated: LandingLeadRecord = {
+      ...current,
+      status: nextStatus,
+      creatorNotes: patch.creatorNotes !== undefined ? patch.creatorNotes : current.creatorNotes,
+      assignedOrganizationId:
+        patch.assignedOrganizationId !== undefined
+          ? patch.assignedOrganizationId
+          : current.assignedOrganizationId,
+      contactedAt,
+      convertedAt,
+      updatedAt: now,
+    };
+
+    if (this.supabase) {
+      const { data, error } = await this.supabase
+        .from('landing_leads')
+        .update({
+          status: updated.status,
+          creator_notes: updated.creatorNotes,
+          assigned_organization_id: updated.assignedOrganizationId,
+          contacted_at: updated.contactedAt,
+          converted_at: updated.convertedAt,
+          updated_at: now,
+        })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+
+      if (!error && data) {
+        const mapped = this.mapLandingLeadRow(data);
+        this.landingLeads.set(mapped.id, mapped);
+        return mapped;
+      }
+
+      if (error && !/does not exist|schema cache|42P01|PGRST205/i.test(error.message || '')) {
+        throw new Error(`Failed to update landing lead in Supabase: ${error.message}`);
+      }
+    }
+
+    this.landingLeads.set(updated.id, updated);
+    return updated;
+  }
+
+  private async markMatchingLandingLeadsConverted(
+    email: string,
+    organizationId: string
+  ): Promise<void> {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) return;
+    const now = new Date().toISOString();
+
+    for (const [id, lead] of this.landingLeads.entries()) {
+      if (lead.email.toLowerCase() === cleanEmail && lead.status !== 'converted') {
+        this.landingLeads.set(id, {
+          ...lead,
+          status: 'converted',
+          assignedOrganizationId: organizationId,
+          convertedAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    if (this.supabase) {
+      await this.supabase
+        .from('landing_leads')
+        .update({
+          status: 'converted',
+          assigned_organization_id: organizationId,
+          converted_at: now,
+          updated_at: now,
+        })
+        .ilike('email', cleanEmail)
+        .neq('status', 'converted');
+    }
+  }
+
+  public async convertLandingLeadToOrganization(
+    leadId: string,
+    actorEmail: string
+  ): Promise<{ lead: LandingLeadRecord; organisation: TenantChurch; license: SystemLicense }> {
+    const leads = await this.listLandingLeads();
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) {
+      const err: any = new Error('Landing lead not found.');
+      err.status = 404;
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
+
+    const { organisation, license } = await this.createOrganisation({
+      name: lead.churchName,
+      orgType: 'church',
+      city: 'Accra',
+      country: 'Ghana',
+      seniorPastor: lead.fullName || undefined,
+      contactName: lead.fullName || undefined,
+      contactEmail: lead.email,
+      contactPhone: lead.phone || undefined,
+      initialPlan: 'grace_starter',
+      autoIssueTrial: true,
+    });
+
+    const issuedLicense =
+      license ||
+      (await this.issueLicense({
+        organizationId: organisation.id,
+        tier: 'grace_starter',
+        billingCycle: 'annual',
+        status: 'trial',
+        notes: 'Trial provisioned from landing lead conversion',
+      }));
+
+    const updatedLead = await this.updateLandingLead(lead.id, {
+      status: 'converted',
+      assignedOrganizationId: organisation.id,
+      creatorNotes:
+        lead.creatorNotes || `Converted to 14-day trial workspace (${organisation.slug}) by ${actorEmail}.`,
+    });
+
+    return { lead: updatedLead, organisation, license: issuedLicense };
+  }
+
+  public async getOrganizationSessionTimeoutMinutes(organizationId?: string): Promise<number> {
+    if (!organizationId) return DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES;
+    try {
+      const res = await this.getSystemSettings(organizationId);
+      return normalizeIdleTimeoutMinutes(res.settings.sessionTimeoutMinutes);
+    } catch {
+      return DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES;
+    }
+  }
+
+  public async getPublicLandingOverview(): Promise<PublicLandingOverview> {
+    this.assertDatabaseAvailable();
+    const [landingConfig, allPlans, orgs, usage] = await Promise.all([
+      this.getLandingConfig(),
+      this.listPlans(),
+      this.listOrganisations(),
+      this.listUsageDaily(undefined, 90),
+    ]);
+
+    const activeOrgs = orgs.filter((o) => o.status !== 'archived' && o.status !== 'suspended');
+    const activeSitesCount = activeOrgs.reduce((acc, o) => acc + (o.sitesCount || 0), 0);
+    const totalCheckinsRecorded = usage.reduce((acc, u) => acc + (u.checkinsCount || 0), 0);
+
+    return {
+      landingConfig,
+      plans: allPlans.filter((p) => p.isActive),
+      liveStats: {
+        activeChurchesCount: activeOrgs.length,
+        activeSitesCount,
+        totalCheckinsRecorded,
+      },
+    };
+  }
+
   // ===========================================================================
   // ORGANISATION 6-TAB DETAIL & DASHBOARD AGGREGATES (STRICT PRIVACY)
   // ===========================================================================
@@ -10057,6 +10425,8 @@ class PlatformStore {
       })
       .filter((item) => item.seatUtilizationPct >= 80 || item.siteUtilizationPct >= 80);
 
+    const allLeads = await this.listLandingLeads({ status: 'new' }).catch(() => []);
+
     return {
       organisationsByStatus,
       licensesByTier,
@@ -10071,6 +10441,7 @@ class PlatformStore {
       inactiveOrganisations,
       nearOrOverLimits,
       openAlertsCount: openAlerts.length,
+      newLandingLeadsCount: allLeads.length,
       storageBackend: this.storageBackend,
       generatedAt: new Date().toISOString(),
     };

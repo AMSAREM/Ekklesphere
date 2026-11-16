@@ -2650,23 +2650,46 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                  Audit Log & Proximity Signal Retention Period
-                </label>
-                <select
-                  value={formData.auditLogRetentionDays}
-                  onChange={(e) => handleChange('auditLogRetentionDays', parseInt(e.target.value, 10))}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                >
-                  <option value={30}>30 Days (Privacy-First Minimum)</option>
-                  <option value={90}>90 Days (Quarterly Audit Recommended)</option>
-                  <option value={180}>180 Days (Half-Yearly)</option>
-                  <option value={365}>365 Days (Annual Compliance)</option>
-                </select>
-                <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                  Signals and raw GPS lat/lng approach breadcrumbs older than this period are purged automatically.
-                </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Audit Log & Proximity Signal Retention Period
+                  </label>
+                  <select
+                    value={formData.auditLogRetentionDays}
+                    onChange={(e) => handleChange('auditLogRetentionDays', parseInt(e.target.value, 10))}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  >
+                    <option value={30}>30 Days (Privacy-First Minimum)</option>
+                    <option value={90}>90 Days (Quarterly Audit Recommended)</option>
+                    <option value={180}>180 Days (Half-Yearly)</option>
+                    <option value={365}>365 Days (Annual Compliance)</option>
+                  </select>
+                  <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Signals and raw GPS lat/lng approach breadcrumbs older than this period are purged automatically.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    User Idle Session Timeout
+                  </label>
+                  <select
+                    value={formData.sessionTimeoutMinutes ?? 30}
+                    onChange={(e) => handleChange('sessionTimeoutMinutes', parseInt(e.target.value, 10))}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  >
+                    <option value={15}>15 Minutes (High Security)</option>
+                    <option value={30}>30 Minutes (Recommended Default)</option>
+                    <option value={60}>60 Minutes (1 Hour)</option>
+                    <option value={120}>120 Minutes (2 Hours Service Window)</option>
+                    <option value={240}>240 Minutes (4 Hours Extended Staff Shift)</option>
+                    <option value={0}>Disabled (Standard 24h JWT Expiry)</option>
+                  </select>
+                  <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Automatically signs out inactive Admin, Usher, and Member sessions after showing a 60-second warning prompt.
+                  </p>
+                </div>
               </div>
             </div>
 

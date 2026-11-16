@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   Phone,
   X,
+  QrCode,
 } from 'lucide-react';
 import { DashboardAnalyticsResult } from '../../utils/dashboardAnalytics';
 import { ChurchGroupCategory } from '../../types/ekklesphere';
@@ -49,6 +50,7 @@ interface DashboardDeepAnalyticsProps {
   onAddService: () => void;
   onOpenServiceHistory?: () => void;
   onOpenServiceRegister?: (serviceId: string) => void;
+  onOpenServiceQr?: (serviceId: string) => void;
   onToggleServiceStatus?: (serviceId: string, nextStatus: 'live' | 'closed') => void;
   onEditService?: (serviceId: string) => void;
   onDeleteService?: (serviceId: string) => void;
@@ -89,6 +91,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   onAddService,
   onOpenServiceHistory,
   onOpenServiceRegister,
+  onOpenServiceQr,
   onToggleServiceStatus,
   onEditService,
   onDeleteService,
@@ -1500,6 +1503,19 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
                               <ClipboardList className="w-3 h-3 text-[#6D5CF2]" />
                               <span>Register</span>
                             </button>
+
+                            {onOpenServiceQr && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenServiceQr(svc.id)}
+                                title="Open Service Check-In QR Code"
+                                aria-label={`Show check-in QR for ${svc.name}`}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/60 text-[11px] font-semibold cursor-pointer"
+                              >
+                                <QrCode className="w-3 h-3 text-[#6D5CF2]" />
+                                <span>QR</span>
+                              </button>
+                            )}
 
                             {onToggleServiceStatus && (
                               <button

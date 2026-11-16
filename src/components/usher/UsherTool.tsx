@@ -25,6 +25,9 @@ import { MemberAvatar } from '../common/MemberAvatar';
 import { ContactCallButton } from '../common/ContactCallButton';
 import { getMemberPortfolio } from '../../constants/portfolios';
 import { memberMatchesChurchGroup } from '../../utils/settingsConnections';
+import { ServiceQrModal } from '../admin/ServiceQrModal';
+import { parseServiceQrPayload } from '../../utils/serviceQr';
+import { isPlaceholderServiceId } from '../../utils/serviceStatus';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -41,6 +44,7 @@ export const UsherTool: React.FC = () => {
     serviceVisitorsCount,
     addVisitor,
     checkInPerson,
+    checkInWithServiceQr,
     isUsherOnline,
     setIsUsherOnline,
     pendingSyncCount,
@@ -51,6 +55,7 @@ export const UsherTool: React.FC = () => {
     isSettingsModalOpen,
     systemSettings,
     churchGroups,
+    currentUser,
   } = useEkklesphere();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -73,6 +78,7 @@ export const UsherTool: React.FC = () => {
 
   const [scannedIdInput, setScannedIdInput] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isServiceQrModalOpen, setIsServiceQrModalOpen] = useState(false);
 
   const isMemberCheckedInForService = (personId: string) =>
     Boolean(currentService.id) &&
@@ -122,7 +128,10 @@ export const UsherTool: React.FC = () => {
     triggerCheckIn(unchecked.id);
   };
 
-  const triggerCheckIn = (personId: string): boolean => {
+  const triggerCheckIn = (
+    personId: string,
+    method: 'usher' | 'posted_qr' = 'usher'
+  ): boolean => {
     if (!hasScheduledService) {
       showToast(checkInEligibility.message);
       return false;
@@ -130,7 +139,9 @@ export const UsherTool: React.FC = () => {
     const person = members.find((m) => m.id === personId);
     if (!person) return false;
 
-    const started = checkInPerson(personId, 'usher', 98, 'Usher scanner audit');
+    const noteText =
+      method === 'posted_qr' ? 'Member QR pass scanned at door' : 'Usher scanner audit';
+    const started = checkInPerson(personId, method, 98, noteText);
     if (!started) return false;
 
     setConfirmationMember({
@@ -306,7 +317,32 @@ export const UsherTool: React.FC = () => {
           <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold shadow-sm">
             <QrCode className="w-5 h-5" />
           </div>
-          <div>
+          <div className="min-w-0">
+            {(() => {
+              const tenantName = (
+                systemSettings.churchName ||
+                currentUser?.organizationName ||
+                ''
+              ).trim();
+              const campusLabel = (systemSettings.campusName || '').trim();
+              const showCampus =
+                Boolean(campusLabel) &&
+                campusLabel.toLowerCase() !== tenantName.toLowerCase();
+              return tenantName ? (
+                <p
+                  title={tenantName}
+                  className="text-xs sm:text-sm font-bold tracking-tight text-[#5E4AE3] dark:text-[#9D92FF] truncate mb-0.5"
+                >
+                  {tenantName}
+                  {showCampus && (
+                    <span className="font-medium text-[#5B5F7A] dark:text-[#A9ACC8]">
+                      {' '}
+                      · {campusLabel}
+                    </span>
+                  )}
+                </p>
+              ) : null;
+            })()}
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                 Door Steward & Check-in Station
@@ -316,9 +352,6 @@ export const UsherTool: React.FC = () => {
                 Live Entrance Station
               </span>
             </div>
-            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
-              {systemSettings.churchName} · {systemSettings.campusName}
-            </p>
           </div>
         </div>
 
@@ -342,6 +375,19 @@ export const UsherTool: React.FC = () => {
             <div className="flex-1 sm:flex-none bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-200 rounded-2xl px-3.5 py-2 text-xs font-bold">
               No Service Scheduled
             </div>
+          )}
+
+          {/* Service Check-in QR Code Button */}
+          {services.length > 0 && currentService?.id && !isPlaceholderServiceId(currentService.id) && (
+            <button
+              type="button"
+              onClick={() => setIsServiceQrModalOpen(true)}
+              className="px-3 py-2 rounded-2xl bg-[#EEEBFF] dark:bg-[#2A2A55] text-[#6C5CE7] dark:text-[#9D90FF] border border-[#6C5CE7]/25 text-xs font-bold flex items-center gap-1.5 hover:opacity-90 transition-opacity cursor-pointer whitespace-nowrap shrink-0"
+              title={`Show Check-In QR Poster for ${currentService.name}`}
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Service QR</span>
+            </button>
           )}
 
           {/* Network Toggle Button */}
@@ -496,12 +542,17 @@ export const UsherTool: React.FC = () => {
                   onScan={(code) => {
                     const matched = findMemberByScannedId(members, code);
                     if (matched) {
-                      if (triggerCheckIn(matched.id)) {
-                        showToast(`Checked in ${matched.firstName} ${matched.lastName}!`);
+                      if (triggerCheckIn(matched.id, 'posted_qr')) {
+                        showToast(`Checked in ${matched.firstName} ${matched.lastName} via QR!`);
                       }
-                    } else {
-                      showToast(`Scanned Code: "${code}" (No matching member pass found)`);
+                      return;
                     }
+                    const svcQr = parseServiceQrPayload(code, services);
+                    if (svcQr) {
+                      void checkInWithServiceQr(svcQr);
+                      return;
+                    }
+                    showToast(`Scanned Code: "${code}" (No matching member pass or service QR found)`);
                   }}
                   isActive={isCameraActive && hasScheduledService}
                   className="w-full h-full"
@@ -543,10 +594,16 @@ export const UsherTool: React.FC = () => {
                 if (!scannedIdInput.trim()) return;
                 const matched = findMemberByScannedId(members, scannedIdInput);
                 if (matched) {
-                  triggerCheckIn(matched.id);
+                  triggerCheckIn(matched.id, 'posted_qr');
                   setScannedIdInput('');
                 } else {
-                  showToast(`No member found with ID "${scannedIdInput.trim()}"`);
+                  const svcQr = parseServiceQrPayload(scannedIdInput, services);
+                  if (svcQr) {
+                    void checkInWithServiceQr(svcQr);
+                    setScannedIdInput('');
+                  } else {
+                    showToast(`No member or service found matching "${scannedIdInput.trim()}"`);
+                  }
                 }
               }}
               className="pt-1 flex items-center gap-2"
@@ -933,6 +990,16 @@ export const UsherTool: React.FC = () => {
           </form>
         </div>
       )}
+
+      <ServiceQrModal
+        isOpen={isServiceQrModalOpen}
+        service={
+          currentService?.id && !isPlaceholderServiceId(currentService.id)
+            ? currentService
+            : null
+        }
+        onClose={() => setIsServiceQrModalOpen(false)}
+      />
       </div>
     </main>
   );

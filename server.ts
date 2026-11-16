@@ -15,15 +15,25 @@ import {
 } from './src/middleware/organizationMiddleware.ts';
 import {
   assertProductionAuthConfig,
+  createServiceQrToken,
+  DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
+  extractBearerToken,
   isCreatorClaim,
+  normalizeIdleTimeoutMinutes,
   PRIMARY_CAMPUS_SITE_ID,
   PRIMARY_ORGANIZATION_ID,
   registerExternalIdentityVerifier,
   requireRoles,
   requireUser,
+  resolveVerifiedUserFromToken,
+  revokeServerSession,
+  signSessionToken,
   signToken,
+  verifyServiceQrToken,
   type ChurchRole,
 } from './lib/auth.ts';
+import { resolveServiceWindow } from './src/utils/serviceStatus.ts';
+import { buildServiceQrCheckInPath, formatServiceShortCode } from './src/utils/serviceQr.ts';
 import {
   platformStore,
   type LiveCheckinItem,
@@ -35,6 +45,7 @@ import { churchWallStore } from './src/server/churchWallStore.ts';
 import type { ImportDuplicateMode } from './src/shared/memberImportValidation.ts';
 import { MediaProxyError, proxyExternalImage } from './src/server/mediaProxy.ts';
 import {
+  buildHtmlFromPlainText,
   getCommunicationGatewayStatus,
   sendArkeselSms,
   sendResendEmail,
@@ -297,6 +308,8 @@ app.post(
       );
       return res.status(200).json({
         token: result.token,
+        idleTimeoutMinutes: result.idleTimeoutMinutes,
+        sessionExpiresAt: result.sessionExpiresAt,
         role: result.user.role,
         organizationId: result.user.organizationId,
         isCreator: result.user.isCreator,
@@ -354,6 +367,8 @@ app.post('/api/auth/register', authRegisterLimiter, async (req: Request, res: Re
 
     return res.status(201).json({
       token: result.token,
+      idleTimeoutMinutes: result.idleTimeoutMinutes,
+      sessionExpiresAt: result.sessionExpiresAt,
       role: 'member',
       organizationId: result.user.organizationId,
       isCreator: false,
@@ -411,6 +426,8 @@ app.post(
 
       return res.status(201).json({
         token: result.token,
+        idleTimeoutMinutes: result.idleTimeoutMinutes,
+        sessionExpiresAt: result.sessionExpiresAt,
         role: result.user.role,
         organizationId: result.organization.id,
         isCreator: false,
@@ -437,7 +454,16 @@ app.post(
   }
 );
 
-app.post('/api/auth/logout', authSessionLimiter, (_req: Request, res: Response) => {
+app.post('/api/auth/logout', authSessionLimiter, async (req: Request, res: Response) => {
+  const token = extractBearerToken(req);
+  if (token) {
+    try {
+      const decoded = await resolveVerifiedUserFromToken(token);
+      revokeServerSession(decoded.sid);
+    } catch {
+      // Ignore already expired/invalid token on logout
+    }
+  }
   return res.status(200).json({
     success: true,
     message: 'Session cleared successfully.',
@@ -512,22 +538,40 @@ app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request
     resolvedOrgId = orgs[0]?.id || '';
   }
 
-  const token = signToken({
-    id: verifiedUser.id,
-    email: verifiedUser.email,
-    role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
-    name: resolvedName,
-    organization_id: resolvedOrgId,
-    tenant_id: resolvedOrgId,
-    campus_id: verifiedUser.campus_id,
-    is_creator: creator,
-    auth_provider: 'session_jwt',
-  });
+  const [sessionTimeoutMinutes, org] = await Promise.all([
+    platformStore.getOrganizationSessionTimeoutMinutes(resolvedOrgId),
+    resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null),
+  ]);
+  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+    {
+      id: verifiedUser.id,
+      email: verifiedUser.email,
+      role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
+      name: resolvedName,
+      organization_id: resolvedOrgId,
+      tenant_id: resolvedOrgId,
+      campus_id: verifiedUser.campus_id,
+      is_creator: creator,
+      auth_provider: 'session_jwt',
+    },
+    sessionTimeoutMinutes
+  );
 
   return res.status(200).json({
     token,
+    idleTimeoutMinutes,
+    sessionExpiresAt: expiresAt,
     role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
     organizationId: resolvedOrgId,
+    organizationName: org?.name || undefined,
+    organization: org
+      ? {
+          id: org.id,
+          name: org.name,
+          slug: org.slug,
+          city: org.city,
+        }
+      : null,
     isCreator: creator,
     user: {
       id: verifiedUser.id,
@@ -536,8 +580,43 @@ app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request
       role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
       organization_id: resolvedOrgId,
       tenant_id: resolvedOrgId,
+      organizationName: org?.name || undefined,
       is_creator: creator,
     },
+  });
+});
+
+// Active user session keepalive endpoint: validates session hasn't timed out, resets sliding idle window, and mints fresh JWT
+app.post('/api/auth/session/keepalive', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
+  const verifiedUser = req.user!;
+  const orgId = verifiedUser.organization_id || verifiedUser.tenant_id || '';
+  const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(orgId);
+  const effectiveTimeout = normalizeIdleTimeoutMinutes(orgTimeout);
+
+  if (verifiedUser.sid) {
+    revokeServerSession(verifiedUser.sid);
+  }
+
+  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+    {
+      id: verifiedUser.id,
+      email: verifiedUser.email,
+      role: verifiedUser.role,
+      name: verifiedUser.name,
+      organization_id: orgId,
+      tenant_id: orgId,
+      campus_id: verifiedUser.campus_id,
+      is_creator: isCreatorClaim(verifiedUser),
+      auth_provider: 'session_jwt',
+    },
+    effectiveTimeout
+  );
+
+  return res.status(200).json({
+    ok: true,
+    token,
+    idleTimeoutMinutes,
+    sessionExpiresAt: expiresAt,
   });
 });
 
@@ -553,21 +632,27 @@ app.post('/api/auth/creator-session', authSessionLimiter, requireUser, async (re
 
   const orgs = await platformStore.listOrganisations();
   const activeOrgId = verifiedUser.organization_id || orgs[0]?.id || '';
+  const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(activeOrgId);
 
-  const token = signToken({
-    id: verifiedUser.id,
-    email: verifiedUser.email,
-    role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
-    name: verifiedUser.name || 'Platform Creator',
-    organization_id: activeOrgId,
-    tenant_id: activeOrgId,
-    campus_id: verifiedUser.campus_id,
-    is_creator: true,
-    auth_provider: 'session_jwt',
-  });
+  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+    {
+      id: verifiedUser.id,
+      email: verifiedUser.email,
+      role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
+      name: verifiedUser.name || 'Platform Creator',
+      organization_id: activeOrgId,
+      tenant_id: activeOrgId,
+      campus_id: verifiedUser.campus_id,
+      is_creator: true,
+      auth_provider: 'session_jwt',
+    },
+    orgTimeout
+  );
 
   return res.status(200).json({
     token,
+    idleTimeoutMinutes,
+    sessionExpiresAt: expiresAt,
     role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
     organizationId: activeOrgId,
     isCreator: true,
@@ -683,10 +768,142 @@ app.post(
 // PUBLIC LANDING CMS & ORG-ADMIN SELF-USAGE ENDPOINTS
 // =========================================================================
 
-app.get('/api/landing-config', async (_req: Request, res: Response) => {
-  const landingConfig = await platformStore.getLandingConfig();
-  return res.status(200).json({ landingConfig });
+const landingLeadSubmissionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 25,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `landing-lead:${getClientIpKey(req)}`,
+  validate: {
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
+  message: {
+    error: 'rate_limit_exceeded',
+    message: 'Too many submissions from this network. Please wait a few minutes and try again.',
+  },
 });
+
+const publicLandingLeadSchema = z.object({
+  leadType: z
+    .enum(['demo_request', 'contact_inquiry', 'quick_interest', 'trial_intent'])
+    .optional()
+    .default('demo_request'),
+  email: z.string().trim().email('Please provide a valid email address.').max(160),
+  fullName: z.string().trim().max(140).optional(),
+  phone: z.string().trim().max(40).optional(),
+  churchName: z.string().trim().max(160).optional().default(''),
+  interest: z.string().trim().max(160).optional(),
+  message: z.string().trim().max(2000).optional(),
+  sourceSection: z.string().trim().max(100).optional(),
+});
+
+app.get(['/api/landing-config', '/api/public/landing-overview'], async (_req: Request, res: Response) => {
+  try {
+    const overview = await platformStore.getPublicLandingOverview();
+    return res.status(200).json(overview);
+  } catch (err: any) {
+    const landingConfig = await platformStore.getLandingConfig();
+    return res.status(200).json({
+      landingConfig,
+      plans: [],
+      liveStats: { activeChurchesCount: 0, activeSitesCount: 0, totalCheckinsRecorded: 0 },
+    });
+  }
+});
+
+app.post(
+  '/api/public/landing-leads',
+  landingLeadSubmissionLimiter,
+  async (req: Request, res: Response) => {
+    const parsed = publicLandingLeadSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Please check the required inquiry fields.',
+      });
+    }
+
+    const resolvedChurchName =
+      parsed.data.churchName?.trim() ||
+      parsed.data.fullName?.trim() ||
+      'Prospective Ministry';
+
+    try {
+      const lead = await platformStore.createLandingLead({
+        leadType: parsed.data.leadType,
+        email: parsed.data.email,
+        fullName: parsed.data.fullName,
+        phone: parsed.data.phone,
+        churchName: resolvedChurchName,
+        interest: parsed.data.interest,
+        message: parsed.data.message,
+        sourceSection: parsed.data.sourceSection || 'landing_page',
+        metadata: {
+          ipAddress: getClientIpKey(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 180),
+        },
+      });
+
+      await platformStore.appendAuditLog({
+        actorEmail: lead.email,
+        actorRole: 'public_visitor',
+        action: 'landing.lead_submitted',
+        targetType: 'landing_lead',
+        targetId: lead.id,
+        metadata: {
+          leadType: lead.leadType,
+          churchName: lead.churchName,
+          interest: lead.interest || null,
+          sourceSection: lead.sourceSection || null,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      // Best-effort Creator email alert when Resend API key is configured server-side
+      const landingCfg = await platformStore.getLandingConfig().catch(() => null);
+      if (landingCfg?.contactSalesEmail && process.env.RESEND_API_KEY) {
+        const subject = `[Ekklesphere Lead] ${lead.churchName} — ${lead.leadType.replace('_', ' ')}`;
+        const body = [
+          `Church / Ministry: ${lead.churchName}`,
+          `Contact Email: ${lead.email}`,
+          lead.fullName ? `Contact Name: ${lead.fullName}` : null,
+          lead.phone ? `Phone: ${lead.phone}` : null,
+          lead.interest ? `Interest: ${lead.interest}` : null,
+          lead.message ? `Message:\n${lead.message}` : null,
+          `Source: ${lead.sourceSection || 'landing_page'}`,
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        sendResendEmail({
+          to: [landingCfg.contactSalesEmail],
+          subject,
+          text: body,
+          html: buildHtmlFromPlainText(subject, body, 'Ekklesphere Platform'),
+        }).catch(() => {});
+      }
+
+      return res.status(201).json({
+        ok: true,
+        success: true,
+        leadId: lead.id,
+        lead: {
+          id: lead.id,
+          leadType: lead.leadType,
+          churchName: lead.churchName,
+          status: lead.status,
+          createdAt: lead.createdAt,
+        },
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'landing_lead_failed',
+        message: err?.message || 'Unable to save your request right now. Please try again.',
+      });
+    }
+  }
+);
 
 app.get(
   '/api/organisation/my-usage',
@@ -1094,6 +1311,7 @@ const SystemSettingsPatchSchema = z.object({
   autoAssignCellLeaders: z.boolean().optional(),
   requireExplicitConsent: z.boolean().optional(),
   auditLogRetentionDays: z.number().min(7).max(3650).optional(),
+  sessionTimeoutMinutes: z.number().min(0).max(480).optional(),
   smsGatewayProvider: z.string().trim().min(1).max(120).optional(),
   smsSenderId: z.string().trim().min(1).max(11).optional(),
   emailGatewayProvider: z.string().trim().min(1).max(120).optional(),
@@ -2266,7 +2484,7 @@ app.get(
 
 app.post(
   ['/live-checkins', '/api/live-checkins'],
-  requireAuthRole('usher', 'admin', 'pastor', 'member', 'super_admin', 'creator'),
+  requireAuthRole('usher', 'admin', 'pastor', 'member', 'group_leader', 'super_admin', 'creator'),
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const body = req.body || {};
@@ -2274,8 +2492,16 @@ app.post(
       return res.status(400).json({ error: 'invalid_checkin', message: 'personId is required' });
     }
 
-    if (req.user?.role === 'member') {
-      const allowedSelfIds = [req.user.id, req.user.email, req.user.name].filter(Boolean);
+    if (req.user?.role === 'member' || req.user?.role === 'group_leader') {
+      const ownProfile = await platformStore
+        .getMemberProfileForSession(req.organizationId!, req.user.id, req.user.email)
+        .catch(() => null);
+      const allowedSelfIds = [
+        req.user.id,
+        req.user.email,
+        req.user.name,
+        ownProfile?.id ? String(ownProfile.id) : null,
+      ].filter(Boolean);
       if (!allowedSelfIds.includes(body.personId)) {
         return res.status(403).json({
           error: 'forbidden',
@@ -3156,6 +3382,254 @@ app.delete(
 );
 
 app.get(
+  ['/api/v1/events/:id/qr', '/api/events/:id/qr', '/api/services/:id/qr'],
+  requireAuthRole('admin', 'pastor', 'usher', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const orgId = req.organizationId!;
+      const serviceId = String(req.params.id || '').trim();
+      const events = await platformStore.getEvents(orgId);
+      const rawEvent = events.find((ev) => String(ev.id) === serviceId);
+      if (!rawEvent) {
+        return res.status(404).json({
+          error: 'service_not_found',
+          code: 'SERVICE_NOT_FOUND',
+          message: 'Scheduled service not found for your organisation.',
+        });
+      }
+
+      const normalized = normalizeEventRow(rawEvent);
+      const allowanceMinutes = Number(normalized.allowance_minutes ?? normalized.dwell_min ?? 0) || 0;
+      const windowResult = resolveServiceWindow({
+        date: normalized.date,
+        startTimeIso: normalized.start_time,
+        endTimeIso: normalized.end_time,
+        allowanceMinutes,
+        rawStatus: normalized.status || 'active',
+        nowMs: Date.now(),
+      });
+
+      const qrToken = createServiceQrToken(orgId, serviceId);
+      const checkInPath = buildServiceQrCheckInPath({
+        serviceId,
+        qrToken,
+        organizationId: orgId,
+      });
+      const host = req.get('host');
+      const protocol = req.headers['x-forwarded-proto']
+        ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+        : req.protocol || 'https';
+      const checkInUrl = host ? `${protocol}://${host}${checkInPath}` : checkInPath;
+
+      return res.status(200).json({
+        serviceId,
+        serviceName: String(normalized.name || 'Worship Service'),
+        date: normalized.date,
+        startTimeIso: normalized.start_time,
+        endTimeIso: normalized.end_time,
+        allowanceMinutes,
+        status: windowResult.status,
+        closesAtIso: windowResult.closesAtIso,
+        organizationId: orgId,
+        shortCode: formatServiceShortCode(serviceId),
+        qrToken,
+        qrPayload: `EKKLESPHERE:SERVICE:${serviceId}:${qrToken}:${orgId}`,
+        checkInPath,
+        checkInUrl,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'service_qr_failed',
+        message: err?.message || 'Failed to generate service check-in QR code.',
+      });
+    }
+  }
+);
+
+app.post(
+  ['/api/v1/events/:id/qr-checkin', '/api/events/:id/qr-checkin', '/api/services/:id/qr-checkin'],
+  requireAuthRole('member', 'group_leader', 'usher', 'admin', 'pastor', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const orgId = req.organizationId!;
+      const serviceId = String(req.params.id || '').trim();
+      const body = req.body || {};
+      const qrTokenRaw =
+        typeof body.qrToken === 'string'
+          ? body.qrToken
+          : typeof body.token === 'string'
+          ? body.token
+          : typeof req.query.token === 'string'
+          ? req.query.token
+          : '';
+      const qrToken = qrTokenRaw.trim();
+
+      if (!serviceId) {
+        return res.status(400).json({
+          error: 'INVALID_SERVICE',
+          code: 'INVALID_SERVICE',
+          message: 'Scheduled service ID is required.',
+        });
+      }
+
+      const events = await platformStore.getEvents(orgId);
+      const rawEvent = events.find((ev) => String(ev.id) === serviceId);
+      if (!rawEvent) {
+        return res.status(404).json({
+          error: 'service_not_found',
+          code: 'SERVICE_NOT_FOUND',
+          message: 'Scheduled service not found for your organisation.',
+        });
+      }
+
+      const isStaff = ['admin', 'pastor', 'usher', 'super_admin', 'creator'].includes(
+        req.user?.role || ''
+      );
+
+      if (!qrToken) {
+        if (!isStaff) {
+          return res.status(400).json({
+            error: 'QR_TOKEN_REQUIRED',
+            code: 'QR_TOKEN_REQUIRED',
+            message: 'A valid service QR code token is required to check in.',
+          });
+        }
+      } else if (!verifyServiceQrToken(orgId, serviceId, qrToken)) {
+        return res.status(403).json({
+          error: 'INVALID_QR_TOKEN',
+          code: 'INVALID_QR_TOKEN',
+          message: 'Invalid or expired service QR code for this organisation.',
+        });
+      }
+
+      const normalized = normalizeEventRow(rawEvent);
+      const allowanceMinutes = Number(normalized.allowance_minutes ?? normalized.dwell_min ?? 0) || 0;
+      const nowMs = Date.now();
+      const windowResult = resolveServiceWindow({
+        date: normalized.date,
+        startTimeIso: normalized.start_time,
+        endTimeIso: normalized.end_time,
+        allowanceMinutes,
+        rawStatus: normalized.status || 'active',
+        nowMs,
+      });
+
+      if (windowResult.status !== 'live') {
+        return res.status(400).json({
+          error: 'SERVICE_NOT_OPEN',
+          code: 'SERVICE_NOT_OPEN',
+          message: `Check-in is closed for "${normalized.name}". Reopen or schedule a live service within its active window first.`,
+        });
+      }
+
+      // Resolve the member profile to check in
+      const requestedMemberId =
+        isStaff && typeof body.memberId === 'string' && body.memberId.trim()
+          ? body.memberId.trim()
+          : '';
+
+      let targetPersonId = requestedMemberId;
+      let targetPersonName = req.user?.name || 'Member';
+
+      if (requestedMemberId) {
+        const orgMembers = await platformStore.getMembers(orgId);
+        const foundMember = orgMembers.find((m) => String(m.id) === requestedMemberId);
+        if (!foundMember) {
+          return res.status(404).json({
+            error: 'MEMBER_NOT_FOUND',
+            code: 'MEMBER_NOT_FOUND',
+            message: 'Target member profile was not found in your organisation.',
+          });
+        }
+        targetPersonId = String(foundMember.id);
+        targetPersonName =
+          `${foundMember.firstName || ''} ${foundMember.lastName || ''}`.trim() || targetPersonName;
+      } else {
+        const selfProfile = await platformStore
+          .getMemberProfileForSession(orgId, req.user!.id, req.user!.email)
+          .catch(() => null);
+        if (selfProfile?.id) {
+          targetPersonId = String(selfProfile.id);
+          targetPersonName =
+            `${selfProfile.firstName || ''} ${selfProfile.lastName || ''}`.trim() ||
+            targetPersonName;
+        } else {
+          targetPersonId = req.user!.id;
+        }
+      }
+
+      const existingCheckins = await platformStore.getLiveCheckins(orgId, serviceId);
+      const alreadyChecked = existingCheckins.find(
+        (c) => c.personId === targetPersonId && c.serviceInstanceId === serviceId
+      );
+
+      if (alreadyChecked) {
+        return res.status(200).json({
+          success: true,
+          alreadyCheckedIn: true,
+          service: {
+            id: serviceId,
+            name: String(normalized.name || 'Worship Service'),
+            date: normalized.date,
+            startsAt: normalized.start_time,
+            endsAt: normalized.end_time,
+          },
+          record: alreadyChecked,
+          liveCheckins: existingCheckins,
+        });
+      }
+
+      const graceDeadlineMs =
+        windowResult.startMs !== null
+          ? windowResult.startMs + Math.max(1, allowanceMinutes || 15) * 60_000
+          : null;
+      const isLate = graceDeadlineMs !== null ? nowMs > graceDeadlineMs : false;
+      const nowIso = new Date(nowMs).toISOString();
+
+      const result = await platformStore.recordLiveCheckin(orgId, {
+        id: `qr-${targetPersonId}-${nowMs}`,
+        personId: targetPersonId,
+        personName: targetPersonName,
+        serviceInstanceId: serviceId,
+        campusId: req.campus_id || PRIMARY_CAMPUS_SITE_ID,
+        method: 'posted_qr',
+        confidence: 99,
+        checkedInAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        checkedInIso: nowIso,
+        late: isLate,
+        recordedBy: req.user?.name || targetPersonName,
+        note: `Checked in via Service QR (${normalized.name})`,
+        distanceM: null,
+        lat: null,
+        lng: null,
+      });
+
+      return res.status(200).json({
+        success: true,
+        alreadyCheckedIn: false,
+        service: {
+          id: serviceId,
+          name: String(normalized.name || 'Worship Service'),
+          date: normalized.date,
+          startsAt: normalized.start_time,
+          endsAt: normalized.end_time,
+        },
+        record: result.record,
+        liveCheckins: result.liveCheckins,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'service_qr_checkin_failed',
+        code: err?.code || 'service_qr_checkin_failed',
+        message: err?.message || 'Could not process service QR check-in.',
+      });
+    }
+  }
+);
+
+app.get(
   [
     '/api/v1/services/history',
     '/api/services/history',
@@ -3692,23 +4166,40 @@ app.post(
 
 app.get('/api/auth/me', requireUser, enforceOrganizationScope, async (req: Request, res: Response) => {
   try {
-    const [credStatus, memberProfile] = await Promise.all([
+    const [credStatus, memberProfile, org] = await Promise.all([
       platformStore.getCredentialStatus(req.user!.id, req.user!.email),
       req.organizationId
         ? platformStore.getMemberProfileForSession(req.organizationId, req.user!.id, req.user!.email)
         : Promise.resolve(null),
+      req.organizationId
+        ? platformStore.getOrganisationById(req.organizationId)
+        : Promise.resolve(null),
     ]);
+    const sessionTimeoutMinutes = await platformStore.getOrganizationSessionTimeoutMinutes(
+      req.organizationId
+    );
     return res.status(200).json({
       user: {
         ...req.user,
+        organizationName: org?.name || undefined,
         avatar: memberProfile?.imageUrl || undefined,
         mustChangePassword: credStatus.mustChangePassword,
       },
       memberProfile,
       organizationId: req.organizationId,
+      organizationName: org?.name || undefined,
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+            slug: org.slug,
+            city: org.city,
+          }
+        : null,
       isCreator: isCreatorClaim(req.user),
       mustChangePassword: credStatus.mustChangePassword,
       hasPasswordCredential: credStatus.hasPasswordCredential,
+      idleTimeoutMinutes: req.user!.idle_timeout_minutes ?? sessionTimeoutMinutes,
       authenticated: true,
     });
   } catch (err: any) {
