@@ -18,6 +18,7 @@ import {
 } from '../../lib/auth.ts';
 import { churchWallStore } from './churchWallStore.ts';
 import { resolveServiceWindow, type BinaryServiceStatus } from '../utils/serviceStatus.ts';
+import { buildAutoAssignAbsenteesPlan } from '../utils/settingsConnections.ts';
 import type {
   BillingCycle,
   ChurchGroup,
@@ -45,6 +46,7 @@ import type {
   OrganisationType,
   PaymentCurrency,
   PaymentMethod,
+  Person,
   PlatformAnnouncement,
   PlatformFeatureFlag,
   SupportGrantSession,
@@ -285,8 +287,11 @@ export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   autoAssignCellLeaders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
-  smsGatewayProvider: 'Hubtel Ghana',
+  smsGatewayProvider: 'Arkesel SMS',
   smsSenderId: 'EKKLESPHERE',
+  emailGatewayProvider: 'Resend Email',
+  emailFromAddress: '',
+  emailSenderName: '',
   enablePushNotifications: true,
 };
 
@@ -3821,6 +3826,15 @@ class PlatformStore {
             raw.sms_gateway_provider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
           ),
           smsSenderId: String(raw.sms_sender_id ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsSenderId),
+          emailGatewayProvider: String(
+            raw.email_gateway_provider ?? DEFAULT_ORG_SYSTEM_SETTINGS.emailGatewayProvider
+          ),
+          emailFromAddress: String(
+            raw.email_from_address ?? DEFAULT_ORG_SYSTEM_SETTINGS.emailFromAddress ?? ''
+          ),
+          emailSenderName: String(
+            raw.email_sender_name ?? DEFAULT_ORG_SYSTEM_SETTINGS.emailSenderName ?? ''
+          ),
           enablePushNotifications:
             typeof raw.enable_push_notifications === 'boolean'
               ? raw.enable_push_notifications
@@ -3973,6 +3987,13 @@ class PlatformStore {
         patch.smsGatewayProvider ?? current.smsGatewayProvider ?? DEFAULT_ORG_SYSTEM_SETTINGS.smsGatewayProvider
       ).trim(),
       smsSenderId,
+      emailGatewayProvider: String(
+        patch.emailGatewayProvider ??
+          current.emailGatewayProvider ??
+          DEFAULT_ORG_SYSTEM_SETTINGS.emailGatewayProvider
+      ).trim(),
+      emailFromAddress: String(patch.emailFromAddress ?? current.emailFromAddress ?? '').trim(),
+      emailSenderName: String(patch.emailSenderName ?? current.emailSenderName ?? '').trim(),
       driveByProtection: Boolean(patch.driveByProtection ?? current.driveByProtection),
       autoAssignCellLeaders: Boolean(patch.autoAssignCellLeaders ?? current.autoAssignCellLeaders),
       requireExplicitConsent: Boolean(patch.requireExplicitConsent ?? current.requireExplicitConsent),
@@ -4044,6 +4065,9 @@ class PlatformStore {
         sms_gateway_provider: merged.smsGatewayProvider,
         sms_sender_id: merged.smsSenderId,
         sms_configured: Boolean(merged.smsGatewayProvider && merged.smsSenderId),
+        email_gateway_provider: merged.emailGatewayProvider || 'Resend Email',
+        email_from_address: merged.emailFromAddress || '',
+        email_sender_name: merged.emailSenderName || '',
         enable_push_notifications: merged.enablePushNotifications,
         push_configured: merged.enablePushNotifications,
       };
@@ -5658,6 +5682,7 @@ class PlatformStore {
       'squads',
       'department',
       'officerName',
+      'designation',
       'placeOfResidence',
       'residentialDigitalAddress',
       'hometown',
@@ -5684,6 +5709,14 @@ class PlatformStore {
       } else if (payload[key] !== undefined) {
         next[key] = payload[key];
       }
+    }
+    const resolvedOfficer = payload.officerName ?? payload.designation;
+    if (typeof resolvedOfficer === 'string' && resolvedOfficer.trim()) {
+      next.officerName = resolvedOfficer.trim();
+      next.designation = resolvedOfficer.trim();
+    } else if (resolvedOfficer === '' || resolvedOfficer === null) {
+      delete next.officerName;
+      delete next.designation;
     }
     const resolvedInputImg = [
       payload.imageUrl,
@@ -5739,7 +5772,8 @@ class PlatformStore {
       memberId: row.member_id ?? custom.memberId,
       department: row.department ?? custom.department ?? 'General Congregation',
       squads: row.squads ?? custom.squads,
-      officerName: row.member_officer_name ?? custom.officerName,
+      officerName: row.member_officer_name ?? custom.officerName ?? custom.designation,
+      designation: row.designation ?? custom.designation ?? row.member_officer_name ?? custom.officerName,
       specificLocation: row.specific_location ?? custom.specificLocation,
       remarks: row.remarks ?? custom.remarks,
       notes: row.notes ?? custom.notes,
@@ -10268,21 +10302,67 @@ class PlatformStore {
       id: String(row.id),
       personId: String(row.member_id || row.person_id || ''),
       personName: String(row.person_name || 'Member'),
+      personPhone: row.person_phone ? String(row.person_phone) : undefined,
+      personEmail: row.person_email ? String(row.person_email) : undefined,
       groupName: String(row.group_name || 'General'),
       reason,
       assignedToName: String(row.assigned_to_name || 'Pastoral Care Team'),
+      assignedToMemberId: row.assigned_to_member_id ? String(row.assigned_to_member_id) : undefined,
+      assignedToRole: row.assigned_to_role ? String(row.assigned_to_role) : undefined,
+      assignedToPhone: row.assigned_to_phone ? String(row.assigned_to_phone) : undefined,
+      autoAssigned: typeof row.auto_assigned === 'boolean' ? row.auto_assigned : undefined,
       status,
       dueOn: String(row.due_label || row.due_on || 'In 3 days'),
       outcome: row.outcome ? String(row.outcome) : undefined,
+      notes: row.notes ? String(row.notes) : undefined,
       createdAt: createdIso.slice(0, 10),
       resolvedAt: row.resolved_at ? String(row.resolved_at) : undefined,
     };
+  }
+
+  private enrichFollowupTasksWithMembers(
+    tasks: FollowupTask[],
+    orgMembers: Record<string, any>[]
+  ): FollowupTask[] {
+    const byId = new Map<string, Record<string, any>>();
+    const byName = new Map<string, Record<string, any>>();
+    for (const m of orgMembers) {
+      byId.set(String(m.id), m);
+      const fullName = `${String(m.firstName || '').trim()} ${String(m.lastName || '').trim()}`
+        .trim()
+        .toLowerCase();
+      if (fullName) byName.set(fullName, m);
+    }
+    return tasks.map((t) => {
+      const targetMember = byId.get(String(t.personId));
+      const assigneeMember =
+        (t.assignedToMemberId ? byId.get(t.assignedToMemberId) : undefined) ||
+        byName.get(String(t.assignedToName || '').trim().toLowerCase());
+      return {
+        ...t,
+        personPhone:
+          t.personPhone ||
+          (targetMember?.phoneE164 ? String(targetMember.phoneE164) : undefined) ||
+          (targetMember?.phoneNumber ? String(targetMember.phoneNumber) : undefined),
+        personEmail: t.personEmail || (targetMember?.email ? String(targetMember.email) : undefined),
+        assignedToMemberId: t.assignedToMemberId || (assigneeMember ? String(assigneeMember.id) : undefined),
+        assignedToRole:
+          t.assignedToRole ||
+          (assigneeMember?.officerName || assigneeMember?.designation
+            ? String(assigneeMember.officerName || assigneeMember.designation)
+            : undefined),
+        assignedToPhone:
+          t.assignedToPhone ||
+          (assigneeMember?.phoneE164 ? String(assigneeMember.phoneE164) : undefined),
+      };
+    });
   }
 
   public async listFollowupTasks(organizationId: string): Promise<FollowupTask[]> {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || '').trim().toLowerCase();
     if (!orgId) return [];
+    const orgMembers = await this.getMembers(orgId);
 
     if (this.supabase) {
       if (!UUID_REGEX.test(orgId)) return [];
@@ -10300,10 +10380,12 @@ class PlatformStore {
         throw new Error(`Failed to fetch follow-up tasks from Supabase: ${error.message}`);
       }
 
-      return (data || []).map((row) => this.mapSupabaseFollowupRow(row));
+      const mapped = (data || []).map((row) => this.mapSupabaseFollowupRow(row));
+      return this.enrichFollowupTasksWithMembers(mapped, orgMembers);
     }
 
-    return [...(this.followupTasksByOrg.get(orgId) || [])];
+    const memTasks = [...(this.followupTasksByOrg.get(orgId) || [])];
+    return this.enrichFollowupTasksWithMembers(memTasks, orgMembers);
   }
 
   public async createFollowupTask(
@@ -10311,9 +10393,15 @@ class PlatformStore {
     input: {
       personId: string;
       personName?: string;
+      personPhone?: string;
+      personEmail?: string;
       groupName?: string;
       reason: FollowupReason;
       assignedToName?: string;
+      assignedToMemberId?: string;
+      assignedToRole?: string;
+      assignedToPhone?: string;
+      autoAssigned?: boolean;
       dueOn?: string;
       notes?: string;
     }
@@ -10326,9 +10414,16 @@ class PlatformStore {
       (input.personName || '').trim() ||
       (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : 'Member');
     const resolvedGroupName =
-      (input.groupName || '').trim() || matchedMember?.groupName || 'General';
+      (input.groupName || '').trim() || matchedMember?.homeCellGroup || matchedMember?.groupName || 'General';
     const resolvedAssignee = (input.assignedToName || '').trim() || 'Pastoral Care Team';
-    const resolvedDueLabel = (input.dueOn || '').trim() || (input.reason === 'first_timer' ? 'Tomorrow 10:00 AM' : 'In 3 days');
+    const resolvedDueLabel =
+      (input.dueOn || '').trim() || (input.reason === 'first_timer' ? 'Tomorrow 10:00 AM' : 'In 3 days');
+    const resolvedPersonPhone =
+      (input.personPhone || '').trim() ||
+      (matchedMember?.phoneE164 ? String(matchedMember.phoneE164) : undefined);
+    const resolvedPersonEmail =
+      (input.personEmail || '').trim() ||
+      (matchedMember?.email ? String(matchedMember.email) : undefined);
 
     if (this.supabase) {
       if (!UUID_REGEX.test(orgId)) {
@@ -10357,23 +10452,115 @@ class PlatformStore {
       if (error) {
         throw new Error(`Failed to create follow-up task in Supabase: ${error.message}`);
       }
-      return this.mapSupabaseFollowupRow(data);
+      const mapped = this.mapSupabaseFollowupRow(data);
+      return this.enrichFollowupTasksWithMembers(
+        [
+          {
+            ...mapped,
+            ...(input.assignedToMemberId ? { assignedToMemberId: input.assignedToMemberId } : {}),
+            ...(input.assignedToRole ? { assignedToRole: input.assignedToRole } : {}),
+            ...(input.assignedToPhone ? { assignedToPhone: input.assignedToPhone } : {}),
+            ...(input.autoAssigned !== undefined ? { autoAssigned: input.autoAssigned } : {}),
+          },
+        ],
+        orgMembers
+      )[0];
     }
 
     const created: FollowupTask = {
       id: randomUUID(),
       personId: input.personId,
       personName: resolvedPersonName,
+      personPhone: resolvedPersonPhone,
+      personEmail: resolvedPersonEmail,
       groupName: resolvedGroupName,
       reason: input.reason,
       assignedToName: resolvedAssignee,
+      assignedToMemberId: input.assignedToMemberId,
+      assignedToRole: input.assignedToRole,
+      assignedToPhone: input.assignedToPhone,
+      autoAssigned: input.autoAssigned,
       status: 'open',
       dueOn: resolvedDueLabel,
+      notes: input.notes || undefined,
       createdAt: new Date().toISOString().slice(0, 10),
     };
     const existing = this.followupTasksByOrg.get(orgId) || [];
     this.followupTasksByOrg.set(orgId, [created, ...existing]);
-    return created;
+    return this.enrichFollowupTasksWithMembers([created], orgMembers)[0];
+  }
+
+  public async autoAssignAbsenteeFollowupTasks(
+    organizationId: string,
+    opts?: {
+      unarrivedMemberIds?: string[];
+      fallbackActorName?: string;
+    }
+  ): Promise<{
+    assignedCount: number;
+    skippedExistingCount: number;
+    tasks: FollowupTask[];
+    allTasks: FollowupTask[];
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) {
+      return { assignedCount: 0, skippedExistingCount: 0, tasks: [], allTasks: [] };
+    }
+
+    const [membersRaw, churchGroups, existingTasks, settingsRes] = await Promise.all([
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId),
+      this.listFollowupTasks(orgId),
+      this.getSystemSettings(orgId),
+    ]);
+
+    const typedMembers = membersRaw as unknown as Person[];
+    const unarrivedSet =
+      Array.isArray(opts?.unarrivedMemberIds) && opts!.unarrivedMemberIds.length > 0
+        ? new Set(opts!.unarrivedMemberIds.map((id) => String(id)))
+        : undefined;
+
+    const plan = buildAutoAssignAbsenteesPlan({
+      members: typedMembers,
+      churchGroups,
+      existingTasks,
+      systemSettings: settingsRes.settings,
+      fallbackActorName: opts?.fallbackActorName,
+      unarrivedMemberIdsForLatestService: unarrivedSet,
+    });
+
+    const createdTasks: FollowupTask[] = [];
+    for (const item of plan) {
+      const created = await this.createFollowupTask(orgId, {
+        personId: item.personId,
+        personName: item.personName,
+        personPhone: item.personPhone,
+        personEmail: item.personEmail,
+        groupName: item.groupName,
+        reason: item.reason,
+        assignedToName: item.assignedToName,
+        assignedToMemberId: item.assignedToMemberId,
+        assignedToRole: item.assignedToRole,
+        assignedToPhone: item.assignedToPhone,
+        autoAssigned: true,
+        dueOn: item.dueOn,
+        notes: item.notes,
+      });
+      createdTasks.push(created);
+    }
+
+    const allTasks = await this.listFollowupTasks(orgId);
+    const activeOpenIds = existingTasks.filter(
+      (t) => t.status === 'open' || t.status === 'contacted'
+    ).length;
+
+    return {
+      assignedCount: createdTasks.length,
+      skippedExistingCount: activeOpenIds,
+      tasks: createdTasks,
+      allTasks,
+    };
   }
 
   public async updateFollowupTask(
@@ -10821,6 +11008,7 @@ class PlatformStore {
     email: string;
     phone?: string;
     role: 'admin' | 'pastor' | 'usher' | 'group_leader' | 'finance' | 'super_admin';
+    designation?: string;
     password?: string;
     ipAddress?: string;
   }): Promise<{
@@ -10946,6 +11134,9 @@ class PlatformStore {
           status: 'active',
           email,
           ...(phoneE164 ? { phoneE164 } : {}),
+          ...(params.designation
+            ? { officerName: params.designation, designation: params.designation }
+            : {}),
         });
       } else {
         const nameParts = fullName.split(/\s+/).filter(Boolean);
@@ -10962,11 +11153,19 @@ class PlatformStore {
             autoCheckinOptedIn: false,
             role: params.role === 'super_admin' ? 'admin' : params.role,
             status: 'active',
+            ...(params.designation
+              ? { officerName: params.designation, designation: params.designation }
+              : {}),
           },
           { skipAutoCredentials: true }
         );
         targetMemberId = String(createdMember.id);
       }
+    } else if (params.designation) {
+      await this.updateMember(cleanOrgId, targetMemberId, {
+        officerName: params.designation,
+        designation: params.designation,
+      }).catch(() => {});
     }
 
     const credId = existingSameOrg?.id || (UUID_REGEX.test(targetMemberId) ? targetMemberId : randomUUID());
@@ -11156,7 +11355,7 @@ class PlatformStore {
         createdAt: c.createdAt,
         homeCellGroup: linkedMember?.homeCellGroup || linkedMember?.groupName || undefined,
         department: linkedMember?.department || undefined,
-        designation: linkedMember?.designation || undefined,
+        designation: linkedMember?.designation || linkedMember?.officerName || undefined,
       });
     }
 
@@ -11185,7 +11384,7 @@ class PlatformStore {
         createdAt: m.joinedOn ? String(m.joinedOn) : undefined,
         homeCellGroup: m.homeCellGroup || m.groupName || undefined,
         department: m.department || undefined,
-        designation: m.designation || undefined,
+        designation: m.designation || m.officerName || undefined,
       });
     }
 
@@ -11199,6 +11398,7 @@ class PlatformStore {
     email?: string;
     phone?: string;
     role: ChurchRole;
+    designation?: string;
     password?: string;
     requirePasswordChange?: boolean;
     actorId?: string | null;
@@ -11359,11 +11559,13 @@ class PlatformStore {
     }
 
     const mappedMemberRole = params.role === 'super_admin' ? 'admin' : params.role;
+    const cleanDesignation = params.designation?.trim();
     if (targetMemberId) {
       await this.updateMember(cleanOrgId, targetMemberId, {
         role: mappedMemberRole,
         ...(email ? { email } : {}),
         ...(phoneE164 ? { phoneE164 } : {}),
+        ...(cleanDesignation ? { officerName: cleanDesignation, designation: cleanDesignation } : {}),
       });
     } else {
       const nameParts = fullName.split(/\s+/).filter(Boolean);
@@ -11380,6 +11582,7 @@ class PlatformStore {
           autoCheckinOptedIn: params.role === 'member',
           role: mappedMemberRole,
           status: params.role === 'member' ? 'member' : 'active',
+          ...(cleanDesignation ? { officerName: cleanDesignation, designation: cleanDesignation } : {}),
         },
         { skipAutoCredentials: true }
       );
@@ -11455,7 +11658,8 @@ class PlatformStore {
         createdAt: record.createdAt || nowIso,
         homeCellGroup: targetMember?.homeCellGroup || targetMember?.groupName || undefined,
         department: targetMember?.department || undefined,
-        designation: targetMember?.designation || undefined,
+        designation:
+          cleanDesignation || targetMember?.designation || targetMember?.officerName || undefined,
       },
       ...(generatedTempPassword ? { temporaryPassword: generatedTempPassword } : {}),
       resetExisting: Boolean(existingSameOrg),
@@ -11467,6 +11671,7 @@ class PlatformStore {
     targetId: string;
     role?: ChurchRole;
     status?: 'active' | 'suspended';
+    designation?: string;
     actorUserId?: string | null;
     actorEmail?: string | null;
     callerIsCreator?: boolean;
@@ -11553,9 +11758,12 @@ class PlatformStore {
         }
 
         const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
-        if (params.role && linkedMemberId) {
+        if ((params.role || params.designation !== undefined) && linkedMemberId) {
           await this.updateMember(cleanOrgId, linkedMemberId, {
-            role: params.role === 'super_admin' ? 'admin' : params.role,
+            ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
+            ...(params.designation !== undefined
+              ? { officerName: params.designation, designation: params.designation }
+              : {}),
           }).catch(() => {});
         }
         if (params.status === 'active') {
@@ -11579,9 +11787,12 @@ class PlatformStore {
           err.status = 404;
           throw err;
         }
-        if (params.role) {
+        if (params.role || params.designation !== undefined) {
           await this.updateMember(cleanOrgId, targetId, {
-            role: params.role === 'super_admin' ? 'admin' : params.role,
+            ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
+            ...(params.designation !== undefined
+              ? { officerName: params.designation, designation: params.designation }
+              : {}),
           });
         }
       }
@@ -11621,9 +11832,12 @@ class PlatformStore {
             cred.failedAttempts = 0;
           }
         }
-        if (params.role && cred.memberId) {
+        if ((params.role || params.designation !== undefined) && cred.memberId) {
           await this.updateMember(cleanOrgId, cred.memberId, {
-            role: params.role === 'super_admin' ? 'admin' : params.role,
+            ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
+            ...(params.designation !== undefined
+              ? { officerName: params.designation, designation: params.designation }
+              : {}),
           }).catch(() => {});
         }
       } else {
@@ -11643,9 +11857,12 @@ class PlatformStore {
           err.status = 404;
           throw err;
         }
-        if (params.role) {
+        if (params.role || params.designation !== undefined) {
           await this.updateMember(cleanOrgId, targetId, {
-            role: params.role === 'super_admin' ? 'admin' : params.role,
+            ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
+            ...(params.designation !== undefined
+              ? { officerName: params.designation, designation: params.designation }
+              : {}),
           });
         }
       }

@@ -19,6 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { ChurchRole } from '../../lib/auth';
+import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../constants/portfolios';
+import { ContactCallButton } from './common/ContactCallButton';
 
 export type CredentialStatus =
   | 'active'
@@ -105,6 +107,7 @@ export const UserManagement: React.FC = () => {
   // Form state for issuing or resetting credentials
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<ChurchRole>('member');
+  const [selectedDesignation, setSelectedDesignation] = useState<string>('Member');
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -171,6 +174,8 @@ export const UserManagement: React.FC = () => {
       email?: string;
       phoneE164?: string;
       role?: ChurchRole;
+      designation?: string;
+      officerName?: string;
     }) => {
       const targetMemberId = memberOrUser.memberId || memberOrUser.id || '';
       const computedName =
@@ -182,6 +187,9 @@ export const UserManagement: React.FC = () => {
       setNewEmail(memberOrUser.email || '');
       setNewPhone(memberOrUser.phoneE164 || '');
       setSelectedRole(memberOrUser.role || 'member');
+      setSelectedDesignation(
+        memberOrUser.designation || memberOrUser.officerName || 'Member'
+      );
       setNewPassword('');
       setRequirePasswordChange(true);
       setErrorMsg(null);
@@ -225,6 +233,7 @@ export const UserManagement: React.FC = () => {
           email: matchedMember.email,
           phoneE164: matchedMember.phoneE164,
           role: ((matchedMember as { role?: ChurchRole }).role) || 'member',
+          designation: matchedMember.designation || matchedMember.officerName || 'Member',
         });
       }
     }
@@ -236,6 +245,7 @@ export const UserManagement: React.FC = () => {
     setNewEmail('');
     setNewPhone('');
     setSelectedRole('member');
+    setSelectedDesignation('Member');
     setNewPassword('');
     setRequirePasswordChange(true);
     setErrorMsg(null);
@@ -262,6 +272,7 @@ export const UserManagement: React.FC = () => {
         email: mem.email,
         phoneE164: mem.phoneE164,
         role: ((mem as { role?: ChurchRole }).role) || 'member',
+        designation: mem.designation || mem.officerName || 'Member',
       });
     }
   };
@@ -327,6 +338,7 @@ export const UserManagement: React.FC = () => {
         (u.memberCode || '').toLowerCase().includes(q) ||
         (u.homeCellGroup || '').toLowerCase().includes(q) ||
         (u.department || '').toLowerCase().includes(q) ||
+        (u.designation || '').toLowerCase().includes(q) ||
         u.role.toLowerCase().includes(q)
       );
     });
@@ -370,6 +382,7 @@ export const UserManagement: React.FC = () => {
         ...(newEmail.trim() ? { email: newEmail.trim().toLowerCase() } : {}),
         ...(newPhone.trim() ? { phone: newPhone.trim() } : {}),
         role: selectedRole,
+        designation: selectedDesignation || 'Member',
         ...(newPassword.trim() ? { password: newPassword.trim() } : {}),
         requirePasswordChange,
       };
@@ -439,6 +452,31 @@ export const UserManagement: React.FC = () => {
       await refreshMembers?.();
     } catch {
       showToast('Network error updating user role.');
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const handleDesignationUpdate = async (user: ManagedUser, nextDesignation: string) => {
+    if (nextDesignation === (user.designation || 'Member') || !canCreateUsers) return;
+    setBusyUserId(user.id);
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ designation: nextDesignation }),
+      });
+      if (handleUnauthorizedSession(res.status)) return;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.user) {
+        showToast(data?.message || 'Failed to update church portfolio.');
+        return;
+      }
+      setUsersList((prev) => prev.map((row) => (row.id === user.id ? data.user : row)));
+      showToast(`${user.fullName}'s church portfolio set to ${nextDesignation}.`);
+      await refreshMembers?.();
+    } catch {
+      showToast('Network error updating church portfolio.');
     } finally {
       setBusyUserId(null);
     }
@@ -794,8 +832,8 @@ export const UserManagement: React.FC = () => {
           )}
 
           {/* Target Enrolled Member Picker */}
-          <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
-            <div className="lg:col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+            <div className="sm:col-span-2 lg:col-span-2">
               <label className="block text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] mb-1">
                 Target Member / User
               </label>
@@ -854,6 +892,24 @@ export const UserManagement: React.FC = () => {
                 onChange={(e) => setNewPhone(e.target.value)}
                 className="w-full min-h-[42px] px-3.5 py-2 bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl text-xs text-[#1D1B3A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
               />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-[#666A86] dark:text-[#A9ACC8] mb-1">
+                Church Portfolio
+              </label>
+              <select
+                aria-label="Select church portfolio"
+                value={selectedDesignation}
+                onChange={(e) => setSelectedDesignation(e.target.value)}
+                className="w-full min-h-[42px] px-3 py-2 bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl text-xs text-[#1D1B3A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+              >
+                {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -1010,6 +1066,11 @@ export const UserManagement: React.FC = () => {
                       >
                         {u.accountCategory === 'member' ? 'Member' : 'Staff / Leader'}
                       </span>
+                      {u.designation && u.designation !== 'Member' && (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-[10px] font-bold">
+                          {u.designation}
+                        </span>
+                      )}
                       {renderCredentialBadge(u)}
                     </div>
 
@@ -1042,8 +1103,42 @@ export const UserManagement: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Role Selector + Credential & Access Actions */}
+                  {/* Portfolio + Role Selector + Call + Credential & Access Actions */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {(u.phoneE164 || u.email) && (
+                      <ContactCallButton
+                        compact
+                        contactName={u.fullName}
+                        contactPhone={u.phoneE164}
+                        contactEmail={u.email}
+                        contactRole={u.designation || ROLE_LABELS[u.role]}
+                        contactGroup={u.homeCellGroup || u.department}
+                      />
+                    )}
+
+                    {canCreateUsers && (
+                      <select
+                        aria-label={`Church portfolio for ${u.fullName}`}
+                        value={u.designation || 'Member'}
+                        disabled={isBusy}
+                        onChange={(e) => handleDesignationUpdate(u, e.target.value)}
+                        className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-semibold text-xs outline-none focus:ring-2 focus:ring-[#6D5CF2] cursor-pointer disabled:opacity-50"
+                      >
+                        {!CHURCH_PORTFOLIOS.some(
+                          (p) => p.toLowerCase() === (u.designation || 'Member').toLowerCase()
+                        ) && (
+                          <option value={u.designation || 'Member'}>
+                            {u.designation || 'Member'}
+                          </option>
+                        )}
+                        {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
                     {canCreateUsers ? (
                       <select
                         aria-label={`Role for ${u.fullName}`}

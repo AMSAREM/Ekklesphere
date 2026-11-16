@@ -123,7 +123,31 @@ function closeModal(modal) {
   if (!document.querySelector('.is-open')) document.body.style.overflow = '';
 }
 
-document.querySelectorAll('a.button[href="#demo"]').forEach((trigger) => trigger.addEventListener('click', (event) => {
+document.querySelectorAll('a[data-auth-link]').forEach((link) => {
+  link.addEventListener('click', (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    const targetPath = link.getAttribute('href');
+    if (!targetPath) return;
+    if (window.parent && window.parent !== window) {
+      event.preventDefault();
+      window.parent.postMessage(
+        { type: 'ekklesphere:navigate', path: targetPath },
+        window.location.origin
+      );
+    }
+  });
+});
+
+document.querySelectorAll('a.button[href="#demo"], [data-open-demo]').forEach((trigger) => trigger.addEventListener('click', (event) => {
   event.preventDefault();
   formSuccess?.setAttribute('hidden', '');
   demoForm?.removeAttribute('hidden');

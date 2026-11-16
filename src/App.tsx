@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { EkklesphereProvider, useEkklesphere } from './context/EkklesphereContext';
 import { HelpDocsModal } from './components/navigation/HelpDocsModal';
 import { AdminDashboard } from './components/admin/AdminDashboard';
@@ -13,6 +13,10 @@ import { CreatorsPanel } from './components/creator/CreatorsPanel';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
 import { KeyRound } from 'lucide-react';
 import { PublicLandingPage } from './components/landing/PublicLandingPage';
+import { isPublicLandingLocation } from './utils/authRoute';
+
+const readLocationKey = () =>
+  typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
 
 const EkklesphereMain: React.FC = () => {
   const {
@@ -24,14 +28,34 @@ const EkklesphereMain: React.FC = () => {
     setIsChangePasswordModalOpen,
   } = useEkklesphere();
 
-  const isPublicRoot =
-    typeof window !== 'undefined' &&
-    window.location.pathname === '/' &&
-    !new URLSearchParams(window.location.search).has('view') &&
-    !new URLSearchParams(window.location.search).has('church');
+  const [locationKey, setLocationKey] = useState<string>(readLocationKey);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      setLocationKey(readLocationKey());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = useCallback((targetPath: string) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(targetPath, window.location.origin);
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history.pushState({}, '', nextUrl);
+    setLocationKey(`${url.pathname}${url.search}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, []);
+
+  const [currentPathname, currentSearch = ''] = locationKey.split('?');
+  const isPublicRoot = isPublicLandingLocation(
+    currentPathname,
+    currentSearch ? `?${currentSearch}` : ''
+  );
 
   if (isPublicRoot) {
-    return <PublicLandingPage />;
+    return <PublicLandingPage onNavigate={navigateTo} />;
   }
 
   // If Creator Console view is active - only verified creator login can access
@@ -62,7 +86,7 @@ const EkklesphereMain: React.FC = () => {
             <div className="max-w-md w-full mb-4 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs text-center font-medium">
               The Creator Console is restricted to Platform Creators. Please log in with your Creator credentials below.
             </div>
-            <UnifiedAuthScreen />
+            <UnifiedAuthScreen onBackToLanding={() => navigateTo('/')} />
           </div>
         </div>
       );
@@ -155,7 +179,7 @@ const EkklesphereMain: React.FC = () => {
       {/* Role-governed portal rendering */}
       {!currentUser ? (
         <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8">
-          <UnifiedAuthScreen />
+          <UnifiedAuthScreen onBackToLanding={() => navigateTo('/')} />
         </div>
       ) : (
         <>

@@ -8,12 +8,16 @@ import {
   Check,
   Undo2,
   Calendar as CalendarIcon,
+  UserCheck,
 } from 'lucide-react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { AttendanceRecord, CheckinMethod, ChurchGroup, ChurchGroupCategory, Person } from '../../types/ekklesphere';
 import { isAssignedLeaderName, normalizeSettingLabel } from '../../utils/settingsConnections';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
+import { VisitorTrendsAnalysis } from './VisitorTrendsAnalysis';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { ContactCallButton } from '../common/ContactCallButton';
+import { getMemberPortfolio } from '../../constants/portfolios';
 
 interface LiveAttendanceInsightsProps {
   onOpenAddMember?: () => void;
@@ -114,6 +118,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
     checkInPerson,
     removeCheckIn,
     addFollowupTask,
+    autoAssignAbsentees,
+    isAutoAssigningAbsentees,
     refreshLivePremise,
     setIsAddServiceOpen,
     requestOpenSettings,
@@ -1353,6 +1359,32 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               </div>
             )}
 
+            {(tableTab === 'unarrived' || tableTab === 'at_risk') && (
+              <button
+                type="button"
+                disabled={isAutoAssigningAbsentees || (unarrivedMembers.length === 0 && atRiskAbsentees.length === 0)}
+                onClick={() =>
+                  autoAssignAbsentees({
+                    unarrivedMemberIds:
+                      tableTab === 'unarrived' ? unarrivedMembers.map((m) => m.id) : undefined,
+                    silent: false,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[38px] rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] hover:bg-[#E2DEFF] dark:hover:bg-[#35356B] transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                {isAutoAssigningAbsentees ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <UserCheck className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {isAutoAssigningAbsentees
+                    ? 'Auto-Assigning...'
+                    : 'Auto-Assign to Officers'}
+                </span>
+              </button>
+            )}
+
             <div className="relative w-full sm:w-auto sm:min-w-[210px] min-w-0 flex-1 sm:flex-initial">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8] pointer-events-none" />
               <input
@@ -1530,6 +1562,21 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="inline-flex items-center justify-end gap-1.5">
+                          <ContactCallButton
+                            compact
+                            contactName={`${m.firstName} ${m.lastName}`.trim()}
+                            contactPhone={m.phoneE164 || m.phoneNumber}
+                            contactEmail={m.email}
+                            contactRole={getMemberPortfolio(m)}
+                            contactGroup={m.groupName || m.homeCellGroup}
+                            onLogOutcome={async (outcome) => {
+                              await addFollowupTask(
+                                m.id,
+                                absences >= 3 ? 'absent_3' : 'absent_2',
+                                outcome
+                              );
+                            }}
+                          />
                           <button
                             type="button"
                             disabled={!hasScheduledService}
@@ -1564,6 +1611,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
           )}
         </div>
       </section>
+
+      <VisitorTrendsAnalysis />
     </div>
   );
 };

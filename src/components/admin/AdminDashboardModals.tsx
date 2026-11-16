@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, PhoneCall, Check, Download, Settings } from 'lucide-react';
+import {
+  X,
+  Send,
+  Check,
+  Download,
+  Settings,
+  RefreshCw,
+  AlertCircle,
+  CheckCircle2,
+  UserCheck,
+} from 'lucide-react';
 import {
   ChurchGroup,
   FollowupTask,
@@ -8,12 +18,22 @@ import {
   SystemSettings,
 } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { ContactCallButton } from '../common/ContactCallButton';
+import { isPastoralOfficerOrLeader } from '../../constants/portfolios';
 import {
   formatFollowupDueDateLabel,
   memberMatchesChurchGroup,
   resolveFollowupAssignee,
 } from '../../utils/settingsConnections';
 import { computeServiceBinaryStatus } from '../../utils/serviceStatus';
+
+export interface CommunicationStatusSnapshot {
+  arkeselConfigured: boolean;
+  resendConfigured: boolean;
+  defaultSmsSenderId: string;
+  defaultFromEmail: string;
+  defaultFromName: string;
+}
 
 export interface AddServiceModalProps {
   isOpen: boolean;
@@ -549,7 +569,16 @@ export interface BroadcastModalProps {
   absenteeThresholdServices?: number;
   smsGatewayProvider?: string;
   smsSenderId?: string;
+  emailFromAddress?: string;
+  emailSenderName?: string;
   enablePushNotifications?: boolean;
+  communicationStatus?: CommunicationStatusSnapshot;
+  onSendBroadcast?: (params: {
+    channel: 'push' | 'sms' | 'email';
+    audience: string;
+    subject: string;
+    body: string;
+  }) => Promise<{ success: boolean; sentCount?: number; message: string }>;
   onOpenGatewaySettings?: () => void;
   onNotify: (msg: string) => void;
 }
@@ -565,7 +594,11 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
     absenteeThresholdServices = 2,
     smsGatewayProvider,
     smsSenderId,
+    emailFromAddress,
+    emailSenderName,
     enablePushNotifications = true,
+    communicationStatus,
+    onSendBroadcast,
     onOpenGatewaySettings,
     onNotify,
   }) => {
@@ -573,9 +606,13 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
     const [audience, setAudience] = useState('all');
     const [subject, setSubject] = useState('Service Reminder');
     const [body, setBody] = useState('');
+    const [isSending, setIsSending] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
 
     useEffect(() => {
       if (isOpen) {
+        setSendError(null);
+        setIsSending(false);
         setBody(
           `Welcome to ${churchName || 'church'}! Service begins at ${serviceStartsAt}. If you have auto check-in enabled, your arrival will be marked automatically.`
         );
@@ -588,25 +625,73 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
     const activeGroups = churchGroups.filter((g) => g.active !== false);
     const absentMembersCount = members.filter((m) => (m.consecutiveAbsences || 0) >= safeThreshold).length;
     const visitorsCount = members.filter((m) => m.status === 'visitor').length;
+    const officersCount = members.filter((m) => isPastoralOfficerOrLeader(m)).length;
 
     const getRecipientCount = (): number => {
       if (audience === 'all') return members.length;
       if (audience === 'absent') return absentMembersCount;
       if (audience === 'visitors') return visitorsCount;
+      if (audience === 'officers') return officersCount;
       return members.filter((m) => memberMatchesChurchGroup(m, audience)).length;
     };
 
     const recipientCount = getRecipientCount();
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const effectiveSenderId =
+      smsSenderId || communicationStatus?.defaultSmsSenderId || 'EKKLESPHERE';
+    const effectiveFromEmail =
+      emailFromAddress || communicationStatus?.defaultFromEmail || 'Env default sender';
+    const effectiveFromName =
+      emailSenderName || churchName || communicationStatus?.defaultFromName || 'Church Office';
+
+    const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
+      if (isSending) return;
+      setSendError(null);
+
       if (channel === 'push' && !enablePushNotifications) {
-        onNotify('Push broadcasts are paused in System Settings → Gateways. Switch to SMS/Email or re-enable Push.');
+        const msg =
+          'Push broadcasts are paused in System Settings → Gateways. Switch to SMS/Email or re-enable Push.';
+        setSendError(msg);
+        onNotify(msg);
         return;
       }
+
+      if (!body.trim()) {
+        setSendError('Please enter a message body before sending.');
+        return;
+      }
+
+      if (recipientCount === 0) {
+        setSendError('No members match this audience filter.');
+        return;
+      }
+
+      if (onSendBroadcast) {
+        setIsSending(true);
+        try {
+          const result = await onSendBroadcast({
+            channel,
+            audience,
+            subject: subject.trim() || 'Church Notice',
+            body: body.trim(),
+          });
+          if (!result.success) {
+            setSendError(result.message || 'Broadcast delivery failed.');
+            return;
+          }
+          onClose();
+        } finally {
+          setIsSending(false);
+        }
+        return;
+      }
+
       const routeHint =
-        channel === 'sms' && smsGatewayProvider
-          ? ` via ${smsGatewayProvider}${smsSenderId ? ` (${smsSenderId})` : ''}`
+        channel === 'sms'
+          ? ` via ${smsGatewayProvider || 'Arkesel SMS'} (${effectiveSenderId})`
+          : channel === 'email'
+          ? ` via Resend Email (${effectiveFromName})`
           : '';
       onNotify(
         `Broadcast queued via ${channel.toUpperCase()}${routeHint} to ${recipientCount} recipient${recipientCount === 1 ? '' : 's'} (${audience}).`
@@ -634,6 +719,13 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
             </button>
           </div>
 
+          {sendError && (
+            <div className="mb-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{sendError}</span>
+            </div>
+          )}
+
           <div className="space-y-3 text-xs">
             <div>
               <label className="block font-semibold mb-1 text-[#1D1B3A] dark:text-[#F2F2FA]">
@@ -644,7 +736,10 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
                   <button
                     key={ch}
                     type="button"
-                    onClick={() => setChannel(ch)}
+                    onClick={() => {
+                      setChannel(ch);
+                      setSendError(null);
+                    }}
                     className={`flex-1 py-2 rounded-xl font-bold uppercase transition-all cursor-pointer ${
                       channel === ch
                         ? 'bg-[#6D5CF2] text-white'
@@ -655,15 +750,55 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
                   </button>
                 ))}
               </div>
-              <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                <span>
-                  {channel === 'sms'
-                    ? `Gateway: ${smsGatewayProvider || 'Default SMS'} · Sender ID: ${smsSenderId || 'CHURCH'}`
-                    : channel === 'push'
-                    ? enablePushNotifications
-                      ? 'Web & Mobile Push Engine Active'
-                      : 'Push Notifications paused in Settings'
-                    : 'SMTP Church Digest Dispatch'}
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                <span className="inline-flex items-center gap-1.5 min-w-0">
+                  {channel === 'sms' ? (
+                    <>
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-bold text-[10px] ${
+                          communicationStatus?.arkeselConfigured
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                        }`}
+                      >
+                        {communicationStatus?.arkeselConfigured ? (
+                          <CheckCircle2 className="w-3 h-3" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3" />
+                        )}
+                        {communicationStatus?.arkeselConfigured ? 'Arkesel API Ready' : 'Env Key Needed'}
+                      </span>
+                      <span className="truncate">
+                        {smsGatewayProvider || 'Arkesel SMS'} · Sender: {effectiveSenderId}
+                      </span>
+                    </>
+                  ) : channel === 'email' ? (
+                    <>
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-bold text-[10px] ${
+                          communicationStatus?.resendConfigured
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                        }`}
+                      >
+                        {communicationStatus?.resendConfigured ? (
+                          <CheckCircle2 className="w-3 h-3" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3" />
+                        )}
+                        {communicationStatus?.resendConfigured ? 'Resend API Ready' : 'Env Key Needed'}
+                      </span>
+                      <span className="truncate">
+                        {effectiveFromName} ({effectiveFromEmail})
+                      </span>
+                    </>
+                  ) : (
+                    <span>
+                      {enablePushNotifications
+                        ? 'Web & Mobile Push Engine Active'
+                        : 'Push Notifications paused in Settings'}
+                    </span>
+                  )}
                 </span>
                 {onOpenGatewaySettings && (
                   <button
@@ -672,7 +807,7 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
                       onClose();
                       onOpenGatewaySettings();
                     }}
-                    className="text-[#6D5CF2] dark:text-[#8C7DFF] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    className="text-[#6D5CF2] dark:text-[#8C7DFF] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer shrink-0"
                   >
                     <Settings className="w-3 h-3" />
                     <span>Gateways</span>
@@ -691,6 +826,9 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
                 className="w-full p-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-slate-50 dark:bg-black/20 text-[#1D1B3A] dark:text-[#F2F2FA]"
               >
                 <option value="all">All registered members ({members.length})</option>
+                <option value="officers">
+                  Church Officers &amp; Leaders ({officersCount})
+                </option>
                 <option value="absent">
                   Absent {safeThreshold}+ services ({absentMembersCount})
                 </option>
@@ -743,16 +881,18 @@ export const BroadcastModal = React.memo<BroadcastModalProps>(
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] cursor-pointer"
+              disabled={isSending}
+              className="flex-1 py-2.5 rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] cursor-pointer disabled:opacity-60"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              disabled={isSending}
+              className="flex-1 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
             >
               <Send className="w-3.5 h-3.5" />
-              Send Broadcast
+              <span>{isSending ? 'Sending...' : 'Send Broadcast'}</span>
             </button>
           </div>
         </form>
@@ -769,8 +909,14 @@ export interface FollowupQueueModalProps {
   absenteeThresholdServices?: number;
   firstTimerFollowupHours?: number;
   autoAssignCellLeaders?: boolean;
+  isAutoAssigning?: boolean;
+  onAutoAssignAbsentees?: () => Promise<unknown> | void;
   onOpenPastoralSettings?: () => void;
-  onResolveTask: (id: string, outcome: string) => void;
+  onResolveTask: (
+    id: string,
+    outcome: string,
+    nextStatus?: 'open' | 'contacted' | 'resolved' | 'dismissed'
+  ) => void | Promise<void>;
   onNotify: (msg: string) => void;
 }
 
@@ -783,9 +929,10 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
     absenteeThresholdServices = 2,
     firstTimerFollowupHours = 24,
     autoAssignCellLeaders = true,
+    isAutoAssigning = false,
+    onAutoAssignAbsentees,
     onOpenPastoralSettings,
     onResolveTask,
-    onNotify,
   }) => {
     if (!isOpen) return null;
 
@@ -793,21 +940,36 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
     const threshold = Math.max(1, absenteeThresholdServices || 2);
 
     return (
-      <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-        <div className="bg-white dark:bg-[#1D1D3D] rounded-3xl max-w-2xl w-full p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[85dvh] flex flex-col">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
+      <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+        <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl max-w-2xl w-full p-5 sm:p-6 shadow-xl border border-[#E9EBF5] dark:border-[#2D2D55] max-h-[88dvh] flex flex-col">
+          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+            <div className="min-w-0">
               <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                 Pastoral Care Follow-up Queue
               </h3>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                 Active Rules: {threshold}+ absences alert · Visitors within {firstTimerFollowupHours}h ·{' '}
                 {autoAssignCellLeaders
-                  ? 'Auto-routing to Group/Cell Leaders enabled'
+                  ? 'Auto-routing to Officers & Cell Leaders enabled'
                   : 'Assigned directly to Senior Pastor'}
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {onAutoAssignAbsentees && (
+                <button
+                  type="button"
+                  disabled={isAutoAssigning}
+                  onClick={() => onAutoAssignAbsentees()}
+                  className="px-2.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] border border-[#6D5CF2]/20 text-[11px] font-bold text-[#6D5CF2] dark:text-[#9D90FF] inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  {isAutoAssigning ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <UserCheck className="w-3 h-3" />
+                  )}
+                  <span>{isAutoAssigning ? 'Assigning...' : 'Auto-Assign Absentees'}</span>
+                </button>
+              )}
               {onOpenPastoralSettings && (
                 <button
                   type="button"
@@ -840,6 +1002,10 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
             ) : (
               followupTasks.map((t) => {
                 const person = memberById.get(t.personId);
+                const personPhone = t.personPhone || person?.phoneE164 || person?.phoneNumber;
+                const personEmail = t.personEmail || person?.email;
+                const isActiveTask = t.status === 'open' || t.status === 'contacted';
+
                 return (
                   <div
                     key={t.id}
@@ -864,15 +1030,33 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
                               ? 'Absent 3 Weeks'
                               : t.reason === 'absent_2'
                               ? 'Absent 2 Weeks'
-                              : 'First Timer'}
+                              : t.reason === 'first_timer'
+                              ? 'First Timer'
+                              : 'Pastoral Care'}
                           </span>
+                          {t.status === 'contacted' && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
+                              Contacted
+                            </span>
+                          )}
+                          {t.autoAssigned && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-[10px] font-bold">
+                              Auto-Routed
+                            </span>
+                          )}
                         </div>
                         <div className="text-[#666A86] dark:text-[#A9ACC8]">
                           {t.groupName} · Assigned to:{' '}
                           <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
                             {t.assignedToName}
                           </strong>
+                          {t.assignedToRole ? ` (${t.assignedToRole})` : ''}
                         </div>
+                        {personPhone && (
+                          <div className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                            {personPhone}
+                          </div>
+                        )}
                         {t.outcome && (
                           <div className="mt-1 text-emerald-600 dark:text-emerald-400">
                             Outcome: {t.outcome}
@@ -881,26 +1065,29 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {t.status === 'open' ? (
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {isActiveTask ? (
                         <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onNotify(`Dialing ${t.personName}...`);
-                              onResolveTask(t.id, 'Contacted via phone.');
+                          <ContactCallButton
+                            contactName={t.personName}
+                            contactPhone={personPhone}
+                            contactEmail={personEmail}
+                            contactGroup={t.groupName}
+                            label="Call"
+                            onLogOutcome={async (outcome, markResolved) => {
+                              await onResolveTask(
+                                t.id,
+                                outcome,
+                                markResolved ? 'resolved' : 'contacted'
+                              );
                             }}
-                            className="bg-[#6D5CF2] text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                          >
-                            <PhoneCall className="w-3.5 h-3.5" />
-                            Log Call
-                          </button>
+                          />
                           <button
                             type="button"
-                            onClick={() => onResolveTask(t.id, 'Excused absence')}
-                            className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap cursor-pointer"
+                            onClick={() => onResolveTask(t.id, 'Excused absence', 'resolved')}
+                            className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] px-3 py-1.5 min-h-[34px] rounded-xl font-semibold whitespace-nowrap cursor-pointer"
                           >
-                            Mark Excused
+                            {t.status === 'contacted' ? 'Mark Resolved' : 'Mark Excused'}
                           </button>
                         </>
                       ) : (

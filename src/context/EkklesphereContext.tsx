@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
@@ -81,8 +81,11 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   autoAssignCellLeaders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
-  smsGatewayProvider: 'Hubtel Ghana',
+  smsGatewayProvider: 'Arkesel SMS',
   smsSenderId: 'EKKLESPHERE',
+  emailGatewayProvider: 'Resend Email',
+  emailFromAddress: '',
+  emailSenderName: '',
   enablePushNotifications: true,
 };
 
@@ -119,11 +122,21 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     homeCellGroup: String(raw.homeCellGroup ?? raw.home_cell_group ?? groupName),
     avatarInitials,
     imageUrl,
+    officerName: raw.officerName ?? raw.designation ? String(raw.officerName ?? raw.designation) : undefined,
+    designation: raw.designation ?? raw.officerName ? String(raw.designation ?? raw.officerName) : undefined,
     status: (raw.status as Person['status']) || 'member',
     consecutiveAbsences: typeof raw.consecutiveAbsences === 'number' ? raw.consecutiveAbsences : 0,
     autoCheckinOptedIn: Boolean(raw.autoCheckinOptedIn ?? raw.auto_checkin_opted_in ?? false),
     joinedOn: String(raw.joinedOn ?? raw.joined_on ?? new Date().toISOString().split('T')[0]),
   };
+}
+
+export interface CommunicationGatewayStatusState {
+  arkeselConfigured: boolean;
+  resendConfigured: boolean;
+  defaultSmsSenderId: string;
+  defaultFromEmail: string;
+  defaultFromName: string;
 }
 
 interface EkklesphereContextType {
@@ -250,6 +263,7 @@ interface EkklesphereContextType {
   // People & Members
   members: Person[];
   visitorsCount: number;
+  serviceVisitorsCount: number;
   refreshMembers: () => Promise<void>;
   addVisitor: (name: string, phone: string, howHeard: string, preferredGroupName?: string) => Promise<void>;
   addMember: (memberData: Omit<Person, 'id' | 'tenantId' | 'avatarInitials' | 'joinedOn'>) => Promise<Person>;
@@ -286,7 +300,24 @@ interface EkklesphereContextType {
   refreshSystemSettings: () => Promise<void>;
   updateSystemSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
   resetSystemSettings: () => Promise<boolean>;
-  sendTestSmsGateway: (provider: string, senderId: string) => Promise<{ success: boolean; message: string }>;
+  communicationStatus: CommunicationGatewayStatusState;
+  refreshCommunicationStatus: () => Promise<void>;
+  sendTestSmsGateway: (
+    provider: string,
+    senderId: string,
+    recipientPhone?: string
+  ) => Promise<{ success: boolean; message: string }>;
+  sendTestEmailGateway: (params: {
+    recipientEmail: string;
+    fromEmail?: string;
+    fromName?: string;
+  }) => Promise<{ success: boolean; message: string }>;
+  sendCommunicationBroadcast: (params: {
+    channel: 'push' | 'sms' | 'email';
+    audience: string;
+    subject: string;
+    body: string;
+  }) => Promise<{ success: boolean; sentCount?: number; message: string }>;
   setChurchPremiseLocation: (params: {
     lat: number;
     lng: number;
@@ -365,8 +396,17 @@ interface EkklesphereContextType {
 
   // Follow-up & Pastoral Care
   followupTasks: FollowupTask[];
-  resolveFollowupTask: (taskId: string, outcome: string) => Promise<void>;
+  isAutoAssigningAbsentees: boolean;
+  resolveFollowupTask: (
+    taskId: string,
+    outcome: string,
+    nextStatus?: 'open' | 'contacted' | 'resolved' | 'dismissed'
+  ) => Promise<void>;
   addFollowupTask: (personId: string, reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual', notes: string) => Promise<void>;
+  autoAssignAbsentees: (options?: {
+    unarrivedMemberIds?: string[];
+    silent?: boolean;
+  }) => Promise<{ assignedCount: number; message?: string }>;
 
   // Member App States
   memberConsents: {
@@ -620,7 +660,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (path === '/home' || viewParam === 'home' || params.has('church')) {
       return 'home';
     }
-    if (path === '/app' || path === '/login' || path === '/portal' || viewParam === 'app') {
+    if (
+      path === '/app' ||
+      path === '/login' ||
+      path === '/signin' ||
+      path === '/signup' ||
+      path === '/register' ||
+      path === '/portal' ||
+      viewParam === 'app' ||
+      params.has('auth')
+    ) {
       return 'app';
     }
     if (path === '/creator' || path === '/console' || viewParam === 'creator') {
@@ -1113,6 +1162,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // ignore
     }
     setViewModeState('app');
+    try {
+      if (typeof window !== 'undefined') {
+        const currentPath = window.location.pathname.toLowerCase();
+        if (currentPath === '/creator' || currentPath === '/console' || currentPath === '/') {
+          window.history.replaceState({}, '', '/app?auth=login');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }
+      }
+    } catch {
+      // ignore
+    }
     showToast('Signed out of Ekklesphere');
   };
 
@@ -1629,8 +1689,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [leadershipHistory, setLeadershipHistory] = useState<ChurchGroupLeadershipHistoryEntry[]>([]);
   const [isLoadingLeadershipHistory, setIsLoadingLeadershipHistory] = useState(false);
-  const [visitorsCount, setVisitorsCount] = useState<number>(0);
   const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>([]);
+  const [isAutoAssigningAbsentees, setIsAutoAssigningAbsentees] = useState(false);
+  const [communicationStatus, setCommunicationStatus] = useState<CommunicationGatewayStatusState>({
+    arkeselConfigured: false,
+    resendConfigured: false,
+    defaultSmsSenderId: 'EKKLESPHERE',
+    defaultFromEmail: 'onboarding@resend.dev',
+    defaultFromName: 'Ekklesphere Church',
+  });
+  const autoAssignSyncedRef = useRef<string>('');
   const [isUsherOnline, setIsUsherOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
@@ -1870,6 +1938,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       : 0;
 
   const totalMembersCount = members.length;
+  const visitorsCount = React.useMemo(
+    () => members.filter((m) => m.status === 'visitor').length,
+    [members]
+  );
+  const serviceVisitorsCount = React.useMemo(() => {
+    const checkedInIds = new Set(activeServiceAttendanceRecords.map((r) => r.personId));
+    return members.filter((m) => m.status === 'visitor' && checkedInIds.has(m.id)).length;
+  }, [members, activeServiceAttendanceRecords]);
   const autoCheckinOptedInCount = React.useMemo(
     () => members.filter((m) => m.autoCheckinOptedIn).length,
     [members]
@@ -2216,7 +2292,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setDoc(doc(db, 'members', savedPerson.id), savedPerson, { merge: true }).catch(() => {});
     } catch {}
 
-    setVisitorsCount((c) => c + 1);
     setMembers((prev) => {
       const updated = [savedPerson!, ...prev.filter((m) => m.id !== savedPerson!.id)];
       try {
@@ -2241,15 +2316,18 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       showToast(`Visitor registered. Check-in skipped: ${visitorEligibility.message}`);
     }
 
+    const resolvedVisitorRouting = resolveFollowupAssignee(
+      savedPerson,
+      churchGroups,
+      systemSettings,
+      'first_timer',
+      'Welcome & Pastoral Care Team',
+      members,
+      followupTasks
+    );
     const visitorAssignee = matchedPreferredGroup?.leaderName?.trim()
       ? matchedPreferredGroup.leaderName.trim()
-      : resolveFollowupAssignee(
-          savedPerson,
-          churchGroups,
-          systemSettings,
-          'first_timer',
-          'Welcome & Pastoral Care Team'
-        ).assignedToName;
+      : resolvedVisitorRouting.assignedToName;
     const visitorDueOn = formatFollowupDueDateLabel(
       'first_timer',
       systemSettings.firstTimerFollowupHours,
@@ -3682,6 +3760,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
     refreshSystemSettings();
+    refreshCommunicationStatus();
     refreshChurchGroups();
     refreshLeadershipHistory();
     refreshAuditLogs();
@@ -3915,15 +3994,39 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const refreshCommunicationStatus = async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/communications/status', { headers: getAuthHeaders() });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
+        setCommunicationStatus({
+          arkeselConfigured: Boolean(data.arkeselConfigured),
+          resendConfigured: Boolean(data.resendConfigured),
+          defaultSmsSenderId: String(data.defaultSmsSenderId || 'EKKLESPHERE'),
+          defaultFromEmail: String(data.defaultFromEmail || 'onboarding@resend.dev'),
+          defaultFromName: String(data.defaultFromName || 'Ekklesphere Church'),
+        });
+      }
+    } catch {
+      // keep fallback status
+    }
+  };
+
   const sendTestSmsGateway = async (
     provider: string,
-    senderId: string
+    senderId: string,
+    recipientPhone?: string
   ): Promise<{ success: boolean; message: string }> => {
     try {
       const res = await fetch('/api/system-settings/test-sms', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ provider, senderId }),
+        body: JSON.stringify({
+          provider,
+          senderId,
+          ...(recipientPhone?.trim() ? { recipientPhone: recipientPhone.trim() } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.success) {
@@ -3939,6 +4042,68 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return { success: true, message: msg };
     } catch {
       const msg = 'Network error dispatching test SMS.';
+      showToast(msg);
+      return { success: false, message: msg };
+    }
+  };
+
+  const sendTestEmailGateway = async (params: {
+    recipientEmail: string;
+    fromEmail?: string;
+    fromName?: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/system-settings/test-email', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          provider: systemSettings.emailGatewayProvider || 'Resend Email',
+          recipientEmail: params.recipientEmail.trim(),
+          ...(params.fromEmail?.trim() ? { fromEmail: params.fromEmail.trim() } : {}),
+          ...(params.fromName?.trim() ? { fromName: params.fromName.trim() } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not send test email via Resend.';
+        showToast(msg);
+        return { success: false, message: msg };
+      }
+      const msg = data.message || `Test email sent via Resend to ${params.recipientEmail}`;
+      showToast(msg);
+      refreshAuditLogs().catch(() => {});
+      return { success: true, message: msg };
+    } catch {
+      const msg = 'Network error dispatching test email.';
+      showToast(msg);
+      return { success: false, message: msg };
+    }
+  };
+
+  const sendCommunicationBroadcast = async (params: {
+    channel: 'push' | 'sms' | 'email';
+    audience: string;
+    subject: string;
+    body: string;
+  }): Promise<{ success: boolean; sentCount?: number; message: string }> => {
+    try {
+      const res = await fetch('/api/communications/broadcast', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(params),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not deliver broadcast message.';
+        showToast(msg);
+        return { success: false, message: msg };
+      }
+      const msg = data.message || 'Broadcast sent successfully.';
+      showToast(msg);
+      refreshAuditLogs().catch(() => {});
+      return { success: true, sentCount: data.sentCount, message: msg };
+    } catch {
+      const msg = 'Network error sending broadcast.';
       showToast(msg);
       return { success: false, message: msg };
     }
@@ -4414,22 +4579,30 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  const resolveFollowupTask = async (taskId: string, outcome: string): Promise<void> => {
+  const resolveFollowupTask = async (
+    taskId: string,
+    outcome: string,
+    nextStatus: 'open' | 'contacted' | 'resolved' | 'dismissed' = 'resolved'
+  ): Promise<void> => {
     try {
       const res = await fetch(`/api/followup-tasks/${encodeURIComponent(taskId)}`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ status: 'resolved', outcome }),
+        body: JSON.stringify({ status: nextStatus, outcome }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.task) {
-        showToast(data?.message || 'Could not resolve follow-up task in database.');
+        showToast(data?.message || 'Could not update follow-up task in database.');
         return;
       }
       setFollowupTasks((prev) => prev.map((t) => (t.id === taskId ? data.task : t)));
-      showToast(`Care task marked resolved: ${outcome}`);
+      showToast(
+        nextStatus === 'resolved'
+          ? `Care task marked resolved: ${outcome}`
+          : `Care call logged (${nextStatus}): ${outcome}`
+      );
     } catch {
-      showToast('Network error resolving follow-up task.');
+      showToast('Network error updating follow-up task.');
     }
   };
 
@@ -4439,12 +4612,20 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     notes: string
   ): Promise<void> => {
     const person = members.find((m) => m.id === personId);
-    const { assignedToName, groupName } = resolveFollowupAssignee(
+    const {
+      assignedToName,
+      groupName,
+      assignedToMemberId,
+      assignedToRole,
+      assignedToPhone,
+    } = resolveFollowupAssignee(
       person,
       churchGroups,
       systemSettings,
       reason,
-      currentUser?.name
+      currentUser?.name,
+      members,
+      followupTasks
     );
     const dueOn = formatFollowupDueDateLabel(
       reason,
@@ -4458,9 +4639,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         body: JSON.stringify({
           personId,
           personName: person ? `${person.firstName} ${person.lastName}`.trim() : 'Member',
+          personPhone: person?.phoneE164 || person?.phoneNumber || undefined,
+          personEmail: person?.email || undefined,
           groupName,
           reason,
           assignedToName,
+          assignedToMemberId,
+          assignedToRole,
+          assignedToPhone,
           dueOn,
           notes,
         }),
@@ -4471,11 +4657,105 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return;
       }
       setFollowupTasks((prev) => [data.task, ...prev.filter((t) => t.id !== data.task.id)]);
-      showToast(`Follow-up assigned to ${assignedToName} (${dueOn}) for ${data.task.personName}`);
+      showToast(
+        `Follow-up assigned to ${assignedToName}${
+          assignedToRole ? ` (${assignedToRole})` : ''
+        } (${dueOn}) for ${data.task.personName}`
+      );
     } catch {
       showToast('Network error creating follow-up task.');
     }
   };
+
+  const autoAssignAbsentees = async (options?: {
+    unarrivedMemberIds?: string[];
+    silent?: boolean;
+  }): Promise<{ assignedCount: number; message?: string }> => {
+    setIsAutoAssigningAbsentees(true);
+    try {
+      const res = await fetch('/api/followup-tasks/auto-assign-absentees', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          ...(options?.unarrivedMemberIds?.length
+            ? { unarrivedMemberIds: options.unarrivedMemberIds }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not auto-assign absentee members.';
+        if (!options?.silent) showToast(msg);
+        return { assignedCount: 0, message: msg };
+      }
+      if (Array.isArray(data.allTasks)) {
+        setFollowupTasks(data.allTasks);
+      }
+      const count = Number(data.assignedCount || 0);
+      if (!options?.silent) {
+        showToast(
+          count > 0
+            ? `Auto-assigned ${count} absentee member${
+                count === 1 ? '' : 's'
+              } to church officers and group leaders.`
+            : 'All threshold absentees already have active pastoral care assignments.'
+        );
+      } else if (count > 0) {
+        showToast(
+          `Pastoral Care: Auto-assigned ${count} absentee member${
+            count === 1 ? '' : 's'
+          } to officers & leaders.`
+        );
+      }
+      return { assignedCount: count };
+    } catch {
+      if (!options?.silent) showToast('Network error auto-assigning absentee follow-ups.');
+      return { assignedCount: 0 };
+    } finally {
+      setIsAutoAssigningAbsentees(false);
+    }
+  };
+
+  // Automatically trigger idempotent absentee->officer/leader assignment once per session/org when threshold absentees exist
+  useEffect(() => {
+    if (!isSessionVerified || !currentUser?.token) return;
+    if (!['admin', 'pastor', 'group_leader', 'super_admin', 'creator'].includes(currentUser.role)) {
+      return;
+    }
+    if (members.length === 0) return;
+    const threshold = Math.max(1, Number(systemSettings.absenteeThresholdServices) || 2);
+    const activeOpenIds = new Set(
+      followupTasks
+        .filter((t) => t.status === 'open' || t.status === 'contacted')
+        .map((t) => String(t.personId))
+    );
+    const pendingAbsenteeIds = members
+      .filter(
+        (m) =>
+          m.status !== 'inactive' &&
+          m.status !== 'transferred' &&
+          m.status !== 'deceased' &&
+          (m.consecutiveAbsences || 0) >= threshold &&
+          !activeOpenIds.has(String(m.id))
+      )
+      .map((m) => m.id)
+      .sort();
+
+    if (pendingAbsenteeIds.length === 0) return;
+    const signature = `${currentUser.organization_id || 'org'}:${threshold}:${pendingAbsenteeIds.join(',')}`;
+    if (autoAssignSyncedRef.current === signature) return;
+    autoAssignSyncedRef.current = signature;
+
+    autoAssignAbsentees({ silent: true }).catch(() => {});
+  }, [
+    isSessionVerified,
+    currentUser?.token,
+    currentUser?.role,
+    currentUser?.organization_id,
+    members,
+    followupTasks,
+    systemSettings.absenteeThresholdServices,
+  ]);
 
   // Proximity simulator engine
   const advanceProximityStage = () => {
@@ -4588,6 +4868,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deleteService,
       members,
       visitorsCount,
+      serviceVisitorsCount,
       refreshMembers,
       addVisitor,
       addMember,
@@ -4603,7 +4884,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       refreshSystemSettings,
       updateSystemSettings,
       resetSystemSettings,
+      communicationStatus,
+      refreshCommunicationStatus,
       sendTestSmsGateway,
+      sendTestEmailGateway,
+      sendCommunicationBroadcast,
       setChurchPremiseLocation,
       clearChurchPremiseLocation,
       refreshLivePremise,
@@ -4641,8 +4926,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       triggerBeaconScan,
       triggerDwellComplete,
       followupTasks,
+      isAutoAssigningAbsentees,
       resolveFollowupTask,
       addFollowupTask,
+      autoAssignAbsentees,
       memberConsents,
       memberRsvps,
       toggleRsvp,
@@ -4703,9 +4990,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       checkInEligibility,
       members,
       visitorsCount,
+      serviceVisitorsCount,
       systemSettings,
       systemSettingsStorageBackend,
       isSyncingSystemSettings,
+      communicationStatus,
       churchGroups,
       attendanceRecords,
       totalCheckedInCount,
@@ -4721,6 +5010,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       dwellTimerSeconds,
       isBeaconDetected,
       followupTasks,
+      isAutoAssigningAbsentees,
       memberConsents,
       memberRsvps,
       donations,

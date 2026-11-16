@@ -25,13 +25,17 @@
           <a href="#pricing">Pricing</a>
         </nav>
         <div class="header-actions">
-          <a class="text-link header-login" href="/app">Launch app</a>
-          <a class="button button-small button-dark" href="#demo">Book a demo <span>↗</span></a>
+          <a class="text-link header-login" href="/app?auth=login" target="_parent" data-auth-link>Sign in</a>
+          <a class="button button-small button-dark header-signup" href="/app?auth=signup" target="_parent" data-auth-link>Sign up <span>↗</span></a>
           <button class="menu-toggle" aria-label="Open menu" aria-expanded="false"><span></span><span></span></button>
         </div>
         <div class="mobile-menu" aria-hidden="true">
           <a href="#platform">Platform</a><a href="#workflow">How it works</a><a href="#stories">Stories</a><a href="#pricing">Pricing</a>
-          <a class="button button-dark" href="#demo">Book a demo <span>↗</span></a>
+          <div class="mobile-menu-actions">
+            <a class="mobile-auth-link" href="/app?auth=login" target="_parent" data-auth-link>Sign in</a>
+            <a class="button button-dark" href="/app?auth=signup" target="_parent" data-auth-link>Sign up <span>↗</span></a>
+            <a class="button button-ghost" href="#demo">Book a demo <span>↗</span></a>
+          </div>
         </div>
       </header>
 
@@ -95,7 +99,7 @@
 
         <section class="story-section section-pad" id="stories"><div class="story-quote reveal"><span class="quote-mark">“</span><blockquote>Ekklesphere helped us stop asking <em>‘who has that information?’</em> and start asking <em>‘who needs care today?’</em></blockquote><div class="quote-person"><span class="quote-avatar">JM</span><div><strong>Jamie Mitchell</strong><small>Executive Pastor, Harbor Church</small></div></div></div><div class="story-aside reveal reveal-delay"><div class="aside-card"><span class="aside-kicker">A note from Jamie</span><p>“We didn't need another tool. We needed one shared language for how we lead people well.”</p><span class="aside-line"></span><small>Read the Harbor Church story <span>↗</span></small></div><div class="aside-illustration"><div class="sun"></div><div class="hill hill-back"></div><div class="hill hill-front"></div><div class="tiny-cross">✦</div></div></div></section>
 
-        <section class="demo-section section-pad" id="demo"><div class="demo-card reveal"><div class="demo-content"><div class="eyebrow eyebrow-light"><span class="eyebrow-dot"></span> Start with a conversation</div><h2>Give your team<br /><em>room to lead.</em></h2><p>See how Ekklesphere can fit the way your church already works—and the way you want to grow.</p><div class="demo-actions"><a class="button button-light" href="mailto:hello@ekklesphere.com">Book a personal demo <span>↗</span></a><a class="demo-text-link" href="mailto:hello@ekklesphere.com">hello@ekklesphere.com</a></div></div><div class="demo-orbit"><div class="demo-orbit-ring ring-one"></div><div class="demo-orbit-ring ring-two"></div><div class="demo-orbit-ring ring-three"></div><div class="demo-star">✦</div><span class="orbit-label label-one">People</span><span class="orbit-label label-two">Plans</span><span class="orbit-label label-three">Care</span></div></div></section>
+        <section class="demo-section section-pad" id="demo"><div class="demo-card reveal"><div class="demo-content"><div class="eyebrow eyebrow-light"><span class="eyebrow-dot"></span> Start with a conversation</div><h2>Give your team<br /><em>room to lead.</em></h2><p>See how Ekklesphere can fit the way your church already works—and the way you want to grow.</p><div class="demo-actions"><a class="button button-light" href="/app?auth=org_signup" target="_parent" data-auth-link>Start 14-day free trial <span>↗</span></a><a class="demo-text-link" href="/app?auth=login" target="_parent" data-auth-link>Sign in</a><a class="demo-text-link" href="#demo" data-open-demo>Book a personal demo</a></div></div><div class="demo-orbit"><div class="demo-orbit-ring ring-one"></div><div class="demo-orbit-ring ring-two"></div><div class="demo-orbit-ring ring-three"></div><div class="demo-star">✦</div><span class="orbit-label label-one">People</span><span class="orbit-label label-two">Plans</span><span class="orbit-label label-three">Care</span></div></div></section>
       </main>
 
       <div class="demo-modal" id="demo-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="demo-modal-title">
@@ -112,12 +116,13 @@
             <button class="button button-primary" type="submit">Request my demo <span>↗</span></button>
           </form>
           <div class="form-success" id="form-success" hidden><span>✓</span><strong>You’re on the list.</strong><p>We’ll follow up with a personal walkthrough soon.</p></div>
+          <p class="modal-alt-auth">Want immediate access? <a href="/app?auth=login" target="_parent" data-auth-link>Sign in</a> or <a href="/app?auth=signup" target="_parent" data-auth-link>Sign up</a></p>
         </div>
       </div>
       <div class="quick-panel" id="quick-panel" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="quick-panel-title">
         <div class="quick-panel-card"><button class="modal-close" type="button" data-close-quick aria-label="Close quick add">×</button><span class="quick-icon">＋</span><span class="eyebrow">Quick add</span><h2 id="quick-panel-title">What needs your attention?</h2><div class="quick-actions"><button type="button" data-quick-action="follow-up"><span>◌</span><strong>New follow-up</strong><small>Keep a care note moving</small></button><button type="button" data-quick-action="team"><span>⌁</span><strong>Add a team task</strong><small>Give someone the next right thing</small></button><button type="button" data-quick-action="event"><span>□</span><strong>Plan an event</strong><small>Make the next gathering clear</small></button></div><p class="quick-feedback" id="quick-feedback" aria-live="polite"></p></div>
       </div>
-      <footer class="site-footer section-pad" id="pricing"><div class="footer-top"><a class="brand brand-footer" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="brand-word">ekklesphere</span></a><p>Church management,<br /><em>made human.</em></p><div class="footer-links"><div><strong>Explore</strong><a href="#platform">Platform</a><a href="#workflow">How it works</a><a href="#stories">Stories</a></div><div><strong>Connect</strong><a href="mailto:hello@ekklesphere.com">Contact</a><a href="#demo">Book a demo</a><a href="#top">Sign in</a></div></div></div><div class="footer-bottom"><span>© 2024 Ekklesphere, Inc.</span><span>Made for the people doing the work.</span><span><a href="#top">Privacy</a> · <a href="#top">Terms</a></span></div></footer>
+      <footer class="site-footer section-pad" id="pricing"><div class="footer-top"><a class="brand brand-footer" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="brand-word">ekklesphere</span></a><p>Church management,<br /><em>made human.</em></p><div class="footer-links"><div><strong>Explore</strong><a href="#platform">Platform</a><a href="#workflow">How it works</a><a href="#stories">Stories</a></div><div><strong>Connect</strong><a href="/app?auth=login" target="_parent" data-auth-link>Sign in</a><a href="/app?auth=signup" target="_parent" data-auth-link>Sign up</a><a href="/app?auth=org_signup" target="_parent" data-auth-link>Start church trial</a><a href="mailto:hello@ekklesphere.com">Contact</a></div></div></div><div class="footer-bottom"><span>© 2024 Ekklesphere, Inc.</span><span>Made for the people doing the work.</span><span><a href="#top">Privacy</a> · <a href="#top">Terms</a></span></div></footer>
     </div>
     <script type="module" src="/app.js"></script>
   </body>

@@ -34,6 +34,12 @@ import { consoleRouter } from './src/server/consoleRouter.ts';
 import { churchWallStore } from './src/server/churchWallStore.ts';
 import type { ImportDuplicateMode } from './src/shared/memberImportValidation.ts';
 import { MediaProxyError, proxyExternalImage } from './src/server/mediaProxy.ts';
+import {
+  getCommunicationGatewayStatus,
+  sendArkeselSms,
+  sendResendEmail,
+} from './src/server/communicationsService.ts';
+import { getMemberPortfolio, isPastoralOfficerOrLeader } from './src/constants/portfolios.ts';
 
 // Fail closed at startup in production if JWT_SECRET, SUPABASE_URL, or SUPABASE_SERVICE_ROLE_KEY are missing.
 assertProductionAuthConfig();
@@ -1090,6 +1096,9 @@ const SystemSettingsPatchSchema = z.object({
   auditLogRetentionDays: z.number().min(7).max(3650).optional(),
   smsGatewayProvider: z.string().trim().min(1).max(120).optional(),
   smsSenderId: z.string().trim().min(1).max(11).optional(),
+  emailGatewayProvider: z.string().trim().min(1).max(120).optional(),
+  emailFromAddress: z.string().trim().max(200).optional(),
+  emailSenderName: z.string().trim().max(160).optional(),
   enablePushNotifications: z.boolean().optional(),
 });
 
@@ -1100,6 +1109,24 @@ const TestSmsGatewaySchema = z.object({
     .trim()
     .min(1, 'SMS Sender ID is required.')
     .max(11, 'SMS Sender ID must be 11 characters or fewer.'),
+  recipientPhone: z.string().trim().max(40).optional(),
+  message: z.string().trim().max(480).optional(),
+});
+
+const TestEmailGatewaySchema = z.object({
+  provider: z.string().trim().min(1).max(120).default('Resend Email'),
+  fromEmail: z.string().trim().email('Valid From email address is required.').optional(),
+  fromName: z.string().trim().max(160).optional(),
+  recipientEmail: z.string().trim().email('Valid test recipient email address is required.'),
+  subject: z.string().trim().max(200).optional(),
+  message: z.string().trim().max(2000).optional(),
+});
+
+const BroadcastDispatchSchema = z.object({
+  channel: z.enum(['push', 'sms', 'email']),
+  audience: z.string().trim().min(1).max(160),
+  subject: z.string().trim().min(1, 'Subject is required.').max(200),
+  body: z.string().trim().min(1, 'Message body is required.').max(4000),
 });
 
 const ChurchGroupCreateSchema = z.object({
@@ -1268,18 +1295,46 @@ app.post(
 
     const senderId = parsed.data.senderId.toUpperCase();
     const dispatchedAt = new Date().toISOString();
+    const gatewayStatus = getCommunicationGatewayStatus();
+    const recipientPhone = parsed.data.recipientPhone?.trim();
+    const isArkesel = parsed.data.provider.toLowerCase().includes('arkesel');
+
+    let liveResult: Awaited<ReturnType<typeof sendArkeselSms>> | null = null;
+    if (recipientPhone && isArkesel) {
+      const settingsRes = await platformStore.getSystemSettings(req.organizationId!).catch(() => null);
+      const churchLabel = settingsRes?.settings?.churchName || 'Ekklesphere Church';
+      liveResult = await sendArkeselSms({
+        senderId,
+        recipients: [recipientPhone],
+        message:
+          parsed.data.message ||
+          `Test SMS from ${churchLabel} via Arkesel (${senderId}) confirmed at ${dispatchedAt.slice(11, 16)} UTC.`,
+      });
+      if (!liveResult.ok) {
+        return res.status(liveResult.configured ? 502 : 400).json({
+          success: false,
+          configured: liveResult.configured,
+          error: liveResult.error || 'sms_dispatch_failed',
+          provider: parsed.data.provider,
+          senderId,
+          message: liveResult.message,
+        });
+      }
+    }
 
     await platformStore.appendAuditLog({
       organizationId: req.organizationId!,
       actorId: req.user?.id || null,
       actorEmail: req.user?.email || 'admin@ekklesphere.church',
       actorRole: req.user?.role || 'admin',
-      action: 'sms.test_dispatched',
+      action: liveResult?.ok ? 'sms.test_sent_live' : 'sms.test_dispatched',
       targetType: 'sms_gateway',
       targetId: req.organizationId!,
       metadata: {
         provider: parsed.data.provider,
         senderId,
+        arkeselConfigured: gatewayStatus.arkeselConfigured,
+        recipientCount: liveResult ? liveResult.sentCount : 0,
         dispatchedAt,
       },
       ipAddress: getClientIpKey(req),
@@ -1287,11 +1342,288 @@ app.post(
 
     return res.status(200).json({
       success: true,
+      mode: liveResult?.ok ? 'live' : 'validated',
+      configured: gatewayStatus.arkeselConfigured,
       provider: parsed.data.provider,
       senderId,
       dispatchedAt,
-      message: `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).`,
+      message: liveResult?.ok
+        ? liveResult.message
+        : `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).${
+            isArkesel && !gatewayStatus.arkeselConfigured
+              ? ' Set ARKESEL_API_KEY on the server to transmit live SMS.'
+              : ''
+          }`,
     });
+  }
+);
+
+app.post(
+  '/api/system-settings/test-email',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = TestEmailGatewaySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid test email recipient is required.',
+      });
+    }
+
+    const settingsRes = await platformStore.getSystemSettings(req.organizationId!).catch(() => null);
+    const churchName = settingsRes?.settings?.churchName || 'Ekklesphere Church';
+    const fromEmail = parsed.data.fromEmail || settingsRes?.settings?.emailFromAddress || undefined;
+    const fromName = parsed.data.fromName || settingsRes?.settings?.emailSenderName || churchName;
+    const subject = parsed.data.subject || `${churchName} — Resend Email Gateway Verification`;
+    const text =
+      parsed.data.message ||
+      `Hello,\n\nThis is a live test message from ${churchName} verifying that the Resend Email API gateway is active and ready for congregational communications.\n\nBlessings,\n${churchName}`;
+
+    const result = await sendResendEmail({
+      fromEmail,
+      fromName,
+      organizationName: churchName,
+      to: [parsed.data.recipientEmail],
+      subject,
+      text,
+    });
+
+    if (!result.ok) {
+      return res.status(result.configured ? 502 : 400).json({
+        success: false,
+        configured: result.configured,
+        error: result.error || 'email_dispatch_failed',
+        provider: result.provider,
+        message: result.message,
+      });
+    }
+
+    await platformStore.appendAuditLog({
+      organizationId: req.organizationId!,
+      actorId: req.user?.id || null,
+      actorEmail: req.user?.email || 'admin@ekklesphere.church',
+      actorRole: req.user?.role || 'admin',
+      action: 'email.test_sent_live',
+      targetType: 'email_gateway',
+      targetId: req.organizationId!,
+      metadata: {
+        provider: 'Resend Email',
+        from: result.from,
+        recipient: parsed.data.recipientEmail,
+        emailIds: result.emailIds,
+      },
+      ipAddress: getClientIpKey(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      configured: true,
+      provider: 'Resend Email',
+      from: result.from,
+      emailIds: result.emailIds,
+      message: result.message,
+    });
+  }
+);
+
+app.get(
+  '/api/communications/status',
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (_req: Request, res: Response) => {
+    return res.status(200).json({
+      success: true,
+      ...getCommunicationGatewayStatus(),
+    });
+  }
+);
+
+app.post(
+  '/api/communications/broadcast',
+  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = BroadcastDispatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Valid broadcast channel, audience, subject, and body are required.',
+      });
+    }
+
+    try {
+      const orgId = req.organizationId!;
+      const [orgMembers, settingsRes] = await Promise.all([
+        platformStore.getMembers(orgId),
+        platformStore.getSystemSettings(orgId),
+      ]);
+      const settings = settingsRes.settings;
+      const threshold = Math.max(1, Number(settings.absenteeThresholdServices) || 2);
+      const audience = parsed.data.audience.trim();
+      const audienceLower = audience.toLowerCase();
+
+      const targetMembers = orgMembers.filter((m) => {
+        if (audienceLower === 'all') return true;
+        if (audienceLower === 'absent') return Number(m.consecutiveAbsences || 0) >= threshold;
+        if (audienceLower === 'visitors') return m.status === 'visitor';
+        if (audienceLower === 'officers') return isPastoralOfficerOrLeader(m as any);
+        const candidates = [m.groupName, m.homeCellGroup, m.department]
+          .map((v) => String(v || '').trim().toLowerCase())
+          .filter(Boolean);
+        return candidates.some(
+          (c) =>
+            c === audienceLower ||
+            (audienceLower.length >= 4 && c.includes(audienceLower)) ||
+            (c.length >= 4 && audienceLower.includes(c))
+        );
+      });
+
+      const { channel, subject, body } = parsed.data;
+
+      if (channel === 'sms') {
+        const phones = targetMembers
+          .map((m) => String(m.phoneE164 || m.phoneNumber || '').trim())
+          .filter(Boolean);
+        const smsText = subject && !body.startsWith(subject) ? `${subject}: ${body}` : body;
+        const smsResult = await sendArkeselSms({
+          senderId: settings.smsSenderId || 'EKKLESPHERE',
+          recipients: phones,
+          message: smsText,
+        });
+
+        if (!smsResult.ok) {
+          return res.status(smsResult.configured ? 502 : 400).json({
+            success: false,
+            configured: smsResult.configured,
+            channel: 'sms',
+            provider: smsResult.provider,
+            matchedMembersCount: targetMembers.length,
+            message: smsResult.message,
+          });
+        }
+
+        await platformStore.appendAuditLog({
+          organizationId: orgId,
+          actorId: req.user?.id || null,
+          actorEmail: req.user?.email || 'admin@ekklesphere.church',
+          actorRole: req.user?.role || 'admin',
+          action: 'communication.broadcast_sms',
+          targetType: 'communications',
+          targetId: orgId,
+          metadata: {
+            provider: 'Arkesel SMS',
+            senderId: smsResult.senderId,
+            audience,
+            sentCount: smsResult.sentCount,
+            invalidCount: smsResult.invalidCount,
+          },
+          ipAddress: getClientIpKey(req),
+        });
+
+        return res.status(200).json({
+          success: true,
+          channel: 'sms',
+          provider: 'Arkesel SMS',
+          sentCount: smsResult.sentCount,
+          matchedMembersCount: targetMembers.length,
+          message: smsResult.message,
+        });
+      }
+
+      if (channel === 'email') {
+        const emails = targetMembers
+          .map((m) => String(m.email || '').trim().toLowerCase())
+          .filter(Boolean);
+        const emailResult = await sendResendEmail({
+          fromEmail: settings.emailFromAddress || undefined,
+          fromName: settings.emailSenderName || settings.churchName || undefined,
+          organizationName: settings.churchName || 'Ekklesphere Church',
+          to: emails,
+          subject,
+          text: body,
+        });
+
+        if (!emailResult.ok) {
+          return res.status(emailResult.configured ? 502 : 400).json({
+            success: false,
+            configured: emailResult.configured,
+            channel: 'email',
+            provider: emailResult.provider,
+            matchedMembersCount: targetMembers.length,
+            message: emailResult.message,
+          });
+        }
+
+        await platformStore.appendAuditLog({
+          organizationId: orgId,
+          actorId: req.user?.id || null,
+          actorEmail: req.user?.email || 'admin@ekklesphere.church',
+          actorRole: req.user?.role || 'admin',
+          action: 'communication.broadcast_email',
+          targetType: 'communications',
+          targetId: orgId,
+          metadata: {
+            provider: 'Resend Email',
+            from: emailResult.from,
+            audience,
+            sentCount: emailResult.sentCount,
+            failedCount: emailResult.failedCount,
+          },
+          ipAddress: getClientIpKey(req),
+        });
+
+        return res.status(200).json({
+          success: true,
+          channel: 'email',
+          provider: 'Resend Email',
+          sentCount: emailResult.sentCount,
+          matchedMembersCount: targetMembers.length,
+          message: emailResult.message,
+        });
+      }
+
+      // Push broadcast logged & queued
+      if (!settings.enablePushNotifications) {
+        return res.status(400).json({
+          success: false,
+          channel: 'push',
+          message: 'Push broadcasts are paused in System Settings → Gateways.',
+        });
+      }
+
+      await platformStore.appendAuditLog({
+        organizationId: orgId,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || 'admin@ekklesphere.church',
+        actorRole: req.user?.role || 'admin',
+        action: 'communication.broadcast_push',
+        targetType: 'communications',
+        targetId: orgId,
+        metadata: {
+          audience,
+          subject,
+          matchedMembersCount: targetMembers.length,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      return res.status(200).json({
+        success: true,
+        channel: 'push',
+        provider: 'Web & Mobile Push',
+        sentCount: targetMembers.length,
+        matchedMembersCount: targetMembers.length,
+        message: `Push broadcast queued for ${targetMembers.length} recipient${
+          targetMembers.length === 1 ? '' : 's'
+        } (${audience}).`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'broadcast_dispatch_failed',
+        message: err?.message || 'Failed to dispatch broadcast message.',
+      });
+    }
   }
 );
 
@@ -3532,11 +3864,21 @@ app.post(
 const createFollowupSchema = z.object({
   personId: z.string().trim().min(1, 'Member ID is required'),
   personName: z.string().trim().max(150).optional(),
+  personPhone: z.string().trim().max(40).optional(),
+  personEmail: z.string().trim().max(160).optional(),
   groupName: z.string().trim().max(150).optional(),
   reason: z.enum(['absent_2', 'absent_3', 'first_timer', 'manual']).default('manual'),
   assignedToName: z.string().trim().max(150).optional(),
+  assignedToMemberId: z.string().trim().max(120).optional(),
+  assignedToRole: z.string().trim().max(120).optional(),
+  assignedToPhone: z.string().trim().max(40).optional(),
+  autoAssigned: z.boolean().optional(),
   dueOn: z.string().trim().max(100).optional(),
   notes: z.string().trim().max(1000).optional(),
+});
+
+const autoAssignAbsenteesSchema = z.object({
+  unarrivedMemberIds: z.array(z.string().trim().min(1)).max(500).optional(),
 });
 
 const updateFollowupSchema = z.object({
@@ -3583,6 +3925,55 @@ app.post(
       return res.status(err?.status || 500).json({
         error: err?.code || 'followup_create_failed',
         message: err?.message || 'Failed to create follow-up task.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/followup-tasks/auto-assign-absentees',
+  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = autoAssignAbsenteesSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid auto-assign payload.',
+      });
+    }
+
+    try {
+      const result = await platformStore.autoAssignAbsenteeFollowupTasks(req.organizationId!, {
+        unarrivedMemberIds: parsed.data.unarrivedMemberIds,
+        fallbackActorName: req.user?.name,
+      });
+
+      if (result.assignedCount > 0) {
+        await platformStore.appendAuditLog({
+          organizationId: req.organizationId!,
+          actorId: req.user?.id || null,
+          actorEmail: req.user?.email || 'admin@ekklesphere.church',
+          actorRole: req.user?.role || 'admin',
+          action: 'followup.auto_assigned_absentees',
+          targetType: 'followup_tasks',
+          targetId: req.organizationId!,
+          metadata: {
+            assignedCount: result.assignedCount,
+            skippedExistingCount: result.skippedExistingCount,
+          },
+          ipAddress: getClientIpKey(req),
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_auto_assign_failed',
+        message: err?.message || 'Failed to auto-assign absentee follow-up tasks.',
       });
     }
   }
@@ -3761,6 +4152,7 @@ const createStaffSchema = z.object({
   email: z.string().trim().email('Valid email address is required'),
   phone: z.string().trim().max(40).optional(),
   role: z.enum(['admin', 'pastor', 'usher', 'group_leader', 'finance', 'super_admin']),
+  designation: z.string().trim().max(120).optional(),
   password: z.string().min(8, 'Password must be at least 8 characters').optional(),
 });
 
@@ -3811,6 +4203,7 @@ app.post(
         email: parsed.data.email,
         phone: parsed.data.phone,
         role: parsed.data.role,
+        designation: parsed.data.designation,
         password: parsed.data.password,
         ipAddress: req.ip,
       });
@@ -3861,6 +4254,7 @@ const manageUserCredentialsSchema = z
     email: optionalEmailField,
     phone: optionalTrimmedText(40),
     role: z.enum(USER_ROLES_ENUM).default('member'),
+    designation: optionalTrimmedText(120),
     password: optionalPasswordField,
     requirePasswordChange: z.boolean().optional(),
   })
@@ -3872,9 +4266,10 @@ const updateUserAccountSchema = z
   .object({
     role: z.enum(USER_ROLES_ENUM).optional(),
     status: z.enum(['active', 'suspended']).optional(),
+    designation: optionalTrimmedText(120),
   })
-  .refine((data) => Boolean(data.role || data.status), {
-    message: 'Provide at least a role or account status update.',
+  .refine((data) => Boolean(data.role || data.status || data.designation !== undefined), {
+    message: 'Provide at least a role, portfolio/designation, or account status update.',
   });
 
 app.get(
@@ -3925,6 +4320,7 @@ app.post(
         email: parsed.data.email,
         phone: parsed.data.phone,
         role: parsed.data.role,
+        designation: parsed.data.designation,
         password: parsed.data.password,
         requirePasswordChange: parsed.data.requirePasswordChange,
         actorId: req.user?.id || null,
@@ -3965,6 +4361,7 @@ app.patch(
         targetId: String(req.params.id || ''),
         role: parsed.data.role,
         status: parsed.data.status,
+        designation: parsed.data.designation,
         actorUserId: req.user?.id || null,
         actorEmail: req.user?.email || null,
         callerIsCreator,

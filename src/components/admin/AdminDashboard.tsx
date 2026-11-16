@@ -25,6 +25,13 @@ import {
   ArrowUpRight,
   Camera,
   X,
+  UserCheck,
+  RefreshCw,
+  Wallet,
+  ShieldCheck,
+  Mail,
+  Smartphone,
+  Activity,
 } from 'lucide-react';
 import { ProximitySimulator } from '../simulator/ProximitySimulator';
 import { UserManagement } from '../UserManagement';
@@ -34,6 +41,7 @@ import { MemberDirectoryTable } from './MemberDirectoryTable';
 import { ImportMembersModal } from './ImportMembersModal';
 import { LiveAttendanceInsights } from './LiveAttendanceInsights';
 import { WeeklyAttendanceTrendChart } from './WeeklyAttendanceTrendChart';
+import { VisitorTrendsAnalysis } from './VisitorTrendsAnalysis';
 import { MemberAttendanceFrequencyChart } from './MemberAttendanceFrequencyChart';
 import { DashboardDeepAnalytics, AnalyticsLens } from './DashboardDeepAnalytics';
 import { ServiceHistoryPanel } from './ServiceHistoryPanel';
@@ -49,6 +57,7 @@ import {
 import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
 import { Person } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { ContactCallButton } from '../common/ContactCallButton';
 import { getImageFallbackUrls } from '../../utils/imageUrl';
 import { computeServiceBinaryStatus } from '../../utils/serviceStatus';
 
@@ -97,6 +106,8 @@ export const AdminDashboard: React.FC = () => {
     isFollowupModalOpen,
     setIsFollowupModalOpen,
     members,
+    visitorsCount,
+    serviceVisitorsCount,
     attendancePercentage,
     optInPercentage,
     checkInPerson,
@@ -104,6 +115,10 @@ export const AdminDashboard: React.FC = () => {
     followupTasks,
     resolveFollowupTask,
     addFollowupTask,
+    autoAssignAbsentees,
+    isAutoAssigningAbsentees,
+    communicationStatus,
+    sendCommunicationBroadcast,
     currentService,
     hasScheduledService,
     checkInEligibility,
@@ -141,6 +156,9 @@ export const AdminDashboard: React.FC = () => {
 
   const [directoryDeptFilter, setDirectoryDeptFilter] = useState<string | null>(null);
   const [directoryGroupFilter, setDirectoryGroupFilter] = useState<string | null>(null);
+  const [directoryStatusFilter, setDirectoryStatusFilter] = useState<
+    'all' | 'member' | 'visitor' | 'officers'
+  >('all');
   const [directoryDisplayMode, setDirectoryDisplayMode] = useState<'table' | 'photos'>('table');
 
   // Lightbox for clicking any member portrait directly from Dashboard
@@ -288,10 +306,32 @@ export const AdminDashboard: React.FC = () => {
   const isPremiseConfigured =
     systemSettings.campusLatitude !== null && systemSettings.campusLongitude !== null;
 
-  const primaryOpenTask = useMemo(
-    () => followupTasks.find((t) => t.status === 'open') || null,
+  const openCareQueueList = useMemo(
+    () => followupTasks.filter((t) => t.status === 'open' || t.status === 'contacted'),
     [followupTasks]
   );
+
+  const primaryOpenTask = openCareQueueList[0] || null;
+
+  const primaryTaskPerson = useMemo(
+    () =>
+      primaryOpenTask
+        ? members.find((m) => m.id === primaryOpenTask.personId) || null
+        : null,
+    [primaryOpenTask, members]
+  );
+
+  const repeatAbsenteeWatchlist = useMemo(() => {
+    const threshold = Math.max(1, systemSettings.absenteeThresholdServices || 2);
+    return members
+      .filter(
+        (m) =>
+          !checkedInMemberIds.has(m.id) &&
+          (m.consecutiveAbsences || 0) >= threshold
+      )
+      .sort((a, b) => (b.consecutiveAbsences || 0) - (a.consecutiveAbsences || 0))
+      .slice(0, 4);
+  }, [members, checkedInMemberIds, systemSettings.absenteeThresholdServices]);
 
   const liveInsightsPreview = useMemo(
     () => ({
@@ -323,9 +363,15 @@ export const AdminDashboard: React.FC = () => {
   }, []);
 
   const openFilteredDirectory = useCallback(
-    (opts: { department?: string | null; group?: string | null; displayMode?: 'table' | 'photos' }) => {
+    (opts: {
+      department?: string | null;
+      group?: string | null;
+      status?: 'all' | 'member' | 'visitor' | 'officers';
+      displayMode?: 'table' | 'photos';
+    }) => {
       setDirectoryDeptFilter(opts.department ?? 'all');
       setDirectoryGroupFilter(opts.group ?? 'all');
+      setDirectoryStatusFilter(opts.status ?? 'all');
       setDirectoryDisplayMode(opts.displayMode ?? 'table');
       navigateTab('workflows');
     },
@@ -403,7 +449,7 @@ export const AdminDashboard: React.FC = () => {
   }, [photoPreviewMember]);
 
   return (
-    <main className="relative max-w-[1360px] w-[calc(100%-12px)] sm:w-[calc(100%-24px)] lg:w-[calc(100%-32px)] mx-auto my-1.5 sm:my-3 lg:my-4 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl lg:rounded-[32px] pt-4 sm:pt-6 pb-24 sm:pb-28 lg:pb-8 px-3 sm:px-6 lg:pl-[88px] lg:pr-8 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100dvh-76px)] min-w-0 overflow-x-clip transition-colors duration-200">
+    <main className="relative max-w-[1440px] w-[calc(100%-10px)] sm:w-[calc(100%-20px)] lg:w-[calc(100%-24px)] mx-auto my-1.5 sm:my-2.5 lg:my-3 bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl sm:rounded-3xl pt-3 sm:pt-4 pb-24 sm:pb-24 lg:pb-6 px-3 sm:px-5 lg:pl-[80px] lg:pr-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] min-h-[calc(100dvh-76px)] min-w-0 overflow-x-clip transition-colors duration-200">
       {/* Left Navigation Rail (Desktop) & Bottom Dock (Mobile) */}
       <aside
         aria-label="Admin Module Navigation"
@@ -547,48 +593,48 @@ export const AdminDashboard: React.FC = () => {
               aria-label="Active Service and Event Command Hero"
               className="bg-[#1D1B3A] dark:bg-[#19193A] text-white rounded-3xl border border-[#2F2D59] p-5 sm:p-6 my-2 sm:my-4"
             >
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-white/10">
-                <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/80 tabular-nums">
-                  <span className="font-semibold text-white">
-                    Hi, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Leader'}
-                  </span>
-                  <span aria-hidden="true" className="text-white/40">·</span>
-                  <span
-                    className={`inline-flex items-center gap-1.5 font-semibold ${
-                      dashboardAnalytics.activeService.binaryStatus === 'live'
-                        ? 'text-[#4FBF98]'
-                        : 'text-white/75'
-                    }`}
-                  >
+              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 pb-4 border-b border-white/10">
+                <div className="min-w-0 flex flex-col gap-1.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-white/65">
+                    <span className="font-semibold text-white/95 truncate max-w-[220px]">
+                      {systemSettings.campusName || 'Main Campus'}
+                    </span>
+                    <span aria-hidden="true" className="text-white/30">/</span>
+                    <span className="font-medium text-white/75">Operations Console</span>
+                    <span aria-hidden="true" className="text-white/30">·</span>
+                    <span className="truncate max-w-[200px] text-white/70">
+                      Operator: <strong className="font-semibold text-white/90">{currentUser?.name || 'Administrator'}</strong>
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
                     <span
-                      className={`w-1.5 h-1.5 rounded-full ${
+                      className={`inline-flex items-center gap-1.5 font-semibold ${
                         dashboardAnalytics.activeService.binaryStatus === 'live'
-                          ? 'bg-[#4FBF98]'
-                          : 'bg-white/50'
+                          ? 'text-[#4FBF98]'
+                          : 'text-white/75'
                       }`}
-                    />
-                    {services.length === 0
-                      ? 'No Service Scheduled'
-                      : dashboardAnalytics.activeService.binaryStatus === 'live'
-                      ? 'Live Service'
-                      : 'Closed Service'}
-                  </span>
-                  {systemSettings.campusName && (
-                    <>
-                      <span aria-hidden="true" className="text-white/40">·</span>
-                      <span className="truncate max-w-[200px]">{systemSettings.campusName}</span>
-                    </>
-                  )}
-                  <span aria-hidden="true" className="text-white/40">·</span>
-                  <span>
-                    {services.length === 0
-                      ? 'Schedule a service to enable member check-ins'
-                      : `${
-                          currentService.date
-                            ? formatServiceDate(currentService.date, true)
-                            : 'Current Schedule'
-                        } · ${currentService.startsAt}–${currentService.endsAt} (+${dashboardAnalytics.activeService.dwellMinutes}m allowance)`}
-                  </span>
+                    >
+                      <Radio className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span>
+                        {services.length === 0
+                          ? 'No Service Scheduled'
+                          : dashboardAnalytics.activeService.binaryStatus === 'live'
+                          ? 'Live Service'
+                          : 'Closed Service'}
+                      </span>
+                    </span>
+                    <span aria-hidden="true" className="hidden sm:inline-block h-3.5 w-px bg-white/15" />
+                    <span className="font-mono text-[11px] text-white/80">
+                      {services.length === 0
+                        ? 'Schedule a service to enable member check-ins'
+                        : `${
+                            currentService.date
+                              ? formatServiceDate(currentService.date, true)
+                              : 'Current Schedule'
+                          } · ${currentService.startsAt}–${currentService.endsAt} (+${dashboardAnalytics.activeService.dwellMinutes}m grace)`}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Operational Hero Controls */}
@@ -603,7 +649,7 @@ export const AdminDashboard: React.FC = () => {
                         const target = services.find((s) => s.id === nextId);
                         if (target?.date) setSelectedDateIso(target.date);
                       }}
-                      className="bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-xl px-3 py-1.5 text-xs font-semibold outline-none focus:ring-2 focus:ring-[#8C7DFF] cursor-pointer max-w-[200px]"
+                      className="h-8 bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-lg px-2.5 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-[#8C7DFF] cursor-pointer max-w-[210px] truncate"
                     >
                       {services.map((svc) => (
                         <option key={svc.id} value={svc.id} className="bg-[#1D1B3A] text-white">
@@ -616,10 +662,10 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => navigateTab('history')}
-                    className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-lg px-3 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
-                    <History className="w-3.5 h-3.5 text-[#8C7DFF]" />
-                    <span>Service History</span>
+                    <History className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
+                    <span>History</span>
                   </button>
 
                   <button
@@ -628,9 +674,9 @@ export const AdminDashboard: React.FC = () => {
                       setInsightsInitialTab('checked_in');
                       navigateTab('insights');
                     }}
-                    className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="h-8 inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-lg px-3 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
-                    <PieChart className="w-3.5 h-3.5" />
+                    <PieChart className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Live Insights</span>
                   </button>
 
@@ -639,28 +685,28 @@ export const AdminDashboard: React.FC = () => {
                     disabled={!hasScheduledService}
                     title={hasScheduledService ? 'Check members in' : checkInEligibility.message}
                     onClick={handleQuickArrivalCheckin}
-                    className="inline-flex items-center gap-1.5 bg-white text-[#1D1B3A] hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="h-8 inline-flex items-center gap-1.5 bg-white text-[#1D1B3A] hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg px-3.5 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
-                    <Check className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                    <Check className="w-3.5 h-3.5 text-[#6D5CF2]" aria-hidden="true" />
                     <span>Check People In</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setIsAddServiceOpen(true)}
-                    className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-lg px-3 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Add Service</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setIsExportModalOpen(true)}
-                    className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-lg px-2.5 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
                     title="Export Attendance CSV"
                   >
-                    <Download className="w-3.5 h-3.5" />
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
                     <span className="hidden sm:inline">Export</span>
                   </button>
                 </div>
@@ -693,23 +739,23 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {/* 4-Column Hairline Telemetry Strip inside Hero */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-0 sm:divide-x divide-white/10 pt-4 mt-3 border-t border-white/10 tabular-nums">
+              {/* 5-Column Hairline Telemetry Strip inside Hero */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-0 sm:divide-x divide-white/10 pt-3.5 mt-2.5 border-t border-white/10 tabular-nums">
                 <button
                   type="button"
                   onClick={() => {
                     setInsightsInitialTab('checked_in');
                     navigateTab('insights');
                   }}
-                  className="sm:pr-5 text-left group cursor-pointer"
+                  className="sm:pr-4 text-left group cursor-pointer"
                 >
                   <span className="text-[11px] font-semibold text-white/65 group-hover:text-white transition-colors block">
                     Checked In Present
                   </span>
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#4FBF98] mt-1 block">
+                  <span className="font-mono text-2xl font-bold text-[#4FBF98] mt-0.5 block">
                     {liveInsightsPreview.attendanceCount}
                   </span>
-                  <span className="text-[11px] text-white/65 mt-0.5 block">
+                  <span className="text-[11px] text-white/65 block truncate">
                     {liveInsightsPreview.attendancePct}% of{' '}
                     {dashboardAnalytics.activeService.expectedAttendance} expected
                   </span>
@@ -721,175 +767,265 @@ export const AdminDashboard: React.FC = () => {
                     setInsightsInitialTab('unarrived');
                     navigateTab('insights');
                   }}
-                  className="sm:px-5 text-left group cursor-pointer"
+                  className="sm:px-4 text-left group cursor-pointer"
                 >
                   <span className="text-[11px] font-semibold text-white/65 group-hover:text-white transition-colors block">
                     Unarrived / Absent
                   </span>
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#FF7B8E] mt-1 block">
+                  <span className="font-mono text-2xl font-bold text-[#FF7B8E] mt-0.5 block">
                     {liveInsightsPreview.absenteeCount}
                   </span>
-                  <span className="text-[11px] text-white/65 mt-0.5 block">
-                    {liveInsightsPreview.absenteePct}% of {liveInsightsPreview.absenteeBaseline} ·{' '}
-                    {liveInsightsPreview.atRiskCount} repeat
+                  <span className="text-[11px] text-white/65 block truncate">
+                    {liveInsightsPreview.absenteePct}% · {liveInsightsPreview.atRiskCount} repeat
                   </span>
                 </button>
 
-                <div className="sm:px-5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    openFilteredDirectory({
+                      department: 'all',
+                      group: 'all',
+                      status: 'visitor',
+                      displayMode: 'table',
+                    })
+                  }
+                  className="sm:px-4 text-left group cursor-pointer"
+                >
+                  <span className="text-[11px] font-semibold text-white/65 group-hover:text-white transition-colors block">
+                    Service Visitors
+                  </span>
+                  <span className="font-mono text-2xl font-bold text-[#F4D58B] mt-0.5 block">
+                    {serviceVisitorsCount}
+                  </span>
+                  <span className="text-[11px] text-white/65 block truncate">
+                    {visitorsCount} registered guests
+                  </span>
+                </button>
+
+                <div className="sm:px-4">
                   <span className="text-[11px] font-semibold text-white/65 block">
                     On-Time Punctuality
                   </span>
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-white mt-1 block">
+                  <span className="font-mono text-2xl font-bold text-white mt-0.5 block">
                     {liveInsightsPreview.punctualityPct}%
                   </span>
-                  <span className="text-[11px] text-white/65 mt-0.5 block">
-                    {liveInsightsPreview.onTime} on-time · {liveInsightsPreview.late} late arrivals
+                  <span className="text-[11px] text-white/65 block truncate">
+                    {liveInsightsPreview.onTime} on-time · {liveInsightsPreview.late} late
                   </span>
                 </div>
 
-                <div className="sm:pl-5">
+                <div className="sm:pl-4 col-span-2 sm:col-span-1">
                   <span className="text-[11px] font-semibold text-white/65 block">
                     Arrival Channel Split
                   </span>
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-white mt-1 block">
+                  <span className="font-mono text-2xl font-bold text-white mt-0.5 block">
                     {liveInsightsPreview.autoCount} / {liveInsightsPreview.assistedCount}
                   </span>
-                  <span className="text-[11px] text-white/65 mt-0.5 block">
-                    Auto proximity / Door &amp; QR ({optInPercentage}% auto ready)
+                  <span className="text-[11px] text-white/65 block truncate">
+                    Auto GPS / Door ({optInPercentage}% ready)
                   </span>
                 </div>
               </div>
             </section>
 
-            {/* 2. CONGREGATIONAL STRUCTURE 4-COLUMN KPI STRIP */}
+            {/* 2. HIGH-DENSITY 8-TILE EXECUTIVE KPI MATRIX */}
             <section
-              aria-label="Membership, Departments, Ministries, and Pastoral Readiness"
-              className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 my-4 tabular-nums"
+              aria-label="Congregation, Visitors, Leadership, Giving, and Operations KPIs"
+              className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2.5 my-3 tabular-nums"
             >
               <button
                 type="button"
                 onClick={() =>
-                  openFilteredDirectory({ department: 'all', group: 'all', displayMode: 'table' })
+                  openFilteredDirectory({
+                    department: 'all',
+                    group: 'all',
+                    status: 'all',
+                    displayMode: 'table',
+                  })
                 }
-                className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
               >
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    Membership Count
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Roster
                   </span>
-                  <Users className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+                  <Users className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
                 </div>
-                <div className="my-2">
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block leading-none">
-                    {dashboardAnalytics.membership.totalMembers}
+                <span className="font-mono text-xl sm:text-2xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {dashboardAnalytics.membership.totalMembers}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.membership.activeStatusCount} active ·{' '}
+                  {dashboardAnalytics.membership.inactiveCount} inactive
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  openFilteredDirectory({
+                    department: 'all',
+                    group: 'all',
+                    status: 'visitor',
+                    displayMode: 'table',
+                  })
+                }
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-emerald-500/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Visitors
                   </span>
+                  <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
-                  <span className="truncate">
-                    {dashboardAnalytics.membership.activeStatusCount} active ·{' '}
-                    {dashboardAnalytics.membership.visitorsCount} visitors
+                <span className="font-mono text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 my-1 leading-none">
+                  {visitorsCount}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {serviceVisitorsCount} checked in today
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  openFilteredDirectory({
+                    department: 'all',
+                    group: 'all',
+                    status: 'officers',
+                    displayMode: 'table',
+                  })
+                }
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Officers
                   </span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
                 </div>
+                <span className="font-mono text-xl sm:text-2xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {dashboardAnalytics.membership.officersCount}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.leadership.distinctLeadersCount} cell/min leads
+                </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => jumpToAnalyticsLens('departments')}
-                className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
               >
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
                     Departments
                   </span>
-                  <Building2 className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+                  <Building2 className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
                 </div>
-                <div className="my-2">
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] block leading-none">
-                    {dashboardAnalytics.namedDepartmentsCount}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
-                  <span className="truncate">
-                    {dashboardAnalytics.topDepartment
-                      ? `${dashboardAnalytics.topDepartment.name} (${dashboardAnalytics.topDepartment.totalMembers}) · ${
-                          dashboardAnalytics.topDepartment.leaderName
-                            ? `Lead: ${dashboardAnalytics.topDepartment.leaderName}`
-                            : 'No lead assigned'
-                        }`
-                      : 'No departments assigned'}
-                  </span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
-                </div>
+                <span className="font-mono text-xl sm:text-2xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {dashboardAnalytics.namedDepartmentsCount}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.topDepartment
+                    ? `${dashboardAnalytics.topDepartment.name} (${dashboardAnalytics.topDepartment.totalMembers})`
+                    : 'No departments'}
+                </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => jumpToAnalyticsLens('ministries')}
-                className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
               >
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    Ministries &amp; Leadership
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Groups &amp; Cells
                   </span>
-                  <HeartHandshake className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+                  <HeartHandshake className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
                 </div>
-                <div className="my-2 flex items-baseline gap-2">
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-none">
-                    {dashboardAnalytics.groupCounts.total}
-                  </span>
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    groups · {dashboardAnalytics.leadership.distinctLeadersCount} leaders
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
-                  <span className="truncate">
-                    {dashboardAnalytics.leadership.leadershipCoveragePct}% roster covered ·{' '}
-                    {dashboardAnalytics.groupCounts.cellGroups} cells
-                  </span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
-                </div>
+                <span className="font-mono text-xl sm:text-2xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {dashboardAnalytics.groupCounts.total}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.leadership.leadershipCoveragePct}% covered ·{' '}
+                  {dashboardAnalytics.groupCounts.cellGroups} cells
+                </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setIsFollowupModalOpen(true)}
-                className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-4 text-left transition-colors group cursor-pointer flex flex-col justify-between"
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-amber-500/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
               >
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    Pastoral Care &amp; GPS
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Care Queue
                   </span>
-                  <CheckSquare className="w-4 h-4 text-[#6D5CF2] shrink-0" />
+                  <CheckSquare className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
                 </div>
-                <div className="my-2 flex items-baseline gap-2">
-                  <span className="font-mono text-2xl sm:text-3xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-none">
-                    {openFollowupCount}
+                <span className="font-mono text-xl sm:text-2xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {openFollowupCount}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.activeService.atRiskCount} repeat absentees
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => jumpToAnalyticsLens('demographics')}
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-emerald-500/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Stewardship
                   </span>
-                  <span className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                    open follow-ups
-                  </span>
+                  <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] w-full">
-                  <span className="truncate">
-                    {dashboardAnalytics.activeService.atRiskCount} repeat absentees · GPS{' '}
-                    {isPremiseConfigured ? 'Active' : 'Unset'}
+                <span className="font-mono text-lg sm:text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none truncate">
+                  {dashboardAnalytics.giving.totalPaidGhs > 0
+                    ? `GHS ${dashboardAnalytics.giving.totalPaidGhs.toLocaleString()}`
+                    : 'GHS 0'}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  {dashboardAnalytics.giving.donationsCount} paid ·{' '}
+                  {dashboardAnalytics.giving.topFundName || 'No fund activity'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => navigateTab('settings')}
+                className="bg-white dark:bg-[#1D1D3D] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 p-3 text-left transition-colors group cursor-pointer flex flex-col justify-between min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1.5 w-full">
+                  <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate">
+                    Gateways &amp; GPS
                   </span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2] opacity-70 group-hover:opacity-100 shrink-0" />
+                  <Activity className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
                 </div>
+                <span className="font-mono text-lg sm:text-xl font-bold text-[#1D1B3A] dark:text-[#F2F2FA] my-1 leading-none">
+                  {isPremiseConfigured ? 'GPS Live' : 'GPS Unset'}
+                </span>
+                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                  SMS {communicationStatus.arkeselConfigured ? 'On' : 'Off'} · Email{' '}
+                  {communicationStatus.resendConfigured ? 'On' : 'Off'}
+                </span>
               </button>
             </section>
 
             {/* 3. QUICK OPERATIONS ACTION BAR & OVERVIEW SECTION FILTER */}
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 my-3 px-0.5">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 my-2.5 px-0.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => {
                     setEditingMember(null);
                     setIsAddMemberOpen(true);
                   }}
-                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl px-3.5 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl px-3 py-1.5 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <UserPlus className="w-3.5 h-3.5" />
                   <span>Add Member</span>
@@ -897,10 +1033,10 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsImportModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                  <span>Import Roster</span>
+                  <span>Import</span>
                 </button>
                 <button
                   type="button"
@@ -911,15 +1047,39 @@ export const AdminDashboard: React.FC = () => {
                       displayMode: 'photos',
                     })
                   }
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
                 >
                   <Camera className="w-3.5 h-3.5 text-[#6D5CF2]" />
-                  <span>Member Photos ({uploadedPhotoMembers.length})</span>
+                  <span>Photos ({uploadedPhotoMembers.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSectionFilter('analytics');
+                    setTimeout(() => {
+                      document
+                        .getElementById('visitor-trends-analysis')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 50);
+                  }}
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-emerald-500/60 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Visitor Trends ({visitorsCount})</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isAutoAssigningAbsentees}
+                  onClick={() => autoAssignAbsentees({ silent: false })}
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                  <span>Auto-Assign Care</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsMessageModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <MessageCircle className="w-3.5 h-3.5 text-[#6D5CF2]" />
                   <span>Broadcast</span>
@@ -927,7 +1087,7 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigateTab('proximity')}
-                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2]/50 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Radio className="w-3.5 h-3.5 text-[#6D5CF2]" />
                   <span>Radar</span>
@@ -969,47 +1129,45 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* 4. UPLOADED MEMBER PORTRAITS SHOWCASE */}
+            {/* 4. COMPACT UPLOADED PORTRAITS STRIP */}
             <section
               aria-label="Uploaded Member Photos"
-              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-4 shadow-xs my-4"
+              className="bg-white dark:bg-[#1D1D3D] rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] p-3.5 shadow-xs my-3"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
                 <div className="flex items-center gap-2">
                   <Camera className="w-4 h-4 text-[#6D5CF2] shrink-0" />
                   <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                    Uploaded Member Photos
+                    Congregation Portraits
                   </h2>
                   <span className="text-xs font-mono font-semibold text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
                     ({uploadedPhotoMembers.length}/{members.length})
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openFilteredDirectory({
-                        department: 'all',
-                        group: 'all',
-                        displayMode: 'photos',
-                      })
-                    }
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <span>Open Full Photo Gallery</span>
-                    <ArrowUpRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    openFilteredDirectory({
+                      department: 'all',
+                      group: 'all',
+                      displayMode: 'photos',
+                    })
+                  }
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <span>Full Photo Directory</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {uploadedPhotoMembers.length === 0 ? (
-                <div className="py-5 px-4 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="py-3.5 px-4 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                     <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] block">
                       No uploaded member photos yet
                     </span>
-                    Upload photos when adding or editing a member, or via the Member Digital Card, and they will appear here automatically.
+                    Upload photos when adding or editing a member and they appear here automatically.
                   </div>
                   <button
                     type="button"
@@ -1019,32 +1177,29 @@ export const AdminDashboard: React.FC = () => {
                     }}
                     className="px-3 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    {members.length > 0 ? 'Upload Photo for Member' : 'Add Member with Photo'}
+                    {members.length > 0 ? 'Upload Photo' : 'Add Member'}
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
-                  {uploadedPhotoMembers.slice(0, 8).map((m) => (
+                <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
+                  {uploadedPhotoMembers.slice(0, 10).map((m) => (
                     <button
                       key={m.id}
                       type="button"
                       onClick={() => setPhotoPreviewMember(m)}
-                      className="group text-left p-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 transition-colors cursor-pointer"
+                      className="group text-left p-1.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] hover:border-[#6D5CF2]/60 transition-colors cursor-pointer"
                     >
-                      <div className="flex items-center justify-center mb-2">
+                      <div className="flex items-center justify-center mb-1">
                         <MemberAvatar
                           src={m.imageUrl}
                           name={`${m.firstName} ${m.lastName}`}
                           initials={m.avatarInitials}
-                          sizeClass="w-14 h-14"
-                          textClass="text-sm font-bold"
+                          sizeClass="w-10 h-10"
+                          textClass="text-xs font-bold"
                         />
                       </div>
-                      <span className="block text-xs font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate text-center">
-                        {m.firstName} {m.lastName}
-                      </span>
-                      <span className="block text-[10px] text-[#666A86] dark:text-[#A9ACC8] truncate text-center">
-                        {m.homeCellGroup || m.groupName || 'Member'}
+                      <span className="block text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate text-center">
+                        {m.firstName}
                       </span>
                     </button>
                   ))}
@@ -1052,10 +1207,214 @@ export const AdminDashboard: React.FC = () => {
               )}
             </section>
 
-            {/* 5. CONGREGATION & SERVICE ANALYTICS SUITE + TREND CHARTS */}
+            {/* 5. DENSE EXECUTIVE ANALYTICS COCKPIT + TREND CHARTS */}
             {(sectionFilter === 'all' || sectionFilter === 'analytics') && (
-              <>
-                <div ref={analyticsSectionRef} className="my-4 sm:my-5">
+              <div className="space-y-3 my-3">
+                {/* 12-Col Analytics Split: 30-Day Trend + Executive Departments / Channel Mix / Completeness */}
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-stretch">
+                  <div className="xl:col-span-6 flex flex-col [&>section]:flex-1">
+                    <WeeklyAttendanceTrendChart
+                      onOpenInsights={() => {
+                        setInsightsInitialTab('checked_in');
+                        navigateTab('insights');
+                      }}
+                      onQuickCheckin={handleQuickArrivalCheckin}
+                    />
+                  </div>
+
+                  {/* Executive Departments, Arrival Channels & Directory Health Panel */}
+                  <section
+                    aria-label="Department Leaderboard, Arrival Channels, and Data Health"
+                    className="xl:col-span-6 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between gap-4 tabular-nums"
+                  >
+                    {/* Department Turnout Leaderboard */}
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2.5">
+                        <div>
+                          <h2 className="text-sm sm:text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            Department Turnout Leaderboard
+                          </h2>
+                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                            Live presence across ministries · Click any row to inspect roster
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => jumpToAnalyticsLens('departments')}
+                          className="text-xs font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline whitespace-nowrap cursor-pointer"
+                        >
+                          All ({dashboardAnalytics.departments.length})
+                        </button>
+                      </div>
+
+                      {dashboardAnalytics.departments.length === 0 ? (
+                        <div className="py-4 px-3 rounded-xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] text-xs text-[#666A86] dark:text-[#A9ACC8] text-center">
+                          Assign members to church departments to track live ministry turnout.
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] border-y border-[#E9EBF5] dark:border-[#2D2D55]">
+                          {dashboardAnalytics.departments.slice(0, 4).map((dept) => (
+                            <button
+                              key={dept.name}
+                              type="button"
+                              onClick={() =>
+                                openFilteredDirectory({
+                                  department: dept.name,
+                                  group: 'all',
+                                  displayMode: 'table',
+                                })
+                              }
+                              className="w-full py-2 px-1 flex items-center justify-between gap-3 text-left hover:bg-[#F6F7FC] dark:hover:bg-white/[0.03] transition-colors cursor-pointer"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                    {dept.name}
+                                  </span>
+                                  <span className="font-mono text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                                    {dept.presentCount}/{dept.totalMembers} ({dept.turnoutPct}%)
+                                  </span>
+                                </div>
+                                <div className="mt-1 h-1.5 w-full rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-[#6D5CF2]"
+                                    style={{ width: `${dept.turnoutPct}%` }}
+                                  />
+                                </div>
+                              </div>
+                              <ArrowUpRight className="w-3.5 h-3.5 text-[#666A86] shrink-0" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2-Col Lower Sub-Grid: Arrival Channels + Directory Completeness */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <div>
+                        <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2">
+                          <span>Active Channel Mix</span>
+                          <span className="font-mono text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                            {liveInsightsPreview.attendanceCount} total
+                          </span>
+                        </div>
+                        {dashboardAnalytics.activeService.channels.length === 0 ? (
+                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                            Check-ins across Geofence, Beacon, QR, and Usher Desk appear here.
+                          </p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {dashboardAnalytics.activeService.channels.slice(0, 4).map((ch) => (
+                              <div key={ch.method} className="text-[11px]">
+                                <div className="flex items-center justify-between mb-0.5">
+                                  <span className="text-[#1D1B3A] dark:text-[#F2F2FA] font-medium">
+                                    {ch.label}
+                                  </span>
+                                  <span className="font-mono font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                                    {ch.count} ({ch.pct}%)
+                                  </span>
+                                </div>
+                                <div className="h-1.5 w-full rounded-full bg-[#F6F7FC] dark:bg-[#14142E] overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{ width: `${ch.pct}%`, backgroundColor: ch.color }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-2">
+                          <span>Directory Completeness</span>
+                          <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400">
+                            {dashboardAnalytics.membership.birthdaysThisMonthCount} b&apos;days mo.
+                          </span>
+                        </div>
+                        <div className="space-y-1.5 text-[11px]">
+                          {[
+                            {
+                              label: 'Phone E.164',
+                              pct: dashboardAnalytics.membership.completeness.phonePct,
+                              color: '#4FBF98',
+                            },
+                            {
+                              label: 'Email Contact',
+                              pct: dashboardAnalytics.membership.completeness.emailPct,
+                              color: '#6D5CF2',
+                            },
+                            {
+                              label: 'Digital Address',
+                              pct: dashboardAnalytics.membership.completeness.digitalAddressPct,
+                              color: '#59C3C3',
+                            },
+                            {
+                              label: 'Profile Photo',
+                              pct: dashboardAnalytics.membership.completeness.photoPct,
+                              color: '#F59E0B',
+                            },
+                          ].map((metric) => (
+                            <div key={metric.label}>
+                              <div className="flex items-center justify-between mb-0.5">
+                                <span className="text-[#1D1B3A] dark:text-[#F2F2FA] font-medium">
+                                  {metric.label}
+                                </span>
+                                <span className="font-mono font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                                  {metric.pct}%
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-[#F6F7FC] dark:bg-[#14142E] overflow-hidden">
+                                <div
+                                  className="h-full rounded-full"
+                                  style={{ width: `${metric.pct}%`, backgroundColor: metric.color }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                {/* 12-Col Analytics Split: Visitor Trends & Retention + Member Attendance Frequency */}
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-stretch">
+                  <div className="xl:col-span-7 flex flex-col [&>section]:flex-1">
+                    <VisitorTrendsAnalysis
+                      onOpenVisitorDirectory={() =>
+                        openFilteredDirectory({
+                          department: 'all',
+                          group: 'all',
+                          status: 'visitor',
+                          displayMode: 'table',
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="xl:col-span-5 flex flex-col [&>section]:flex-1">
+                    <MemberAttendanceFrequencyChart
+                      onOpenFollowup={(memberId) => {
+                        const targetMember = members.find((m) => m.id === memberId);
+                        if (targetMember) {
+                          addFollowupTask(
+                            memberId,
+                            'manual',
+                            `Follow-up requested from attendance frequency review: ${targetMember.firstName} ${targetMember.lastName}`
+                          );
+                          showToast(
+                            `Care task assigned for ${targetMember.firstName} ${targetMember.lastName}`
+                          );
+                        }
+                        setIsFollowupModalOpen(true);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div ref={analyticsSectionRef}>
                   <DashboardDeepAnalytics
                     analytics={dashboardAnalytics}
                     theme={theme}
@@ -1154,53 +1513,183 @@ export const AdminDashboard: React.FC = () => {
                     }}
                   />
                 </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-6 gap-4 sm:gap-5 my-4 sm:my-5 items-stretch">
-                  <div className="lg:col-span-6">
-                    <WeeklyAttendanceTrendChart
-                      onOpenInsights={() => {
-                        setInsightsInitialTab('checked_in');
-                        navigateTab('insights');
-                      }}
-                      onQuickCheckin={handleQuickArrivalCheckin}
-                    />
-                  </div>
-                </div>
-
-                <div className="mb-4 sm:mb-5">
-                  <MemberAttendanceFrequencyChart
-                    onOpenFollowup={(memberId) => {
-                      const targetMember = members.find((m) => m.id === memberId);
-                      if (targetMember) {
-                        addFollowupTask(
-                          memberId,
-                          'manual',
-                          `Follow-up requested from attendance frequency review: ${targetMember.firstName} ${targetMember.lastName}`
-                        );
-                        showToast(
-                          `Care task assigned for ${targetMember.firstName} ${targetMember.lastName}`
-                        );
-                      }
-                      setIsFollowupModalOpen(true);
-                    }}
-                  />
-                </div>
-              </>
+              </div>
             )}
 
-            {/* 6. OPERATIONS & PASTORAL CARE GRID */}
+            {/* 6. DENSE 12-COLUMN PASTORAL CARE & OPERATIONS COMMAND GRID */}
             {(sectionFilter === 'all' || sectionFilter === 'operations') && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
-                {/* Notifications Card */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3">
+                {/* Pastoral Care Queue (up to 4 stacked items) */}
+                <section className="md:col-span-1 xl:col-span-4 bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div>
+                        <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          Pastoral Care Queue ({openFollowupCount})
+                        </h2>
+                        <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          Active absentee &amp; first-timer assignments
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isAutoAssigningAbsentees}
+                          onClick={() => autoAssignAbsentees({ silent: false })}
+                          className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          {isAutoAssigningAbsentees ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <UserCheck className="w-3 h-3" />
+                          )}
+                          <span>Auto</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsFollowupModalOpen(true)}
+                          className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] cursor-pointer"
+                        >
+                          All
+                        </button>
+                      </div>
+                    </div>
+
+                    {openCareQueueList.length === 0 ? (
+                      <div className="text-center py-8 px-3 text-xs text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
+                        <CheckSquare className="w-5 h-5 text-[#6D5CF2] mx-auto mb-1.5 opacity-80" />
+                        <p className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          No open care assignments
+                        </p>
+                        <p className="text-[11px] mt-0.5">
+                          Visitor welcomes &amp; absence escalations queue here automatically.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] border-y border-[#E9EBF5] dark:border-[#2D2D55]">
+                        {openCareQueueList.slice(0, 4).map((task) => {
+                          const linkedMember = members.find((m) => m.id === task.personId);
+                          return (
+                            <div
+                              key={task.id}
+                              className="py-2.5 flex items-center justify-between gap-2.5"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 text-xs">
+                                  <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                    {task.personName}
+                                  </span>
+                                  <span className="text-[10px] font-semibold text-[#6D5CF2] dark:text-[#8C7DFF] shrink-0">
+                                    ·{' '}
+                                    {task.reason === 'first_timer'
+                                      ? 'Visitor'
+                                      : task.reason === 'absent_3'
+                                      ? '3+ Wks'
+                                      : task.reason === 'absent_2'
+                                      ? '2 Wks'
+                                      : 'Care'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                                  To: {task.assignedToName}
+                                  {task.assignedToRole ? ` (${task.assignedToRole})` : ''}
+                                </div>
+                              </div>
+
+                              <ContactCallButton
+                                compact
+                                contactName={task.personName}
+                                contactPhone={
+                                  task.personPhone ||
+                                  linkedMember?.phoneE164 ||
+                                  linkedMember?.phoneNumber
+                                }
+                                contactEmail={task.personEmail || linkedMember?.email}
+                                contactGroup={task.groupName}
+                                onLogOutcome={async (outcome, markResolved) => {
+                                  await resolveFollowupTask(
+                                    task.id,
+                                    outcome,
+                                    markResolved ? 'resolved' : 'contacted'
+                                  );
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsNewAssignmentOpen(true)}
+                    className="mt-3 w-full border border-dashed border-[#CBC6F7] dark:border-[#3B3B72] rounded-xl py-2 text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center gap-1.5 hover:bg-[#EFEDFF]/40 dark:hover:bg-[#2A2A55]/20 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Care Assignment</span>
+                  </button>
+                </section>
+
+                {/* Repeat Absentee Watchlist + Live Audit Activity */}
                 <section
                   id="notifications-card"
-                  className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between"
+                  className="md:col-span-1 xl:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between gap-4"
                 >
                   <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Notifications
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        Absentee Watchlist
                       </h2>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInsightsInitialTab('at_risk');
+                          navigateTab('insights');
+                        }}
+                        className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline cursor-pointer"
+                      >
+                        Insights
+                      </button>
+                    </div>
+
+                    {repeatAbsenteeWatchlist.length === 0 ? (
+                      <div className="py-3 px-3 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                        No unarrived members at threshold ({systemSettings.absenteeThresholdServices}+ missed).
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] tabular-nums">
+                        {repeatAbsenteeWatchlist.map((m) => (
+                          <div
+                            key={m.id}
+                            className="py-2 flex items-center justify-between gap-2 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate block">
+                                {m.firstName} {m.lastName}
+                              </span>
+                              <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold">
+                                {m.consecutiveAbsences} missed · {m.groupName || 'General'}
+                              </span>
+                            </div>
+                            <ContactCallButton
+                              compact
+                              contactName={`${m.firstName} ${m.lastName}`.trim()}
+                              contactPhone={m.phoneE164 || m.phoneNumber}
+                              contactEmail={m.email}
+                              contactGroup={m.groupName}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
+                        Activity Log
+                      </h3>
                       {auditLogs.length > 0 && (
                         <button
                           type="button"
@@ -1212,138 +1701,59 @@ export const AdminDashboard: React.FC = () => {
                                 : 'Notifications cleared'
                             );
                           }}
-                          className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#EF5A6F] flex items-center gap-1 transition-colors cursor-pointer"
+                          className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#EF5A6F] flex items-center gap-1 cursor-pointer"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3" />
                           {notificationsCleared ? 'Restore' : 'Clear'}
                         </button>
                       )}
                     </div>
 
                     {!notificationsCleared && auditLogs.length > 0 ? (
-                      <div className="space-y-2.5">
+                      <div className="space-y-2">
                         {auditLogs.slice(0, 3).map((log) => (
                           <div
                             key={log.id}
-                            className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55]"
+                            className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl px-2.5 py-2 border border-[#E9EBF5] dark:border-[#2D2D55]"
                           >
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                                 {log.action}
                               </span>
-                              <span className="text-[10px] font-mono text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+                              <span className="text-[10px] font-mono text-[#666A86] dark:text-[#A9ACC8] tabular-nums shrink-0">
                                 {log.timestamp}
                               </span>
                             </div>
-                            <div className="text-xs text-[#666A86] dark:text-[#A9ACC8] line-clamp-2">
+                            <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] truncate">
                               {log.details}
                             </div>
                           </div>
                         ))}
                       </div>
                     ) : (
-                      <div className="text-center py-8 px-2 text-xs text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
-                        <Bell className="w-5 h-5 text-[#6D5CF2] mx-auto mb-2 opacity-80" />
-                        <p className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
-                          No live notifications yet
-                        </p>
-                        <p className="text-[11px]">
-                          Real-time member check-ins, visitor registrations, and premise updates appear here.
-                        </p>
+                      <div className="text-center py-4 px-2 text-[11px] text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
+                        <Bell className="w-4 h-4 text-[#6D5CF2] mx-auto mb-1 opacity-80" />
+                        No live activity events yet.
                       </div>
                     )}
                   </div>
                 </section>
 
-                {/* Assignments Card (Single-elevation, zero static pills) */}
-                <section className="md:col-span-1 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
+                {/* Service Calendar & Schedule Card (3 cols) */}
+                <section className="md:col-span-1 xl:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
                   <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Assignments
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={() => setIsFollowupModalOpen(true)}
-                        className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] flex items-center gap-1 cursor-pointer tabular-nums"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        View all ({openFollowupCount})
-                      </button>
-                    </div>
-
-                    {primaryOpenTask ? (
-                      <>
-                        <div className="flex items-center gap-2 text-xs text-[#666A86] dark:text-[#A9ACC8] mb-2">
-                          <span className="font-semibold text-[#6D5CF2] dark:text-[#8C7DFF]">
-                            Pastoral care
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span className="truncate">{primaryOpenTask.groupName}</span>
-                        </div>
-
-                        <h3 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-snug mb-2">
-                          Follow up with {primaryOpenTask.personName}
-                        </h3>
-
-                        <div className="flex items-center justify-between gap-2 text-xs mb-4">
-                          <span className="font-semibold text-[#12503D] dark:text-[#7AD3B6]">
-                            {primaryOpenTask.reason === 'first_timer'
-                              ? 'First-timer welcome'
-                              : primaryOpenTask.reason === 'absent_3'
-                              ? 'Absent 3 weeks'
-                              : primaryOpenTask.reason === 'absent_2'
-                              ? 'Absent 2 weeks'
-                              : 'Care check'}
-                          </span>
-                          <span className="font-bold text-rose-600 dark:text-rose-400">Open</span>
-                        </div>
-
-                        <div className="flex items-center justify-between text-xs pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
-                          <span className="text-[#666A86] dark:text-[#A9ACC8]">Assigned to</span>
-                          <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                            {primaryOpenTask.assignedToName}
-                          </span>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-center py-8 px-2 text-xs text-[#666A86] dark:text-[#A9ACC8] bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl border border-dashed border-[#E9EBF5] dark:border-[#2D2D55]">
-                        <CheckSquare className="w-5 h-5 text-[#6D5CF2] mx-auto mb-2 opacity-80" />
-                        <p className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] mb-0.5">
-                          No open care assignments
-                        </p>
-                        <p className="text-[11px]">
-                          Visitor welcomes and absence follow-ups queue here automatically.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsNewAssignmentOpen(true)}
-                    className="mt-4 w-full border-2 border-dashed border-[#CBC6F7] dark:border-[#3B3B72] rounded-2xl py-2.5 text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center gap-1.5 hover:bg-[#EFEDFF]/40 dark:hover:bg-[#2A2A55]/20 transition-colors cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add new assignment
-                  </button>
-                </section>
-
-                {/* Calendar & Service History Link Card */}
-                <section className="md:col-span-2 lg:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                         {weekRangeLabel}
                       </h2>
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
                           onClick={() => setIsAddServiceOpen(true)}
-                          className="px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-[11px] font-bold hover:opacity-90 transition-opacity flex items-center gap-1 cursor-pointer mr-1"
+                          className="px-2 py-1 rounded-lg bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-[11px] font-bold hover:opacity-90 flex items-center gap-1 cursor-pointer mr-1"
                         >
                           <Plus className="w-3 h-3" />
-                          Schedule
+                          New
                         </button>
                         <button
                           type="button"
@@ -1351,7 +1761,7 @@ export const AdminDashboard: React.FC = () => {
                           className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
                           aria-label="Previous week"
                         >
-                          <ChevronLeft className="w-4 h-4" />
+                          <ChevronLeft className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
@@ -1359,12 +1769,12 @@ export const AdminDashboard: React.FC = () => {
                           className="p-1 rounded-lg text-[#666A86] hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
                           aria-label="Next week"
                         >
-                          <ChevronRight className="w-4 h-4" />
+                          <ChevronRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-7 gap-1 text-center mb-4">
+                    <div className="grid grid-cols-7 gap-1 text-center mb-3">
                       {weekDays.map((d) => {
                         const hasServiceOnDay = serviceDatesSet.has(d.iso);
                         const isSelected = selectedDateIso === d.iso;
@@ -1373,16 +1783,16 @@ export const AdminDashboard: React.FC = () => {
                             key={d.iso}
                             type="button"
                             onClick={() => setSelectedDateIso(d.iso)}
-                            className={`flex flex-col items-center py-1.5 rounded-xl transition-colors cursor-pointer ${
+                            className={`flex flex-col items-center py-1 rounded-xl transition-colors cursor-pointer ${
                               isSelected
                                 ? 'bg-[#6D5CF2] text-white font-bold'
                                 : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
                             }`}
                           >
-                            <span className="text-[10px] uppercase font-semibold">{d.name}</span>
+                            <span className="text-[9px] uppercase font-semibold">{d.name}</span>
                             <b className="text-xs tabular-nums">{d.date}</b>
                             <span
-                              className={`w-1.5 h-1.5 rounded-full mt-0.5 ${
+                              className={`w-1 h-1 rounded-full mt-0.5 ${
                                 hasServiceOnDay
                                   ? isSelected
                                     ? 'bg-white'
@@ -1395,10 +1805,10 @@ export const AdminDashboard: React.FC = () => {
                       })}
                     </div>
 
-                    <div className="space-y-2 max-h-[200px] overflow-y-auto pr-0.5">
+                    <div className="space-y-1.5 max-h-[190px] overflow-y-auto pr-0.5">
                       {services.length === 0 ? (
-                        <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-3 border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] text-center text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                          No worship services scheduled in database yet.
+                        <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-3 border border-dashed border-[#E9EBF5] dark:border-[#2D2D55] text-center text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          No worship services scheduled yet.
                         </div>
                       ) : (
                         services.map((svc) => {
@@ -1417,7 +1827,7 @@ export const AdminDashboard: React.FC = () => {
                           return (
                             <div
                               key={svc.id}
-                              className={`w-full bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-2.5 flex items-center gap-2.5 border transition-colors ${
+                              className={`w-full bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-2 flex items-center gap-2 border transition-colors ${
                                 svc.id === activeServiceId
                                   ? 'border-[#6D5CF2]'
                                   : isSelectedDay
@@ -1431,31 +1841,26 @@ export const AdminDashboard: React.FC = () => {
                                   setActiveServiceId(svc.id);
                                   if (svc.date) setSelectedDateIso(svc.date);
                                 }}
-                                className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer"
+                                className="flex-1 min-w-0 text-left cursor-pointer"
                               >
-                                <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center justify-center shrink-0">
-                                  <CalendarIcon className="w-4 h-4" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-1.5">
-                                    <b className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                                      {svc.name}
-                                    </b>
-                                    <span
-                                      className={`text-[10px] font-bold shrink-0 ${
-                                        svcBinaryStatus === 'live'
-                                          ? 'text-emerald-600 dark:text-emerald-400'
-                                          : 'text-[#666A86] dark:text-[#A9ACC8]'
-                                      }`}
-                                    >
-                                      · {svcBinaryStatus === 'live' ? 'Live' : 'Closed'}
-                                    </span>
-                                  </div>
-                                  <span className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] block truncate tabular-nums">
-                                    {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
-                                    {svc.startsAt}–{svc.endsAt} (+{allowance}m)
+                                <div className="flex items-center gap-1.5">
+                                  <b className="text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                                    {svc.name}
+                                  </b>
+                                  <span
+                                    className={`text-[10px] font-bold shrink-0 ${
+                                      svcBinaryStatus === 'live'
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-[#666A86] dark:text-[#A9ACC8]'
+                                    }`}
+                                  >
+                                    · {svcBinaryStatus === 'live' ? 'Live' : 'Closed'}
                                   </span>
                                 </div>
+                                <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block truncate tabular-nums">
+                                  {svc.date ? `${formatServiceDate(svc.date)} · ` : ''}
+                                  {svc.startsAt}–{svc.endsAt}
+                                </span>
                               </button>
                               <button
                                 type="button"
@@ -1471,11 +1876,11 @@ export const AdminDashboard: React.FC = () => {
                                     status: svcBinaryStatus,
                                   })
                                 }
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors shrink-0 cursor-pointer"
+                                className="p-1 rounded-lg text-slate-400 hover:text-[#6D5CF2] cursor-pointer"
                                 title="Edit window and allowance"
                                 aria-label={`Edit ${svc.name}`}
                               >
-                                <Edit3 className="w-3.5 h-3.5" />
+                                <Edit3 className="w-3 h-3" />
                               </button>
                               {confirmDeleteCalendarSvcId === svc.id ? (
                                 <button
@@ -1488,7 +1893,7 @@ export const AdminDashboard: React.FC = () => {
                                       showToast(err?.message || 'Could not delete scheduled service.');
                                     }
                                   }}
-                                  className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                                  className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold cursor-pointer"
                                 >
                                   Confirm
                                 </button>
@@ -1496,11 +1901,11 @@ export const AdminDashboard: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteCalendarSvcId(svc.id)}
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors shrink-0 cursor-pointer"
-                                  title="Delete service from database"
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-500 cursor-pointer"
+                                  title="Delete service"
                                   aria-label={`Delete ${svc.name}`}
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-3 h-3" />
                                 </button>
                               )}
                             </div>
@@ -1510,218 +1915,122 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="pt-3 mt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs flex justify-between items-center gap-2">
+                  <div className="pt-2.5 mt-2.5 border-t border-[#E9EBF5] dark:border-[#2D2D55] text-xs flex justify-between items-center gap-2">
                     <button
                       type="button"
                       onClick={() => navigateTab('history')}
                       className="font-bold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline flex items-center gap-1 cursor-pointer"
                     >
                       <History className="w-3.5 h-3.5" />
-                      <span>View Service History</span>
+                      <span>History Archive ({services.length})</span>
                     </button>
-                    <span className="font-semibold text-[#666A86] dark:text-[#A9ACC8] truncate max-w-[140px]">
-                      {currentService.name}
-                    </span>
                   </div>
                 </section>
 
-                {/* Live Session Readiness */}
-                <section className="md:col-span-2 lg:col-span-3 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55]">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Live readiness
-                      </h2>
-                      <div className="flex -space-x-2">
-                        {members.slice(0, 4).map((m) => (
-                          <MemberAvatar
-                            key={m.id}
-                            src={m.imageUrl}
-                            name={`${m.firstName} ${m.lastName}`}
-                            initials={m.avatarInitials}
-                            sizeClass="w-7 h-7"
-                            textClass="text-[10px] font-bold"
-                            bgClass="bg-[#6D5CF2] text-white"
-                            borderClass="border-2 border-white dark:border-[#1D1D3D]"
-                          />
-                        ))}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => navigateTab('settings')}
-                      className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white flex items-center gap-1 cursor-pointer"
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                      Configure
-                    </button>
-                  </div>
-
-                  <div className="p-3 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] mb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Church Premise Geofence
-                      </b>
-                      <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
-                        {systemSettings.campusName} · {systemSettings.innerGeofenceMeters}m inner radius
-                      </em>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
-                      <span>{isPremiseConfigured ? '100%' : '0%'}</span>
-                      <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                        <div
-                          className="h-full bg-[#4FBF98] rounded-full transition-all"
-                          style={{ width: isPremiseConfigured ? '100%' : '0%' }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold">
-                      {isPremiseConfigured ? 'Active' : 'Unset'}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] mb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Congregation Roster
-                      </b>
-                      <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8]">
-                        Supabase live member directory ({uploadedPhotoMembers.length} photos)
-                      </em>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
-                      <span>{members.length > 0 ? '100%' : '0%'}</span>
-                      <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                        <div
-                          className="h-full bg-[#6D5CF2] rounded-full transition-all"
-                          style={{ width: members.length > 0 ? '100%' : '0%' }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold tabular-nums">
-                      {members.length} {members.length === 1 ? 'member' : 'members'}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <b className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        Live Service Check-ins
-                      </b>
-                      <em className="text-[11px] not-italic text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                        {currentService.name} (
-                        {currentService.date ? `${formatServiceDate(currentService.date)} · ` : ''}
-                        {currentService.startsAt}–{currentService.endsAt})
-                      </em>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] w-full sm:w-auto sm:min-w-[120px] tabular-nums">
-                      <span>{liveInsightsPreview.attendancePct}%</span>
-                      <div className="flex-1 h-1.5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] overflow-hidden">
-                        <div
-                          className="h-full bg-[#6D5CF2] rounded-full transition-all"
-                          style={{ width: `${liveInsightsPreview.attendancePct}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-semibold tabular-nums">
-                      {liveInsightsPreview.attendanceCount} present ·{' '}
-                      {liveInsightsPreview.absenteeCount} absent
-                    </span>
-                  </div>
-                </section>
-
-                {/* Auto Check-In Opt-In Card */}
-                <section className="md:col-span-1 lg:col-span-1 bg-[#6D5CF2] text-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-between text-center">
+                {/* Comms Gateways, Auto Check-In & Premise Telemetry (2 cols) */}
+                <section className="md:col-span-1 xl:col-span-2 bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col justify-between gap-3 tabular-nums">
                   <div>
-                    <h2 className="text-sm sm:text-base font-bold mb-1">Auto check-in</h2>
-                    <p className="text-xs text-white/90 leading-snug mb-3 tabular-nums">
-                      {members.length === 0
-                        ? 'Enroll members to enable automated proximity arrival.'
-                        : `${manualCheckinPercentage}% of members (${manualCheckinCount}) currently sign in manually.`}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (members.length === 0) {
-                        setEditingMember(null);
-                        setIsAddMemberOpen(true);
-                      } else {
-                        setIsMessageModalOpen(true);
-                      }
-                    }}
-                    className="w-full bg-white hover:bg-white/95 text-[#6D5CF2] rounded-xl py-2 text-xs font-extrabold transition-colors cursor-pointer"
-                  >
-                    {members.length === 0 ? 'Add first member' : 'Invite members'}
-                  </button>
-                </section>
-
-                {/* Outreach & Premise Status */}
-                <div className="md:col-span-1 lg:col-span-2 flex flex-col gap-4">
-                  <section className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 sm:p-5 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55] flex-1 flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                          Congregation Outreach
-                        </h2>
-                        <MessageCircle className="w-4 h-4 text-[#6D5CF2]" />
-                      </div>
-                      <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] leading-relaxed mb-3">
-                        Send service reminders, follow-up notes, or department notices via Push, SMS, or email.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsMessageModalOpen(true)}
-                      className="w-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-2 text-xs font-bold hover:opacity-90 transition-opacity cursor-pointer"
-                    >
-                      Compose Broadcast
-                    </button>
-                  </section>
-
-                  <section className="bg-white dark:bg-[#1D1D3D] rounded-3xl p-4 shadow-xs border border-[#E9EBF5] dark:border-[#2D2D55]">
-                    <div className="flex items-center justify-between mb-1">
-                      <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                        {systemSettings.campusName || 'Church Premise'}
+                    <div className="flex items-center justify-between mb-2">
+                      <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                        Gateways &amp; GPS
                       </h2>
-                      <span
-                        className={`text-[11px] font-semibold ${
-                          isPremiseConfigured
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-amber-600 dark:text-amber-400'
-                        }`}
-                      >
-                        {isPremiseConfigured ? 'Active' : 'Unset'}
-                      </span>
-                    </div>
-                    <span className="text-xs text-[#666A86] dark:text-[#A9ACC8] font-mono block tabular-nums">
-                      {isPremiseConfigured
-                        ? `${systemSettings.campusLatitude?.toFixed(6)}, ${systemSettings.campusLongitude?.toFixed(6)}`
-                        : 'GPS coordinates not pinned'}
-                    </span>
-                    <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] my-2 leading-relaxed tabular-nums">
-                      Inner perimeter: {systemSettings.innerGeofenceMeters}m · Dwell rule:{' '}
-                      {systemSettings.dwellTimeMinutes} min
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => navigateTab('proximity')}
-                        className="flex-1 bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-1.5 text-xs font-bold hover:opacity-90 transition-opacity cursor-pointer"
-                      >
-                        Live Radar
-                      </button>
                       <button
                         type="button"
                         onClick={() => navigateTab('settings')}
-                        className="flex-1 bg-[#6D5CF2] text-white rounded-xl py-1.5 text-xs font-bold hover:bg-[#5b4be0] transition-colors cursor-pointer"
+                        className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline cursor-pointer"
                       >
-                        Edit Premise
+                        Settings
                       </button>
                     </div>
-                  </section>
-                </div>
+
+                    <div className="space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E]">
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          <Smartphone className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                          Arkesel SMS
+                        </span>
+                        <span
+                          className={`font-bold ${
+                            communicationStatus.arkeselConfigured
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          {communicationStatus.arkeselConfigured ? 'Ready' : 'Env Unset'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E]">
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          <Mail className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                          Resend Email
+                        </span>
+                        <span
+                          className={`font-bold ${
+                            communicationStatus.resendConfigured
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          {communicationStatus.resendConfigured ? 'Ready' : 'Env Unset'}
+                        </span>
+                      </div>
+
+                      <div className="p-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E]">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            Auto Check-In Opt-In
+                          </span>
+                          <span className="font-mono font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                            {optInPercentage}%
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                          {autoCheckinOptedInCount} auto · {manualCheckinCount} manual
+                        </div>
+                      </div>
+
+                      <div className="p-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E]">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                            {systemSettings.campusName || 'Premise'}
+                          </span>
+                          <span
+                            className={`font-bold ${
+                              isPremiseConfigured
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {isPremiseConfigured ? 'Pinned' : 'Unset'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-mono text-[#666A86] dark:text-[#A9ACC8] mt-0.5 truncate">
+                          {isPremiseConfigured
+                            ? `${systemSettings.campusLatitude?.toFixed(4)}, ${systemSettings.campusLongitude?.toFixed(4)} (${systemSettings.innerGeofenceMeters}m)`
+                            : `Radius ${systemSettings.innerGeofenceMeters}m · ${systemSettings.dwellTimeMinutes}m dwell`}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsMessageModalOpen(true)}
+                      className="bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white rounded-xl py-1.5 text-[11px] font-bold transition-colors cursor-pointer"
+                    >
+                      Broadcast
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateTab('proximity')}
+                      className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] rounded-xl py-1.5 text-[11px] font-bold hover:opacity-90 transition-opacity cursor-pointer"
+                    >
+                      Live Radar
+                    </button>
+                  </div>
+                </section>
               </div>
             )}
           </>
@@ -1780,6 +2089,7 @@ export const AdminDashboard: React.FC = () => {
               checkInDisabledReason={checkInEligibility.message}
               initialDepartmentFilter={directoryDeptFilter}
               initialGroupFilter={directoryGroupFilter}
+              initialStatusFilter={directoryStatusFilter}
               initialDisplayMode={directoryDisplayMode}
             />
           </div>
@@ -2044,7 +2354,11 @@ export const AdminDashboard: React.FC = () => {
         absenteeThresholdServices={systemSettings.absenteeThresholdServices}
         smsGatewayProvider={systemSettings.smsGatewayProvider}
         smsSenderId={systemSettings.smsSenderId}
+        emailFromAddress={systemSettings.emailFromAddress}
+        emailSenderName={systemSettings.emailSenderName}
         enablePushNotifications={systemSettings.enablePushNotifications}
+        communicationStatus={communicationStatus}
+        onSendBroadcast={sendCommunicationBroadcast}
         onOpenGatewaySettings={() => requestOpenSettings('gateways')}
         onNotify={showToast}
       />
@@ -2057,6 +2371,8 @@ export const AdminDashboard: React.FC = () => {
         absenteeThresholdServices={systemSettings.absenteeThresholdServices}
         firstTimerFollowupHours={systemSettings.firstTimerFollowupHours}
         autoAssignCellLeaders={systemSettings.autoAssignCellLeaders}
+        isAutoAssigning={isAutoAssigningAbsentees}
+        onAutoAssignAbsentees={() => autoAssignAbsentees({ silent: false })}
         onOpenPastoralSettings={() => requestOpenSettings('pastoral')}
         onResolveTask={resolveFollowupTask}
         onNotify={showToast}

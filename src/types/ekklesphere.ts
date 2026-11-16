@@ -97,7 +97,8 @@ export interface Person {
   memberId?: string; // ID (membership ID or card number)
   squads?: string; // SQUADS
   department?: string; // DEPARTMENT (e.g. Ushering, Choir, Media)
-  officerName?: string; // MEMBERS/OFFICERS NAME (Designation/Role)
+  officerName?: string; // MEMBERS/OFFICERS NAME (Designation/Role/Portfolio)
+  designation?: string; // Alias synced with officerName / staff designation
   gender?: 'male' | 'female' | 'other' | string; // GENDER
   dateOfBirth?: string; // DATE OF BIRTH (YYYY-MM-DD)
   phoneE164: string; // PHONE NUMBER (E.164 format)
@@ -304,12 +305,19 @@ export interface FollowupTask {
   id: string;
   personId: string;
   personName: string;
+  personPhone?: string;
+  personEmail?: string;
   groupName: string;
   reason: FollowupReason;
   assignedToName: string;
+  assignedToMemberId?: string;
+  assignedToRole?: string;
+  assignedToPhone?: string;
+  autoAssigned?: boolean;
   status: FollowupStatus;
   dueOn: string;
   outcome?: string;
+  notes?: string;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -370,6 +378,9 @@ export interface SystemSettings {
   auditLogRetentionDays: number;
   smsGatewayProvider: string;
   smsSenderId: string;
+  emailGatewayProvider?: string;
+  emailFromAddress?: string;
+  emailSenderName?: string;
   enablePushNotifications: boolean;
 }
 

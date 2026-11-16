@@ -21,6 +21,7 @@ import {
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
 } from '../../utils/settingsConnections';
+import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../../constants/portfolios';
 
 interface MemberProfileEditorModalProps {
   isOpen: boolean;
@@ -113,6 +114,8 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
 
   const [homeCellGroup, setHomeCellGroup] = useState('General Congregation');
   const [department, setDepartment] = useState('General Congregation');
+  const [portfolio, setPortfolio] = useState('Member');
+  const [customPortfolio, setCustomPortfolio] = useState('');
   const [squads, setSquads] = useState('');
 
   const [maritalStatus, setMaritalStatus] = useState('Single');
@@ -167,6 +170,12 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
 
     setHomeCellGroup(member?.homeCellGroup || member?.groupName || 'General Congregation');
     setDepartment(member?.department || 'General Congregation');
+    const rawPortfolio = (member?.designation || member?.officerName || 'Member').trim();
+    const matchedPortfolio = CHURCH_PORTFOLIOS.find(
+      (p) => p.toLowerCase() === rawPortfolio.toLowerCase()
+    );
+    setPortfolio(matchedPortfolio || (rawPortfolio ? 'Other' : 'Member'));
+    setCustomPortfolio(matchedPortfolio ? '' : rawPortfolio);
     setSquads(member?.squads || '');
 
     setMaritalStatus(member?.maritalStatus || 'Single');
@@ -243,6 +252,9 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
     const nextGroup = homeCellGroup.trim() || 'General Congregation';
     const nextDept = department.trim() || 'General Congregation';
 
+    const nextPortfolio =
+      (portfolio === 'Other' ? customPortfolio.trim() : portfolio.trim()) || 'Member';
+
     setIsSaving(true);
     try {
       await updateOwnProfile({
@@ -264,6 +276,8 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
         homeCellGroup: nextGroup,
         groupName: nextGroup,
         department: nextDept,
+        officerName: nextPortfolio,
+        designation: nextPortfolio,
         squads: squads.trim(),
         maritalStatus: maritalStatus.trim() || 'Single',
         spouseName: maritalStatus.toLowerCase() === 'married' ? spouseName.trim() : '',
@@ -671,6 +685,34 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
                     </span>
                   </div>
                 )}
+
+                <div className="min-w-0">
+                  <label htmlFor="mpe-portfolio" className={labelClass}>
+                    Church Portfolio / Designation
+                  </label>
+                  <select
+                    id="mpe-portfolio"
+                    value={portfolio}
+                    onChange={(e) => setPortfolio(e.target.value)}
+                    className={inputClass}
+                  >
+                    {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                    <option value="Other">Other (Specify Custom...)</option>
+                  </select>
+                  {portfolio === 'Other' && (
+                    <input
+                      type="text"
+                      value={customPortfolio}
+                      onChange={(e) => setCustomPortfolio(e.target.value)}
+                      className={`${inputClass} mt-2`}
+                      placeholder="Enter your church portfolio or role"
+                    />
+                  )}
+                </div>
 
                 <div className="min-w-0">
                   <label htmlFor="mpe-squads" className={labelClass}>

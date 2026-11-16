@@ -22,6 +22,8 @@ import {
 import { getCanonicalMemberId, findMemberByScannedId } from '../member/DigitalMemberCard';
 import { CameraQrScanner } from '../common/CameraQrScanner';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { ContactCallButton } from '../common/ContactCallButton';
+import { getMemberPortfolio } from '../../constants/portfolios';
 import { memberMatchesChurchGroup } from '../../utils/settingsConnections';
 
 export const UsherTool: React.FC = () => {
@@ -36,6 +38,7 @@ export const UsherTool: React.FC = () => {
     totalCheckedInCount,
     expectedAttendance,
     visitorsCount,
+    serviceVisitorsCount,
     addVisitor,
     checkInPerson,
     isUsherOnline,
@@ -394,14 +397,19 @@ export const UsherTool: React.FC = () => {
 
         <div className="bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col justify-between">
           <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-            First-Time Visitors
+            Visitors Count
           </span>
-          <span className="text-3xl sm:text-4xl font-extrabold text-emerald-600 dark:text-emerald-400 tracking-tight tabular-nums mt-1">
-            {visitorsCount}
-          </span>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="text-3xl sm:text-4xl font-extrabold text-emerald-600 dark:text-emerald-400 tracking-tight tabular-nums">
+              {visitorsCount}
+            </span>
+            <span className="text-[11px] font-semibold text-[#5B5F7A] dark:text-[#A9ACC8] tabular-nums">
+              ({serviceVisitorsCount} today)
+            </span>
+          </div>
           <button
             onClick={() => setIsVisitorSheetOpen(true)}
-            className="text-[11px] font-bold text-[#6C5CE7] dark:text-[#8C7DFF] hover:underline mt-2 text-left"
+            className="text-[11px] font-bold text-[#6C5CE7] dark:text-[#8C7DFF] hover:underline mt-2 text-left cursor-pointer"
           >
             + Register visitor
           </button>
@@ -745,7 +753,17 @@ export const UsherTool: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="shrink-0">
+                    <div className="shrink-0 flex items-center gap-2">
+                      {(m.phoneE164 || m.phoneNumber || m.email) && (
+                        <ContactCallButton
+                          compact
+                          contactName={`${m.firstName} ${m.lastName}`.trim()}
+                          contactPhone={m.phoneE164 || m.phoneNumber}
+                          contactEmail={m.email}
+                          contactRole={getMemberPortfolio(m)}
+                          contactGroup={m.groupName || m.homeCellGroup}
+                        />
+                      )}
                       {isChecked ? (
                         <span
                           className={`text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 ${

@@ -20,6 +20,7 @@ import {
 import { MemberAvatar } from '../common/MemberAvatar';
 import { getExternalImageOpenUrl, probeImageProxyDiagnostic } from '../../utils/imageUrl';
 import { compressImageFile } from '../../utils/imageCompression';
+import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../../constants/portfolios';
 import {
   findMatchingChurchGroup,
   mergeSelectableCellGroups,
@@ -58,18 +59,7 @@ const COMMON_DEPARTMENTS = [
 ];
 
 export const COMMON_DESIGNATIONS = [
-  'Member',
-  'Deacon',
-  'Deaconess',
-  'Elder',
-  'Pastor',
-  'Senior Pastor',
-  'Associate Pastor',
-  'Youth Pastor',
-  'Cell Leader',
-  'Ministry Leader',
-  'Department Head',
-  'Usher Captain',
+  ...CHURCH_PORTFOLIOS,
   'Other',
 ] as const;
 
@@ -124,16 +114,16 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [squads, setSquads] = useState(initialData?.squads || '');
   const [department, setDepartment] = useState(initialData?.department || 'General Congregation');
 
-  // Designation dropdown state & custom fallback
-  const initialOfficer = initialData?.officerName || 'Member';
+  // Designation / Portfolio dropdown state & custom fallback
+  const initialOfficer = initialData?.officerName || initialData?.designation || 'Member';
   const matchedPredefined = COMMON_DESIGNATIONS.find(
     (d) => d.toLowerCase() === initialOfficer.trim().toLowerCase()
   );
   const [officerName, setOfficerName] = useState<string>(
-    matchedPredefined || (initialData?.officerName ? 'Other' : 'Member')
+    matchedPredefined || (initialData?.officerName || initialData?.designation ? 'Other' : 'Member')
   );
   const [customOfficerName, setCustomOfficerName] = useState<string>(
-    matchedPredefined ? '' : (initialData?.officerName || '')
+    matchedPredefined ? '' : (initialData?.officerName || initialData?.designation || '')
   );
 
   const [occupation, setOccupation] = useState(initialData?.occupation || '');
@@ -224,12 +214,12 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     setSquads(source?.squads || '');
     setDepartment(source?.department || 'General Congregation');
 
-    const srcOfficer = source?.officerName || 'Member';
+    const srcOfficer = source?.officerName || source?.designation || 'Member';
     const matched = COMMON_DESIGNATIONS.find(
       (d) => d.toLowerCase() === srcOfficer.trim().toLowerCase()
     );
-    setOfficerName(matched || (source?.officerName ? 'Other' : 'Member'));
-    setCustomOfficerName(matched ? '' : (source?.officerName || ''));
+    setOfficerName(matched || (source?.officerName || source?.designation ? 'Other' : 'Member'));
+    setCustomOfficerName(matched ? '' : (source?.officerName || source?.designation || ''));
 
     setOccupation(source?.occupation || '');
     setRemarks(source?.remarks || source?.notes || '');
@@ -339,6 +329,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       squads: squads.trim() || undefined,
       department: department.trim() || 'General Congregation',
       officerName: finalOfficer || 'Member',
+      designation: finalOfficer || 'Member',
       gender,
       dateOfBirth: dateOfBirth || undefined,
       phoneE164: finalPhone,
@@ -792,7 +783,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                    MEMBERS/OFFICERS NAME (Designation) <span className="text-rose-500">*</span>
+                    CHURCH PORTFOLIO / DESIGNATION <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={officerName}
@@ -808,18 +799,11 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                         : 'border-[#E9EBF5] dark:border-[#2D2D55] focus:ring-[#6D5CF2]'
                     } text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 cursor-pointer font-medium transition-all`}
                   >
-                    <option value="Member">Member</option>
-                    <option value="Deacon">Deacon</option>
-                    <option value="Deaconess">Deaconess</option>
-                    <option value="Elder">Elder</option>
-                    <option value="Pastor">Pastor</option>
-                    <option value="Senior Pastor">Senior Pastor</option>
-                    <option value="Associate Pastor">Associate Pastor</option>
-                    <option value="Youth Pastor">Youth Pastor</option>
-                    <option value="Cell Leader">Cell Leader</option>
-                    <option value="Ministry Leader">Ministry Leader</option>
-                    <option value="Department Head">Department Head</option>
-                    <option value="Usher Captain">Usher Captain</option>
+                    {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                     <option value="Other">Other (Specify Custom...)</option>
                   </select>
 

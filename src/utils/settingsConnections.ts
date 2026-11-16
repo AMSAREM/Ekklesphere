@@ -5,6 +5,12 @@ import {
   Person,
   SystemSettings,
 } from '../types/ekklesphere';
+import {
+  getMemberPortfolio,
+  getPortfolioPriorityScore,
+  isPastoralOfficerOrLeader,
+  isSeniorPastoralPortfolio,
+} from '../constants/portfolios';
 
 export type SettingsTabId =
   | 'general'
@@ -348,13 +354,103 @@ export function mergeSelectableCellGroups(
   return Array.from(seen.values());
 }
 
+export interface ResolvedFollowupAssignee {
+  assignedToName: string;
+  groupName: string;
+  assignedToMemberId?: string;
+  assignedToRole?: string;
+  assignedToPhone?: string;
+}
+
+export interface AutoAssignAbsenteesPlanItem {
+  personId: string;
+  personName: string;
+  personPhone?: string;
+  personEmail?: string;
+  groupName: string;
+  reason: FollowupTask['reason'];
+  assignedToName: string;
+  assignedToMemberId?: string;
+  assignedToRole?: string;
+  assignedToPhone?: string;
+  dueOn: string;
+  notes: string;
+}
+
+function getMemberGroupMatchScore(candidate: Person, targetMember?: Person): number {
+  if (!targetMember) return 0;
+  const targetCell = normalizeSettingLabel(targetMember.homeCellGroup || targetMember.groupName).toLowerCase();
+  const targetDept = normalizeSettingLabel(targetMember.department).toLowerCase();
+  const candCell = normalizeSettingLabel(candidate.homeCellGroup || candidate.groupName).toLowerCase();
+  const candDept = normalizeSettingLabel(candidate.department).toLowerCase();
+
+  let score = 0;
+  if (
+    targetCell &&
+    targetCell !== 'general' &&
+    targetCell !== 'general congregation' &&
+    candCell &&
+    candCell === targetCell
+  ) {
+    score += 40;
+  }
+  if (
+    targetDept &&
+    targetDept !== 'general' &&
+    targetDept !== 'general congregation' &&
+    candDept &&
+    candDept === targetDept
+  ) {
+    score += 30;
+  }
+  return score;
+}
+
+function pickBestOfficerOrLeader(
+  candidates: Person[],
+  targetMember: Person | undefined,
+  reason: FollowupTask['reason'],
+  loadByName: Map<string, number>
+): Person | undefined {
+  if (candidates.length === 0) return undefined;
+  const targetId = targetMember?.id;
+  const eligible = candidates.filter((c) => c.id !== targetId);
+  if (eligible.length === 0) return undefined;
+
+  const sorted = [...eligible].sort((a, b) => {
+    const aName = getMemberFullName(a).toLowerCase();
+    const bName = getMemberFullName(b).toLowerCase();
+    const aLoad = loadByName.get(aName) ?? 0;
+    const bLoad = loadByName.get(bName) ?? 0;
+
+    // Group affinity comes first for standard follow-ups; senior escalation prioritizes senior roles
+    const aGroupAffinity = getMemberGroupMatchScore(a, targetMember);
+    const bGroupAffinity = getMemberGroupMatchScore(b, targetMember);
+    const aSeniorBoost =
+      reason === 'absent_3' && isSeniorPastoralPortfolio(getMemberPortfolio(a)) ? 35 : 0;
+    const bSeniorBoost =
+      reason === 'absent_3' && isSeniorPastoralPortfolio(getMemberPortfolio(b)) ? 35 : 0;
+
+    // Prefer least-loaded officer/leader first when affinity tier matches
+    const aScore = aGroupAffinity + aSeniorBoost - aLoad * 25 + getPortfolioPriorityScore(getMemberPortfolio(a)) * 0.15;
+    const bScore = bGroupAffinity + bSeniorBoost - bLoad * 25 + getPortfolioPriorityScore(getMemberPortfolio(b)) * 0.15;
+    if (bScore !== aScore) return bScore - aScore;
+    return aName.localeCompare(bName);
+  });
+
+  return sorted[0];
+}
+
 export function resolveFollowupAssignee(
   member: Person | undefined,
   churchGroups: ChurchGroup[],
   systemSettings: SystemSettings,
   reason: FollowupTask['reason'],
-  fallbackActorName?: string
-): { assignedToName: string; groupName: string } {
+  fallbackActorName?: string,
+  allMembers: Person[] = [],
+  existingOpenTasks: FollowupTask[] = [],
+  loadOverride?: Map<string, number>
+): ResolvedFollowupAssignee {
   const memberGroupLabel =
     normalizeSettingLabel(member?.homeCellGroup) ||
     normalizeSettingLabel(member?.groupName) ||
@@ -367,39 +463,220 @@ export function resolveFollowupAssignee(
     department: member?.department,
   });
 
-  const matchedLeader =
-    cellOrFellowshipGroup?.leaderName?.trim() ||
-    ministryGroup?.leaderName?.trim() ||
-    '';
+  const resolvedGroupName = cellOrFellowshipGroup?.name || ministryGroup?.name || memberGroupLabel;
+
+  const loadByName = loadOverride || new Map<string, number>();
+  if (!loadOverride && existingOpenTasks.length > 0) {
+    for (const t of existingOpenTasks) {
+      if (t.status === 'open' || t.status === 'contacted') {
+        const key = normalizeSettingLabel(t.assignedToName).toLowerCase();
+        if (key) loadByName.set(key, (loadByName.get(key) || 0) + 1);
+      }
+    }
+  }
 
   const seniorPastorFallback =
     normalizeSettingLabel(systemSettings.seniorPastor) ||
     normalizeSettingLabel(fallbackActorName) ||
     'Pastoral Care Team';
 
+  // Lookup matching member record for a named group leader so we retain ID, phone & portfolio
+  const findMemberByLeader = (leaderMemberId?: string, leaderName?: string): Person | undefined => {
+    if (leaderMemberId) {
+      const byId = allMembers.find((m) => m.id === leaderMemberId);
+      if (byId && byId.id !== member?.id) return byId;
+    }
+    const clean = normalizeSettingLabel(leaderName).toLowerCase();
+    if (!clean) return undefined;
+    return allMembers.find((m) => m.id !== member?.id && getMemberFullName(m).toLowerCase() === clean);
+  };
+
+  const cellLeaderName = cellOrFellowshipGroup?.leaderName?.trim() || '';
+  const ministryLeaderName = ministryGroup?.leaderName?.trim() || '';
+
+  const pastoralOfficers = allMembers.filter((m) => isPastoralOfficerOrLeader(m));
+  const bestOfficer = pickBestOfficerOrLeader(pastoralOfficers, member, reason, loadByName);
+
+  // If the absentee member happens to be the group's own leader, don't self-assign!
+  const matchedGroupLeaderName =
+    cellLeaderName &&
+    (!member || cellLeaderName.toLowerCase() !== getMemberFullName(member).toLowerCase())
+      ? cellLeaderName
+      : ministryLeaderName &&
+        (!member || ministryLeaderName.toLowerCase() !== getMemberFullName(member).toLowerCase())
+      ? ministryLeaderName
+      : '';
+
+  const matchedGroupRef =
+    matchedGroupLeaderName === cellLeaderName ? cellOrFellowshipGroup : ministryGroup;
+  const matchedLeaderMember = matchedGroupLeaderName
+    ? findMemberByLeader(matchedGroupRef?.leaderMemberId, matchedGroupLeaderName)
+    : undefined;
+
   if (systemSettings.autoAssignCellLeaders) {
     if (reason === 'absent_3') {
+      // Escalate severe absences to Senior Pastor -> Elder/Deacon/Officer -> Group Leader
+      const seniorName = normalizeSettingLabel(systemSettings.seniorPastor);
+      if (seniorName && (!member || seniorName.toLowerCase() !== getMemberFullName(member).toLowerCase())) {
+        const seniorMember = findMemberByLeader(undefined, seniorName);
+        return {
+          assignedToName: seniorName,
+          groupName: resolvedGroupName,
+          assignedToMemberId: seniorMember?.id,
+          assignedToRole: seniorMember ? getMemberPortfolio(seniorMember) : 'Senior Pastor',
+          assignedToPhone: seniorMember?.phoneE164 || systemSettings.contactPhone || undefined,
+        };
+      }
+      if (bestOfficer) {
+        return {
+          assignedToName: getMemberFullName(bestOfficer),
+          groupName: resolvedGroupName,
+          assignedToMemberId: bestOfficer.id,
+          assignedToRole: getMemberPortfolio(bestOfficer),
+          assignedToPhone: bestOfficer.phoneE164 || undefined,
+        };
+      }
+    }
+
+    if (matchedGroupLeaderName) {
       return {
-        assignedToName:
-          normalizeSettingLabel(systemSettings.seniorPastor) ||
-          matchedLeader ||
-          seniorPastorFallback,
-        groupName: cellOrFellowshipGroup?.name || ministryGroup?.name || memberGroupLabel,
+        assignedToName: matchedGroupLeaderName,
+        groupName: resolvedGroupName,
+        assignedToMemberId: matchedLeaderMember?.id || matchedGroupRef?.leaderMemberId || undefined,
+        assignedToRole: matchedLeaderMember
+          ? getMemberPortfolio(matchedLeaderMember)
+          : cellLeaderName === matchedGroupLeaderName
+          ? 'Cell Leader'
+          : 'Ministry Leader',
+        assignedToPhone:
+          matchedLeaderMember?.phoneE164 || matchedGroupRef?.leaderPhone || undefined,
       };
     }
 
-    if (matchedLeader) {
+    // No explicit group leader matched: assign to matching congregation Officer (Deacon, Deaconess, Elder, Pastor, Leader)
+    if (bestOfficer) {
       return {
-        assignedToName: matchedLeader,
-        groupName: cellOrFellowshipGroup?.name || ministryGroup?.name || memberGroupLabel,
+        assignedToName: getMemberFullName(bestOfficer),
+        groupName: resolvedGroupName,
+        assignedToMemberId: bestOfficer.id,
+        assignedToRole: getMemberPortfolio(bestOfficer),
+        assignedToPhone: bestOfficer.phoneE164 || undefined,
       };
     }
+  } else if (bestOfficer && reason !== 'absent_3') {
+    const seniorMember = findMemberByLeader(undefined, seniorPastorFallback);
+    return {
+      assignedToName: seniorPastorFallback,
+      groupName: resolvedGroupName,
+      assignedToMemberId: seniorMember?.id,
+      assignedToRole: seniorMember ? getMemberPortfolio(seniorMember) : 'Senior Pastor',
+      assignedToPhone: seniorMember?.phoneE164 || systemSettings.contactPhone || undefined,
+    };
   }
 
   return {
     assignedToName: seniorPastorFallback,
-    groupName: cellOrFellowshipGroup?.name || ministryGroup?.name || memberGroupLabel,
+    groupName: resolvedGroupName,
   };
+}
+
+export function buildAutoAssignAbsenteesPlan(params: {
+  members: Person[];
+  churchGroups: ChurchGroup[];
+  existingTasks: FollowupTask[];
+  systemSettings: SystemSettings;
+  fallbackActorName?: string;
+  unarrivedMemberIdsForLatestService?: Set<string>;
+}): AutoAssignAbsenteesPlanItem[] {
+  const {
+    members,
+    churchGroups,
+    existingTasks,
+    systemSettings,
+    fallbackActorName,
+    unarrivedMemberIdsForLatestService,
+  } = params;
+
+  const threshold = Math.max(1, Number(systemSettings.absenteeThresholdServices) || 2);
+  const activeTaskPersonIds = new Set(
+    existingTasks
+      .filter((t) => t.status === 'open' || t.status === 'contacted')
+      .map((t) => String(t.personId))
+  );
+
+  // Track live open caseload so assignments distribute fairly across Officers & Cell Leaders
+  const loadByName = new Map<string, number>();
+  for (const t of existingTasks) {
+    if (t.status === 'open' || t.status === 'contacted') {
+      const key = normalizeSettingLabel(t.assignedToName).toLowerCase();
+      if (key) loadByName.set(key, (loadByName.get(key) || 0) + 1);
+    }
+  }
+
+  const plan: AutoAssignAbsenteesPlanItem[] = [];
+
+  for (const member of members) {
+    if (member.status === 'inactive' || member.status === 'transferred' || member.status === 'deceased') {
+      continue;
+    }
+    if (activeTaskPersonIds.has(String(member.id))) {
+      continue;
+    }
+
+    const consecutive = Number(member.consecutiveAbsences || 0);
+    const isAbsentByStreak = consecutive >= threshold;
+    const isAbsentInService = Boolean(unarrivedMemberIdsForLatestService?.has(member.id));
+    if (!isAbsentByStreak && !isAbsentInService) {
+      continue;
+    }
+
+    const effectiveStreak = Math.max(consecutive, isAbsentInService ? threshold : 0);
+    const reason: FollowupTask['reason'] =
+      effectiveStreak >= threshold + 1 ? 'absent_3' : 'absent_2';
+
+    const resolved = resolveFollowupAssignee(
+      member,
+      churchGroups,
+      systemSettings,
+      reason,
+      fallbackActorName,
+      members,
+      existingTasks,
+      loadByName
+    );
+
+    const assigneeKey = normalizeSettingLabel(resolved.assignedToName).toLowerCase();
+    if (assigneeKey) {
+      loadByName.set(assigneeKey, (loadByName.get(assigneeKey) || 0) + 1);
+    }
+    activeTaskPersonIds.add(String(member.id));
+
+    const dueOn = formatFollowupDueDateLabel(
+      reason,
+      systemSettings.firstTimerFollowupHours,
+      threshold
+    );
+
+    const roleHint = resolved.assignedToRole ? ` (${resolved.assignedToRole})` : '';
+    plan.push({
+      personId: member.id,
+      personName: getMemberFullName(member) || 'Member',
+      personPhone: member.phoneE164 || member.phoneNumber || undefined,
+      personEmail: member.email || undefined,
+      groupName: resolved.groupName,
+      reason,
+      assignedToName: resolved.assignedToName,
+      assignedToMemberId: resolved.assignedToMemberId,
+      assignedToRole: resolved.assignedToRole,
+      assignedToPhone: resolved.assignedToPhone,
+      dueOn,
+      notes: `Auto-assigned to ${resolved.assignedToName}${roleHint} after ${effectiveStreak} missed service${
+        effectiveStreak === 1 ? '' : 's'
+      }.`,
+    });
+  }
+
+  return plan;
 }
 
 export function formatFollowupDueDateLabel(

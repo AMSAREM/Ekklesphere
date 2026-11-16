@@ -84,7 +84,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     isSyncingSystemSettings,
     updateSystemSettings,
     resetSystemSettings,
+    communicationStatus,
     sendTestSmsGateway,
+    sendTestEmailGateway,
+    autoAssignAbsentees,
+    isAutoAssigningAbsentees,
     setChurchPremiseLocation,
     clearChurchPremiseLocation,
     showToast,
@@ -251,6 +255,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [sharedMapLink, setSharedMapLink] = useState('');
   const [isResolvingMapLink, setIsResolvingMapLink] = useState(false);
   const [isTestingSms, setIsTestingSms] = useState(false);
+  const [testSmsRecipientPhone, setTestSmsRecipientPhone] = useState('');
+  const [testEmailRecipient, setTestEmailRecipient] = useState(
+    systemSettings.contactEmail || currentUser?.email || ''
+  );
+  const [isTestingEmail, setIsTestingEmail] = useState(false);
 
   React.useEffect(() => {
     if (!hasChanges) {
@@ -994,9 +1003,35 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     }
     setIsTestingSms(true);
     try {
-      await sendTestSmsGateway(formData.smsGatewayProvider, formData.smsSenderId);
+      await sendTestSmsGateway(
+        formData.smsGatewayProvider,
+        formData.smsSenderId,
+        testSmsRecipientPhone.trim() || formData.contactPhone?.trim() || undefined
+      );
     } finally {
       setIsTestingSms(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!isSettingsAdmin && currentUser?.role !== 'pastor') {
+      showToast('Only church admins or pastors can dispatch email gateway tests.');
+      return;
+    }
+    const targetEmail = (testEmailRecipient || formData.contactEmail || currentUser?.email || '').trim();
+    if (!targetEmail) {
+      showToast('Enter a recipient email address to send a Resend test email.');
+      return;
+    }
+    setIsTestingEmail(true);
+    try {
+      await sendTestEmailGateway({
+        recipientEmail: targetEmail,
+        fromEmail: formData.emailFromAddress?.trim() || undefined,
+        fromName: formData.emailSenderName?.trim() || formData.churchName?.trim() || undefined,
+      });
+    } finally {
+      setIsTestingEmail(false);
     }
   };
 
@@ -2546,26 +2581,36 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
               </div>
 
-              {/* Connected Pastoral Routing Preview */}
-              <div className="p-3.5 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                <div>
+              {/* Connected Pastoral Routing Preview & Auto-Assign Action */}
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
                   <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                     Live Care Routing:{' '}
                   </span>
                   <span className="text-[#666A86] dark:text-[#A9ACC8]">
                     {formData.autoAssignCellLeaders
-                      ? `${churchGroups.filter((g) => g.active && g.leaderName).length} active group/ministry leaders linked for automatic assignment`
+                      ? `${churchGroups.filter((g) => g.active && g.leaderName).length} active group leaders + Church Officers (Deacon, Deaconess, Elder, Pastor) load-balanced automatically`
                       : `All new care tasks assign directly to ${formData.seniorPastor || 'Pastoral Care Team'}`}
                     {' · '}Visitor SLA: Within {formData.firstTimerFollowupHours}h
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('groups')}
-                  className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  Review Group Leaders
-                </button>
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isAutoAssigningAbsentees}
+                    onClick={() => autoAssignAbsentees({ silent: false })}
+                    className="px-3 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] font-bold hover:opacity-90 transition-opacity whitespace-nowrap cursor-pointer disabled:opacity-60"
+                  >
+                    {isAutoAssigningAbsentees ? 'Auto-Assigning...' : 'Auto-Assign Absentees Now'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('groups')}
+                    className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline whitespace-nowrap cursor-pointer"
+                  >
+                    Review Group Leaders
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2666,50 +2711,161 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 <span>Communication & Mobile Money Gateways</span>
               </h3>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Setup SMS broadcast endpoints (Hubtel / Arkesel / Twilio) and verified Mobile Money / Paystack webhooks.
+                Configure Arkesel SMS broadcasts, Resend transactional &amp; pastoral emails, and Mobile Money webhooks. Server API keys remain encrypted in environment secrets.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                  Primary SMS Gateway Provider
-                </label>
-                <select
-                  value={formData.smsGatewayProvider}
-                  onChange={(e) => handleChange('smsGatewayProvider', e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+            {/* SMS Gateway (Arkesel API) */}
+            <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    SMS Broadcast Gateway (Arkesel API)
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Authenticated server-side via <span className="font-mono">ARKESEL_API_KEY</span>.
+                  </div>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                    communicationStatus.arkeselConfigured
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  }`}
                 >
-                  <option value="Hubtel Ghana">Hubtel Ghana (Recommended for Local MTN/Telecel)</option>
-                  <option value="Arkesel SMS">Arkesel SMS Gateway</option>
-                  <option value="Twilio Global">Twilio Global Messaging</option>
-                </select>
+                  {communicationStatus.arkeselConfigured ? 'Arkesel API Ready' : 'Set ARKESEL_API_KEY in Env'}
+                </span>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                  SMS Sender ID (Mask)
-                </label>
-                <div className="flex gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Primary SMS Gateway Provider
+                  </label>
+                  <select
+                    value={formData.smsGatewayProvider}
+                    onChange={(e) => handleChange('smsGatewayProvider', e.target.value)}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  >
+                    <option value="Arkesel SMS">Arkesel SMS API (Recommended)</option>
+                    <option value="Hubtel Ghana">Hubtel Ghana</option>
+                    <option value="Twilio Global">Twilio Global Messaging</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    SMS Sender ID (Mask)
+                  </label>
                   <input
                     type="text"
                     maxLength={11}
                     value={formData.smsSenderId}
                     onChange={(e) => handleChange('smsSenderId', e.target.value.toUpperCase())}
-                    className="flex-1 px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono uppercase"
+                    placeholder={communicationStatus.defaultSmsSenderId || 'EKKLESPHERE'}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono uppercase"
                   />
-                  <button
-                    type="button"
-                    disabled={isTestingSms}
-                    onClick={handleTestSms}
-                    className="px-3 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] dark:hover:bg-[#343468] transition-all cursor-pointer whitespace-nowrap disabled:opacity-60"
-                  >
-                    {isTestingSms ? 'Testing...' : 'Send Test'}
-                  </button>
+                  <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                    Max 11 alphanumeric NCA-approved characters.
+                  </p>
                 </div>
-                <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                  Max 11 alphanumeric characters approved by National Communications Authority (NCA).
-                </p>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Test SMS Recipient (Optional)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="tel"
+                      value={testSmsRecipientPhone}
+                      onChange={(e) => setTestSmsRecipientPhone(e.target.value)}
+                      placeholder={formData.contactPhone || '+233240000000'}
+                      className="flex-1 min-w-0 px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                    />
+                    <button
+                      type="button"
+                      disabled={isTestingSms}
+                      onClick={handleTestSms}
+                      className="px-3 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white transition-all cursor-pointer whitespace-nowrap disabled:opacity-60"
+                    >
+                      {isTestingSms ? 'Sending...' : 'Send Test'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Email Gateway (Resend API) */}
+            <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Email Delivery Gateway (Resend API)
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Authenticated server-side via <span className="font-mono">RESEND_API_KEY</span>.
+                  </div>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                    communicationStatus.resendConfigured
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  }`}
+                >
+                  {communicationStatus.resendConfigured ? 'Resend API Ready' : 'Set RESEND_API_KEY in Env'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Sender Display Name
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.emailSenderName || ''}
+                    onChange={(e) => handleChange('emailSenderName', e.target.value)}
+                    placeholder={formData.churchName || communicationStatus.defaultFromName || 'Ekklesphere Church'}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Verified From Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={formData.emailFromAddress || ''}
+                    onChange={(e) => handleChange('emailFromAddress', e.target.value)}
+                    placeholder={communicationStatus.defaultFromEmail || 'noreply@yourchurch.org'}
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Test Recipient Email
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={testEmailRecipient}
+                      onChange={(e) => setTestEmailRecipient(e.target.value)}
+                      placeholder={formData.contactEmail || currentUser?.email || 'pastor@church.org'}
+                      className="flex-1 min-w-0 px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                    />
+                    <button
+                      type="button"
+                      disabled={isTestingEmail}
+                      onClick={handleTestEmail}
+                      className="px-3 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white transition-all cursor-pointer whitespace-nowrap disabled:opacity-60"
+                    >
+                      {isTestingEmail ? 'Sending...' : 'Send Email'}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 

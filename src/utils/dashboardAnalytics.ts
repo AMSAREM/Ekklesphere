@@ -14,6 +14,7 @@ import {
   ServiceInstance,
   SystemSettings,
 } from '../types/ekklesphere';
+import { getMemberPortfolio, isPastoralOfficerOrLeader } from '../constants/portfolios';
 import { computeServiceBinaryStatus, BinaryServiceStatus } from './serviceStatus';
 import {
   findMatchingChurchGroup,
@@ -168,6 +169,8 @@ export interface DashboardAnalyticsResult {
     totalMembers: number;
     activeStatusCount: number;
     visitorsCount: number;
+    serviceVisitorsCount: number;
+    officersCount: number;
     inactiveCount: number;
     autoCheckinCount: number;
     autoCheckinPct: number;
@@ -322,6 +325,8 @@ export function computeDashboardAnalytics(
   const totalMembers = members.length;
   let activeStatusCount = 0;
   let visitorsCount = 0;
+  let serviceVisitorsCount = 0;
+  let officersCount = 0;
   let inactiveCount = 0;
   let autoCheckinCount = 0;
   let maleCount = 0;
@@ -396,10 +401,19 @@ export function computeDashboardAnalytics(
     const isPresent = checkedInPersonIds.has(m.id);
     const isAtRisk = !isPresent && (m.consecutiveAbsences || 0) >= threshold;
 
-    if (m.status === 'visitor') visitorsCount++;
-    else if (m.status === 'inactive' || m.status === 'transferred' || m.status === 'deceased')
+    if (m.status === 'visitor') {
+      visitorsCount++;
+      if (isPresent) serviceVisitorsCount++;
+    } else if (m.status === 'inactive' || m.status === 'transferred' || m.status === 'deceased') {
       inactiveCount++;
-    else activeStatusCount++;
+    } else {
+      activeStatusCount++;
+    }
+
+    const portfolioLabel = getMemberPortfolio(m);
+    if (isPastoralOfficerOrLeader(m) || (portfolioLabel && portfolioLabel !== 'Member' && portfolioLabel !== 'Guest')) {
+      officersCount++;
+    }
 
     if (m.autoCheckinOptedIn) autoCheckinCount++;
 
@@ -878,6 +892,8 @@ export function computeDashboardAnalytics(
       totalMembers,
       activeStatusCount,
       visitorsCount,
+      serviceVisitorsCount,
+      officersCount,
       inactiveCount,
       autoCheckinCount,
       autoCheckinPct,

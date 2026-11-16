@@ -31,7 +31,13 @@ import {
 } from 'lucide-react';
 import { Person, MEMBERSHIP_TABLE_HEADERS } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
+import { ContactCallButton } from '../common/ContactCallButton';
 import { useEkklesphere } from '../../context/EkklesphereContext';
+import {
+  CHURCH_PORTFOLIO_OPTIONS,
+  getMemberPortfolio,
+  isPastoralOfficerOrLeader,
+} from '../../constants/portfolios';
 import {
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
@@ -56,6 +62,8 @@ interface MemberDirectoryTableProps {
   checkInDisabledReason?: string;
   initialDepartmentFilter?: string | null;
   initialGroupFilter?: string | null;
+  initialStatusFilter?: 'all' | 'member' | 'visitor' | 'officers' | null;
+  initialPortfolioFilter?: string | null;
   initialDisplayMode?: 'table' | 'photos';
 }
 
@@ -71,6 +79,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   checkInDisabledReason,
   initialDepartmentFilter,
   initialGroupFilter,
+  initialStatusFilter,
+  initialPortfolioFilter,
   initialDisplayMode,
 }) => {
   const { churchGroups, requestOpenSettings, requestOpenUserManagement } = useEkklesphere();
@@ -78,6 +88,12 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>(
     initialDepartmentFilter || 'all'
+  );
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<
+    'all' | 'member' | 'visitor' | 'officers'
+  >(initialStatusFilter || 'all');
+  const [selectedPortfolioFilter, setSelectedPortfolioFilter] = useState<string>(
+    initialPortfolioFilter || 'all'
   );
   const [viewPreset, setViewPreset] = useState<'all' | 'essential' | 'church' | 'spiritual'>('all');
 
@@ -92,6 +108,18 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
       setSelectedGroupFilter(initialGroupFilter || 'all');
     }
   }, [initialGroupFilter]);
+
+  useEffect(() => {
+    if (initialStatusFilter !== undefined) {
+      setSelectedStatusFilter(initialStatusFilter || 'all');
+    }
+  }, [initialStatusFilter]);
+
+  useEffect(() => {
+    if (initialPortfolioFilter !== undefined) {
+      setSelectedPortfolioFilter(initialPortfolioFilter || 'all');
+    }
+  }, [initialPortfolioFilter]);
 
   const [displayMode, setDisplayMode] = useState<'table' | 'photos'>(initialDisplayMode || 'table');
 
@@ -227,6 +255,24 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         return false;
       }
 
+      // Status / Visitor / Officers filter
+      if (selectedStatusFilter === 'visitor' && m.status !== 'visitor') {
+        return false;
+      }
+      if (selectedStatusFilter === 'member' && m.status !== 'member') {
+        return false;
+      }
+      if (selectedStatusFilter === 'officers' && !isPastoralOfficerOrLeader(m)) {
+        return false;
+      }
+
+      // Portfolio / Designation filter
+      if (selectedPortfolioFilter !== 'all') {
+        if (getMemberPortfolio(m).toLowerCase() !== selectedPortfolioFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
       // Cell Group / Ministry filter
       if (selectedGroupFilter !== 'all') {
         const needle = normalizeSettingLabel(selectedGroupFilter).toLowerCase();
@@ -272,10 +318,19 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         (m.department && m.department.toLowerCase().includes(q)) ||
         (m.homeCellGroup && m.homeCellGroup.toLowerCase().includes(q)) ||
         (m.squads && m.squads.toLowerCase().includes(q)) ||
-        (m.officerName && m.officerName.toLowerCase().includes(q))
+        getMemberPortfolio(m).toLowerCase().includes(q)
       );
     });
-  }, [members, searchQuery, selectedGroupFilter, selectedDepartmentFilter, photosOnlyFilter, displayMode]);
+  }, [
+    members,
+    searchQuery,
+    selectedStatusFilter,
+    selectedPortfolioFilter,
+    selectedGroupFilter,
+    selectedDepartmentFilter,
+    photosOnlyFilter,
+    displayMode,
+  ]);
 
   // Export full 28 columns CSV
   const handleExportCSV = () => {
@@ -474,6 +529,38 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
               <span>With Photo ({uploadedPhotosCount})</span>
             </button>
           )}
+
+          {/* Status / Visitors / Officers Filter */}
+          <select
+            aria-label="Filter by congregation status"
+            value={selectedStatusFilter}
+            onChange={(e) =>
+              setSelectedStatusFilter(
+                e.target.value as 'all' | 'member' | 'visitor' | 'officers'
+              )
+            }
+            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
+          >
+            <option value="all">All Statuses</option>
+            <option value="member">Registered Members</option>
+            <option value="visitor">Visitors / Guests</option>
+            <option value="officers">Church Officers &amp; Leaders</option>
+          </select>
+
+          {/* Portfolio / Designation Filter */}
+          <select
+            aria-label="Filter by church portfolio"
+            value={selectedPortfolioFilter}
+            onChange={(e) => setSelectedPortfolioFilter(e.target.value)}
+            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
+          >
+            <option value="all">All Portfolios</option>
+            {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
 
           {/* Department Filter */}
           <select
@@ -845,12 +932,20 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {visibleColumns['MEMBERS/OFFICERS NAME'] && (
                         <td className="py-3 px-3.5">
                           {(() => {
-                            const name = member.officerName || 'Member';
+                            const name = getMemberPortfolio(member);
                             const lower = name.toLowerCase();
-                            const isPastor = lower.includes('pastor');
+                            const isPastor = lower.includes('pastor') || lower.includes('evangelist');
                             const isElder = lower.includes('elder');
                             const isDeacon = lower.includes('deacon');
-                            const isLeader = lower.includes('leader') || lower.includes('captain') || lower.includes('head');
+                            const isLeader =
+                              lower.includes('leader') ||
+                              lower.includes('captain') ||
+                              lower.includes('head') ||
+                              lower.includes('director') ||
+                              lower.includes('coordinator') ||
+                              lower.includes('treasurer') ||
+                              lower.includes('secretary');
+                            const isGuest = lower === 'guest' || member.status === 'visitor';
 
                             const badgeClass = isPastor
                               ? 'bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
@@ -860,6 +955,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                               ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
                               : isLeader
                               ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                              : isGuest
+                              ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
                               : 'bg-slate-100 dark:bg-white/10 text-[#666A86] dark:text-[#A9ACC8] border-slate-200 dark:border-slate-700';
 
                             return (
@@ -890,7 +987,19 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* 12. PHONE NUMBER */}
                       {visibleColumns['PHONE NUMBER'] && (
                         <td className="py-3 px-3.5 font-mono text-[#1D1B3A] dark:text-[#F2F2FA]">
-                          {member.phoneE164}
+                          <div className="inline-flex items-center gap-1.5">
+                            <span>{member.phoneE164 || member.phoneNumber || '—'}</span>
+                            {(member.phoneE164 || member.phoneNumber) && (
+                              <ContactCallButton
+                                compact
+                                contactName={`${member.firstName} ${member.lastName}`.trim()}
+                                contactPhone={member.phoneE164 || member.phoneNumber}
+                                contactEmail={member.email}
+                                contactRole={getMemberPortfolio(member)}
+                                contactGroup={member.homeCellGroup || member.groupName}
+                              />
+                            )}
+                          </div>
                         </td>
                       )}
 
@@ -1045,6 +1154,15 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* Sticky Right Action Buttons */}
                       <td className="py-3 px-4 text-right sticky right-0 bg-white/95 dark:bg-[#1D1D3D]/95 backdrop-blur-xs shadow-[-6px_0_12px_rgba(0,0,0,0.03)]">
                         <div className="flex items-center justify-end gap-1.5">
+                          <ContactCallButton
+                            compact
+                            contactName={`${member.firstName} ${member.lastName}`.trim()}
+                            contactPhone={member.phoneE164 || member.phoneNumber}
+                            contactEmail={member.email}
+                            contactRole={getMemberPortfolio(member)}
+                            contactGroup={member.homeCellGroup || member.groupName}
+                          />
+
                           <button
                             type="button"
                             disabled={!canCheckIn}

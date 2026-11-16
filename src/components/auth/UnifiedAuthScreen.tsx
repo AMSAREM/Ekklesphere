@@ -15,10 +15,20 @@ import {
   Building2,
   Sparkles,
   CheckCircle2,
+  ArrowLeft,
 } from 'lucide-react';
 import type { LicenseTier } from '../../types/ekklesphere';
+import { AuthTabMode, resolveAuthTabFromLocation } from '../../utils/authRoute';
 
-export const UnifiedAuthScreen: React.FC = () => {
+interface UnifiedAuthScreenProps {
+  initialTab?: AuthTabMode;
+  onBackToLanding?: () => void;
+}
+
+export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
+  initialTab,
+  onBackToLanding,
+}) => {
   const {
     loginWithCredentials,
     registerMember,
@@ -32,7 +42,9 @@ export const UnifiedAuthScreen: React.FC = () => {
     showToast,
   } = useEkklesphere();
 
-  const [activeTab, setActiveTab] = useState<'login' | 'register' | 'org_signup'>('login');
+  const [activeTab, setActiveTab] = useState<AuthTabMode>(() =>
+    initialTab || resolveAuthTabFromLocation()
+  );
 
   // Login form state (roles are resolved strictly on the backend from verified DB records)
   const [loginEmail, setLoginEmail] = useState('');
@@ -77,9 +89,54 @@ export const UnifiedAuthScreen: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [lockoutSeconds]);
 
-  const handleTabSwitch = (nextTab: 'login' | 'register' | 'org_signup') => {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncTabFromUrl = () => {
+      const resolved = resolveAuthTabFromLocation();
+      setActiveTab(resolved);
+      setAuthError(null);
+    };
+    window.addEventListener('popstate', syncTabFromUrl);
+    return () => window.removeEventListener('popstate', syncTabFromUrl);
+  }, []);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  const handleTabSwitch = (nextTab: AuthTabMode) => {
     setActiveTab(nextTab);
     setAuthError(null);
+    try {
+      if (typeof window !== 'undefined') {
+        const currentPath = window.location.pathname.toLowerCase();
+        const url = new URL(window.location.href);
+        if (
+          currentPath === '/app' ||
+          currentPath === '/login' ||
+          currentPath === '/signin' ||
+          currentPath === '/signup' ||
+          currentPath === '/register' ||
+          url.searchParams.has('view')
+        ) {
+          const authQuery = nextTab === 'register' ? 'signup' : nextTab;
+          url.searchParams.set('auth', authQuery);
+          if (
+            currentPath === '/login' ||
+            currentPath === '/signin' ||
+            currentPath === '/signup' ||
+            currentPath === '/register'
+          ) {
+            url.pathname = '/app';
+          }
+          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+        }
+      }
+    } catch {
+      // ignore history errors
+    }
   };
 
   const handleCredentialsSubmit = async (e: React.FormEvent) => {
@@ -206,21 +263,37 @@ export const UnifiedAuthScreen: React.FC = () => {
 
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-md border border-indigo-200/80 dark:border-white/15 text-xs font-semibold text-slate-800 dark:text-white shadow-xs">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Verified Identity Gateway</span>
-                {systemSettings.churchName?.trim() &&
-                  systemSettings.churchName.trim() !== 'Ekklesphere Sanctuary' && (
-                    <>
-                      <span className="text-slate-400 dark:text-white/60">·</span>
-                      <span className="text-indigo-600 dark:text-emerald-300 font-bold">
-                        {systemSettings.churchName.trim()}
-                      </span>
-                    </>
-                  )}
+              <div className="flex flex-wrap items-center gap-2">
+                {onBackToLanding && (
+                  <button
+                    type="button"
+                    onClick={onBackToLanding}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 border border-slate-200 dark:border-white/15 text-xs font-semibold text-slate-700 dark:text-white transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>Home</span>
+                  </button>
+                )}
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-md border border-indigo-200/80 dark:border-white/15 text-xs font-semibold text-slate-800 dark:text-white shadow-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Verified Identity Gateway</span>
+                  {systemSettings.churchName?.trim() &&
+                    systemSettings.churchName.trim() !== 'Ekklesphere Sanctuary' && (
+                      <>
+                        <span className="text-slate-400 dark:text-white/60">·</span>
+                        <span className="text-indigo-600 dark:text-emerald-300 font-bold">
+                          {systemSettings.churchName.trim()}
+                        </span>
+                      </>
+                    )}
+                </div>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                Sign In to Ekklesphere
+                {activeTab === 'register'
+                  ? 'Join Your Church on Ekklesphere'
+                  : activeTab === 'org_signup'
+                  ? 'Create Your Church Workspace'
+                  : 'Sign In to Ekklesphere'}
               </h1>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-xl">
                 Access permissions and your assigned portal (Leadership, Usher Station, or Member Mobile Pass) are automatically verified from your church record.
