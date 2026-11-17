@@ -11,6 +11,8 @@ import {
   UserCheck,
   QrCode,
   Clock,
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import {
   ChurchGroup,
@@ -383,6 +385,7 @@ export interface EditServiceModalProps {
     }
   ) => Promise<void>;
   onOpenServiceQr?: (service: ServiceQrTarget) => void;
+  onDeleteService?: (serviceId: string) => Promise<void> | void;
   onNotify: (msg: string) => void;
   formatDateLabel: (isoDate?: string, includeYear?: boolean) => string;
 }
@@ -395,6 +398,7 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
     onClose,
     onSaveService,
     onOpenServiceQr,
+    onDeleteService,
     onNotify,
     formatDateLabel,
   }) => {
@@ -406,6 +410,8 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
     const [dwellMinutes, setDwellMinutes] = useState('5');
     const [statusMode, setStatusMode] = useState<'auto' | 'closed'>('auto');
     const [isSaving, setIsSaving] = useState(false);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
       if (isOpen && service) {
@@ -432,6 +438,8 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
             ? service.manualClosed
             : service.status === 'closed' && isInWindowIfActive;
         setStatusMode(isForceClosed ? 'closed' : 'auto');
+        setConfirmDelete(false);
+        setIsDeleting(false);
       }
     }, [isOpen, service, defaultAllowanceMinutes]);
 
@@ -668,6 +676,37 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
                 <span>Check-In QR</span>
               </button>
             )}
+            {onDeleteService && (
+              confirmDelete ? (
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    try {
+                      await onDeleteService(service.id);
+                      onClose();
+                    } finally {
+                      setIsDeleting(false);
+                      setConfirmDelete(false);
+                    }
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isDeleting ? 'Deleting...' : 'Confirm Delete'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  className="py-2.5 px-3 rounded-xl border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
+              )
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -677,7 +716,7 @@ export const EditServiceModal = React.memo<EditServiceModalProps>(
             </button>
             <button
               type="submit"
-              disabled={isSaving}
+              disabled={isSaving || isDeleting}
               className="flex-1 py-2.5 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold disabled:opacity-60 cursor-pointer"
             >
               {isSaving ? 'Saving...' : 'Save Changes'}
@@ -1047,6 +1086,16 @@ export interface FollowupQueueModalProps {
     outcome: string,
     nextStatus?: 'open' | 'contacted' | 'resolved' | 'dismissed'
   ) => void | Promise<void>;
+  onEditTask?: (
+    id: string,
+    patch: {
+      status?: 'open' | 'contacted' | 'resolved' | 'dismissed';
+      outcome?: string;
+      assignedToName?: string;
+      notes?: string;
+    }
+  ) => Promise<unknown> | void;
+  onDeleteTask?: (id: string) => Promise<unknown> | void;
   onNotify: (msg: string) => void;
 }
 
@@ -1063,11 +1112,59 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
     onAutoAssignAbsentees,
     onOpenPastoralSettings,
     onResolveTask,
+    onEditTask,
+    onDeleteTask,
   }) => {
+    const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+    const [editAssignee, setEditAssignee] = useState('');
+    const [editStatus, setEditStatus] = useState<'open' | 'contacted' | 'resolved' | 'dismissed'>('open');
+    const [editOutcome, setEditOutcome] = useState('');
+    const [editNotes, setEditNotes] = useState('');
+    const [isSavingEdit, setIsSavingEdit] = useState(false);
+    const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
+
+    useEffect(() => {
+      if (!confirmDeleteTaskId) return;
+      const timer = setTimeout(() => setConfirmDeleteTaskId(null), 5000);
+      return () => clearTimeout(timer);
+    }, [confirmDeleteTaskId]);
+
+    useEffect(() => {
+      if (!isOpen) {
+        setEditingTaskId(null);
+        setConfirmDeleteTaskId(null);
+      }
+    }, [isOpen]);
+
     if (!isOpen) return null;
 
     const memberById = new Map(members.map((m) => [m.id, m]));
     const threshold = Math.max(1, absenteeThresholdServices || 2);
+
+    const startEditTask = (t: FollowupTask) => {
+      setEditingTaskId(t.id);
+      setEditAssignee(t.assignedToName || '');
+      setEditStatus(t.status);
+      setEditOutcome(t.outcome || '');
+      setEditNotes(t.notes || '');
+      setConfirmDeleteTaskId(null);
+    };
+
+    const handleSaveTaskEdit = async (taskId: string) => {
+      if (!onEditTask) return;
+      setIsSavingEdit(true);
+      try {
+        await onEditTask(taskId, {
+          assignedToName: editAssignee.trim() || undefined,
+          status: editStatus,
+          outcome: editOutcome.trim(),
+          notes: editNotes.trim(),
+        });
+        setEditingTaskId(null);
+      } finally {
+        setIsSavingEdit(false);
+      }
+    };
 
     return (
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
@@ -1135,97 +1232,228 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
                 const personPhone = t.personPhone || person?.phoneE164 || person?.phoneNumber;
                 const personEmail = t.personEmail || person?.email;
                 const isActiveTask = t.status === 'open' || t.status === 'contacted';
+                const isEditing = editingTaskId === t.id;
 
                 return (
                   <div
                     key={t.id}
-                    className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3"
                   >
-                    <div className="flex items-start gap-3 min-w-0">
-                      <MemberAvatar
-                        src={person?.imageUrl}
-                        name={t.personName}
-                        initials={person?.avatarInitials}
-                        sizeClass="w-9 h-9"
-                        textClass="text-xs font-bold"
-                      />
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-0.5">
-                          <strong className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                            {t.personName}
-                          </strong>
-                          <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
-                            ·{' '}
-                            {t.reason === 'absent_3'
-                              ? 'Absent 3 Weeks'
-                              : t.reason === 'absent_2'
-                              ? 'Absent 2 Weeks'
-                              : t.reason === 'first_timer'
-                              ? 'First Timer'
-                              : 'Pastoral Care'}
-                          </span>
-                          {t.status === 'contacted' && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
-                              Contacted
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <MemberAvatar
+                          src={person?.imageUrl}
+                          name={t.personName}
+                          initials={person?.avatarInitials}
+                          sizeClass="w-9 h-9"
+                          textClass="text-xs font-bold"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-0.5">
+                            <strong className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              {t.personName}
+                            </strong>
+                            <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                              ·{' '}
+                              {t.reason === 'absent_3'
+                                ? 'Absent 3 Weeks'
+                                : t.reason === 'absent_2'
+                                ? 'Absent 2 Weeks'
+                                : t.reason === 'first_timer'
+                                ? 'First Timer'
+                                : 'Pastoral Care'}
                             </span>
-                          )}
-                          {t.autoAssigned && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-[10px] font-bold">
-                              Auto-Routed
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[#666A86] dark:text-[#A9ACC8]">
-                          {t.groupName} · Assigned to:{' '}
-                          <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
-                            {t.assignedToName}
-                          </strong>
-                          {t.assignedToRole ? ` (${t.assignedToRole})` : ''}
-                        </div>
-                        {personPhone && (
-                          <div className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                            {personPhone}
+                            {t.status === 'contacted' && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
+                                Contacted
+                              </span>
+                            )}
+                            {t.autoAssigned && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-[10px] font-bold">
+                                Auto-Routed
+                              </span>
+                            )}
                           </div>
+                          <div className="text-[#666A86] dark:text-[#A9ACC8]">
+                            {t.groupName} · Assigned to:{' '}
+                            <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              {t.assignedToName}
+                            </strong>
+                            {t.assignedToRole ? ` (${t.assignedToRole})` : ''}
+                          </div>
+                          {personPhone && (
+                            <div className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                              {personPhone}
+                            </div>
+                          )}
+                          {t.notes && (
+                            <div className="mt-1 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                              Notes: {t.notes}
+                            </div>
+                          )}
+                          {t.outcome && (
+                            <div className="mt-1 text-emerald-600 dark:text-emerald-400">
+                              Outcome: {t.outcome}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {isActiveTask ? (
+                          <>
+                            <ContactCallButton
+                              contactName={t.personName}
+                              contactPhone={personPhone}
+                              contactEmail={personEmail}
+                              contactGroup={t.groupName}
+                              label="Call"
+                              onLogOutcome={async (outcome, markResolved) => {
+                                await onResolveTask(
+                                  t.id,
+                                  outcome,
+                                  markResolved ? 'resolved' : 'contacted'
+                                );
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => onResolveTask(t.id, 'Excused absence', 'resolved')}
+                              className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] px-2.5 py-1.5 min-h-[34px] rounded-xl font-semibold whitespace-nowrap cursor-pointer hover:border-emerald-400"
+                            >
+                              {t.status === 'contacted' ? 'Mark Resolved' : 'Mark Excused'}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onResolveTask(t.id, t.outcome || 'Reopened for follow-up', 'open')}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[34px] rounded-xl bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-bold cursor-pointer hover:opacity-90"
+                            title="Click to reopen care task"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Resolved</span>
+                          </button>
                         )}
-                        {t.outcome && (
-                          <div className="mt-1 text-emerald-600 dark:text-emerald-400">
-                            Outcome: {t.outcome}
-                          </div>
+
+                        {onEditTask && (
+                          <button
+                            type="button"
+                            onClick={() => (isEditing ? setEditingTaskId(null) : startEditTask(t))}
+                            title="Edit follow-up assignment"
+                            aria-label={`Edit task for ${t.personName}`}
+                            className={`p-2 min-h-[34px] rounded-xl border transition-colors cursor-pointer ${
+                              isEditing
+                                ? 'bg-[#6D5CF2] text-white border-[#6D5CF2]'
+                                : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2]'
+                            }`}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {onDeleteTask && (
+                          confirmDeleteTaskId === t.id ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setConfirmDeleteTaskId(null);
+                                await onDeleteTask(t.id);
+                              }}
+                              className="px-2.5 py-1.5 min-h-[34px] rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+                            >
+                              Confirm
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteTaskId(t.id)}
+                              title="Delete care assignment"
+                              aria-label={`Delete task for ${t.personName}`}
+                              className="p-2 min-h-[34px] rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-slate-400 hover:text-rose-600 hover:border-rose-300 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
                         )}
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      {isActiveTask ? (
-                        <>
-                          <ContactCallButton
-                            contactName={t.personName}
-                            contactPhone={personPhone}
-                            contactEmail={personEmail}
-                            contactGroup={t.groupName}
-                            label="Call"
-                            onLogOutcome={async (outcome, markResolved) => {
-                              await onResolveTask(
-                                t.id,
-                                outcome,
-                                markResolved ? 'resolved' : 'contacted'
-                              );
-                            }}
+                    {isEditing && (
+                      <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                            Assigned Officer / Leader
+                          </label>
+                          <input
+                            type="text"
+                            value={editAssignee}
+                            onChange={(e) => setEditAssignee(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs"
                           />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                            Status
+                          </label>
+                          <select
+                            value={editStatus}
+                            onChange={(e) =>
+                              setEditStatus(
+                                e.target.value as 'open' | 'contacted' | 'resolved' | 'dismissed'
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-semibold"
+                          >
+                            <option value="open">Open</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="dismissed">Dismissed</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                            Outcome Summary
+                          </label>
+                          <input
+                            type="text"
+                            value={editOutcome}
+                            onChange={(e) => setEditOutcome(e.target.value)}
+                            placeholder="Call or visit outcome..."
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                            Care Notes
+                          </label>
+                          <input
+                            type="text"
+                            value={editNotes}
+                            onChange={(e) => setEditNotes(e.target.value)}
+                            placeholder="Pastoral care notes..."
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs"
+                          />
+                        </div>
+                        <div className="sm:col-span-2 flex justify-end gap-2 pt-1">
                           <button
                             type="button"
-                            onClick={() => onResolveTask(t.id, 'Excused absence', 'resolved')}
-                            className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] px-3 py-1.5 min-h-[34px] rounded-xl font-semibold whitespace-nowrap cursor-pointer"
+                            onClick={() => setEditingTaskId(null)}
+                            className="px-3 py-1.5 rounded-lg border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] cursor-pointer"
                           >
-                            {t.status === 'contacted' ? 'Mark Resolved' : 'Mark Excused'}
+                            Cancel
                           </button>
-                        </>
-                      ) : (
-                        <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-                          <Check className="w-4 h-4" /> Resolved
-                        </span>
-                      )}
-                    </div>
+                          <button
+                            type="button"
+                            disabled={isSavingEdit}
+                            onClick={() => handleSaveTaskEdit(t.id)}
+                            className="px-3 py-1.5 rounded-lg bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-[11px] font-bold cursor-pointer disabled:opacity-60"
+                          >
+                            {isSavingEdit ? 'Saving...' : 'Save Changes'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })

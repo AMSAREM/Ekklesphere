@@ -20,6 +20,7 @@ import {
 import type { LicenseTier } from '../../types/ekklesphere';
 import { AuthTabMode, resolveAuthTabFromLocation } from '../../utils/authRoute';
 import { BrandLogo } from '../common/BrandLogo';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 interface UnifiedAuthScreenProps {
   initialTab?: AuthTabMode;
@@ -322,12 +323,16 @@ export const UnifiedAuthScreen: React.FC<UnifiedAuthScreenProps> = ({
               </p>
             </div>
 
-            <div className="flex md:flex-col items-end gap-2 shrink-0">
+            <div className="flex flex-wrap md:flex-col items-center md:items-end gap-2 shrink-0">
+              <PWAInstallButton
+                variant="auth"
+                onInstalled={() => showToast('Ekklesphere installed on your device!')}
+              />
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-white/10 text-[11px] font-medium text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-400/20">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>RLS & Rate-Limit Protected</span>
               </div>
-              <div className="text-[11px] text-slate-500 dark:text-white/60">
+              <div className="text-[11px] text-slate-500 dark:text-white/60 hidden md:block">
                 Server-Enforced RBAC
               </div>
             </div>

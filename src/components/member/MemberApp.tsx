@@ -63,6 +63,7 @@ import {
   resolveAutomaticDemographicMinistries,
 } from '../../utils/demographicMinistries';
 import { MultiDepartmentSelector } from '../common/MultiDepartmentSelector';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -117,6 +118,8 @@ export const MemberApp: React.FC = () => {
   const [isQrSheetOpen, setIsQrSheetOpen] = useState(false);
   const [qrInitialContext, setQrInitialContext] = useState<string | undefined>(undefined);
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
+  const [confirmDeleteMyRecord, setConfirmDeleteMyRecord] = useState(false);
+  const [isSubmittingPrivacyReq, setIsSubmittingPrivacyReq] = useState(false);
 
   // Live Hardware GPS Proximity & Verification State
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'acquiring' | 'watching' | 'verifying' | 'error'>('idle');
@@ -145,6 +148,78 @@ export const MemberApp: React.FC = () => {
       setGiveAmount(currency.presetAmounts[1] || currency.presetAmounts[0]);
     }
   }, [systemSettings.currency]);
+
+  useEffect(() => {
+    if (!confirmDeleteMyRecord) return;
+    const t = window.setTimeout(() => setConfirmDeleteMyRecord(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [confirmDeleteMyRecord]);
+
+  const handleExportMyData = () => {
+    const myAttendance = attendanceRecords.filter(
+      (r) =>
+        r.personId === targetPersonId ||
+        (currentUser?.memberId && r.personId === currentUser.memberId) ||
+        (currentUser?.id && r.personId === currentUser.id)
+    );
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      church: systemSettings.churchName,
+      member: matchedMember || {
+        id: targetPersonId,
+        name: memberDisplayName,
+        email: currentUser?.email || null,
+      },
+      consents: memberConsents,
+      rsvps: memberRsvps,
+      attendanceHistory: myAttendance,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ekklesphere-data-${memberCode || targetPersonId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Data export downloaded for ${memberDisplayName}.`);
+  };
+
+  const handleRequestRecordDeletion = async () => {
+    if (!confirmDeleteMyRecord) {
+      setConfirmDeleteMyRecord(true);
+      return;
+    }
+    setConfirmDeleteMyRecord(false);
+    setIsSubmittingPrivacyReq(true);
+    try {
+      const token =
+        currentUser?.token ||
+        (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+      const res = await fetch('/api/data-requests/me', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          requestType: 'deletion',
+          reason: `Member self-service deletion request for ${memberDisplayName}`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Could not submit data deletion request.');
+        return;
+      }
+      showToast('Data deletion request logged with your church Data Protection Officer.');
+    } catch {
+      showToast('Network error submitting deletion request.');
+    } finally {
+      setIsSubmittingPrivacyReq(false);
+    }
+  };
 
   // Resolve real signed-in member identity
   const matchedMember = members.find(
@@ -2139,21 +2214,40 @@ export const MemberApp: React.FC = () => {
             {/* Data Protection Actions */}
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
-                onClick={() => showToast(`Full data export generated for ${memberEmail}.`)}
-                className="py-2.5 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] text-xs font-bold bg-slate-50 dark:bg-black/20 hover:bg-slate-100 flex items-center justify-center gap-1.5 transition-colors"
+                type="button"
+                onClick={handleExportMyData}
+                className="py-2.5 rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] text-xs font-bold bg-slate-50 dark:bg-black/20 hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <FileText className="w-3.5 h-3.5 text-[#6C5CE7]" />
                 <span>Export My Data</span>
               </button>
               <button
-                onClick={() => showToast('Data deletion inquiry sent to Data Protection Officer.')}
-                className="py-2.5 rounded-2xl border border-rose-200 dark:border-rose-900/40 text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100/50 flex items-center justify-center gap-1.5 transition-colors"
+                type="button"
+                disabled={isSubmittingPrivacyReq}
+                onClick={handleRequestRecordDeletion}
+                className={`py-2.5 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60 ${
+                  confirmDeleteMyRecord
+                    ? 'bg-rose-600 text-white hover:bg-rose-700'
+                    : 'border border-rose-200 dark:border-rose-900/40 text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100/50'
+                }`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete My Record</span>
+                <span>
+                  {isSubmittingPrivacyReq
+                    ? 'Submitting...'
+                    : confirmDeleteMyRecord
+                    ? 'Confirm Request'
+                    : 'Delete My Record'}
+                </span>
               </button>
             </div>
           </div>
+
+          {/* Install Mobile App Card */}
+          <PWAInstallButton
+            variant="card"
+            onInstalled={() => showToast('Ekklesphere installed on your device!')}
+          />
 
           {/* Account Security & Password */}
           <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-3">

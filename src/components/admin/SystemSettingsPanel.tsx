@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEkklesphere } from '../../context/EkklesphereContext';
 import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
 import {
@@ -259,6 +259,12 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   };
   const [formData, setFormData] = useState<SystemSettings>({ ...systemSettings });
   const [hasChanges, setHasChanges] = useState(false);
+  const hasChangesRef = useRef(false);
+  const focusedFieldRef = useRef<string | null>(null);
+  const lastSyncedSettingsRef = useRef<SystemSettings>({ ...systemSettings });
+  const lastHandledSettingsNonceRef = useRef<number | null>(null);
+  const testEmailTouchedRef = useRef(false);
+
   const [lastSavedTime, setLastSavedTime] = useState<string>('Just now');
   const [isCapturingGps, setIsCapturingGps] = useState(false);
   const [gpsCaptureError, setGpsCaptureError] = useState<string | null>(null);
@@ -268,6 +274,25 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [lngInput, setLngInput] = useState<string>(
     systemSettings.campusLongitude != null ? String(systemSettings.campusLongitude) : ''
   );
+  const [outerGeofenceDraft, setOuterGeofenceDraft] = useState<string>(
+    String(systemSettings.outerGeofenceMeters ?? 300)
+  );
+  const [innerGeofenceDraft, setInnerGeofenceDraft] = useState<string>(
+    String(systemSettings.innerGeofenceMeters ?? 100)
+  );
+  const [dwellTimeDraft, setDwellTimeDraft] = useState<string>(
+    String(systemSettings.dwellTimeMinutes ?? 5)
+  );
+  const [bleBeaconDraft, setBleBeaconDraft] = useState<string>(
+    String(systemSettings.bleBeaconRssiThreshold ?? -70)
+  );
+  const [beforeWindowDraft, setBeforeWindowDraft] = useState<string>(
+    String(systemSettings.serviceWindowBeforeMinutes ?? 45)
+  );
+  const [afterWindowDraft, setAfterWindowDraft] = useState<string>(
+    String(systemSettings.serviceWindowAfterMinutes ?? 30)
+  );
+
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState<string | null>(null);
   const [sharedMapLink, setSharedMapLink] = useState('');
@@ -279,19 +304,72 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   );
   const [isTestingEmail, setIsTestingEmail] = useState(false);
 
-  React.useEffect(() => {
-    if (!hasChanges) {
-      setFormData({ ...systemSettings });
+  const syncNumericDraftsFromSettings = useCallback(
+    (source: SystemSettings, skipFocused = true) => {
+      const focused = skipFocused ? focusedFieldRef.current : null;
+      if (focused !== 'outerGeofenceMeters') {
+        setOuterGeofenceDraft(String(source.outerGeofenceMeters ?? 300));
+      }
+      if (focused !== 'innerGeofenceMeters') {
+        setInnerGeofenceDraft(String(source.innerGeofenceMeters ?? 100));
+      }
+      if (focused !== 'dwellTimeMinutes') {
+        setDwellTimeDraft(String(source.dwellTimeMinutes ?? 5));
+      }
+      if (focused !== 'bleBeaconRssiThreshold') {
+        setBleBeaconDraft(String(source.bleBeaconRssiThreshold ?? -70));
+      }
+      if (focused !== 'serviceWindowBeforeMinutes') {
+        setBeforeWindowDraft(String(source.serviceWindowBeforeMinutes ?? 45));
+      }
+      if (focused !== 'serviceWindowAfterMinutes') {
+        setAfterWindowDraft(String(source.serviceWindowAfterMinutes ?? 30));
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    hasChangesRef.current = hasChanges;
+  }, [hasChanges]);
+
+  useEffect(() => {
+    if (!testEmailTouchedRef.current && !testEmailRecipient) {
+      const fallback = (systemSettings.contactEmail || currentUser?.email || '').trim();
+      if (fallback) {
+        setTestEmailRecipient(fallback);
+      }
+    }
+  }, [systemSettings.contactEmail, currentUser?.email, testEmailRecipient]);
+
+  useEffect(() => {
+    if (hasChangesRef.current || hasChanges) return;
+    if (JSON.stringify(lastSyncedSettingsRef.current) === JSON.stringify(systemSettings)) {
+      return;
+    }
+    lastSyncedSettingsRef.current = { ...systemSettings };
+    setFormData({ ...systemSettings });
+    if (focusedFieldRef.current !== 'lat') {
       setLatInput(systemSettings.campusLatitude != null ? String(systemSettings.campusLatitude) : '');
+    }
+    if (focusedFieldRef.current !== 'lng') {
       setLngInput(systemSettings.campusLongitude != null ? String(systemSettings.campusLongitude) : '');
     }
-  }, [systemSettings, hasChanges]);
+    syncNumericDraftsFromSettings(systemSettings, true);
+  }, [systemSettings, hasChanges, syncNumericDraftsFromSettings]);
 
-  React.useEffect(() => {
-    setFormData((prev) => ({
-      ...prev,
-      customGroupCategories: sanitizeCustomGroupCategories(systemSettings.customGroupCategories),
-    }));
+  useEffect(() => {
+    const sanitized = sanitizeCustomGroupCategories(systemSettings.customGroupCategories);
+    const sanitizedJson = JSON.stringify(sanitized);
+    setFormData((prev) => {
+      if (JSON.stringify(prev.customGroupCategories || []) === sanitizedJson) {
+        return prev;
+      }
+      return {
+        ...prev,
+        customGroupCategories: sanitized,
+      };
+    });
   }, [systemSettings.customGroupCategories]);
 
   const customGroupCategories = useMemo(
@@ -790,6 +868,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
   useEffect(() => {
     if (!requestedSettingsTab?.tab) return;
+    if (lastHandledSettingsNonceRef.current === requestedSettingsTab.nonce) return;
+    lastHandledSettingsNonceRef.current = requestedSettingsTab.nonce;
     setActiveTab(requestedSettingsTab.tab);
     const intent = requestedSettingsTab.groupIntent;
     if (requestedSettingsTab.tab === 'groups' && intent) {
@@ -899,11 +979,75 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   };
 
   const handleChange = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
-    setFormData((prev) => {
-      const next = { ...prev, [key]: value };
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setFormData((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }));
+  };
+
+  const handleNumericDraftInput = (
+    key:
+      | 'outerGeofenceMeters'
+      | 'innerGeofenceMeters'
+      | 'dwellTimeMinutes'
+      | 'bleBeaconRssiThreshold'
+      | 'serviceWindowBeforeMinutes'
+      | 'serviceWindowAfterMinutes',
+    rawValue: string,
+    setDraft: React.Dispatch<React.SetStateAction<string>>,
+    min: number,
+    max: number,
+    allowNegative = false
+  ) => {
+    const pattern = allowNegative ? /^-?\d*$/ : /^\d*$/;
+    if (!pattern.test(rawValue)) return;
+    setDraft(rawValue);
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    if (rawValue === '' || rawValue === '-') return;
+    const parsed = parseInt(rawValue, 10);
+    if (!Number.isNaN(parsed) && Number.isFinite(parsed) && parsed >= min && parsed <= max) {
+      setFormData((prev) => (prev[key] === parsed ? prev : { ...prev, [key]: parsed }));
+    }
+  };
+
+  const commitNumericDraftOnBlur = (
+    key:
+      | 'outerGeofenceMeters'
+      | 'innerGeofenceMeters'
+      | 'dwellTimeMinutes'
+      | 'bleBeaconRssiThreshold'
+      | 'serviceWindowBeforeMinutes'
+      | 'serviceWindowAfterMinutes',
+    rawValue: string,
+    setDraft: React.Dispatch<React.SetStateAction<string>>,
+    min: number,
+    max: number,
+    fallback: number
+  ) => {
+    if (focusedFieldRef.current === key) {
+      focusedFieldRef.current = null;
+    }
+    const parsed = parseInt(rawValue, 10);
+    const currentFallback =
+      typeof formData[key] === 'number' && Number.isFinite(formData[key]) ? formData[key] : fallback;
+    const nextVal =
+      rawValue.trim() === '' || rawValue.trim() === '-' || Number.isNaN(parsed)
+        ? currentFallback
+        : Math.max(min, Math.min(max, parsed));
+    setDraft(String(nextVal));
+    if (formData[key] !== nextVal) {
+      hasChangesRef.current = true;
       setHasChanges(true);
-      return next;
-    });
+      setFormData((prev) => ({ ...prev, [key]: nextVal }));
+    }
+  };
+
+  const parseDraftOrClamp = (rawValue: string, currentVal: number, min: number, max: number) => {
+    const parsed = parseInt(rawValue, 10);
+    if (rawValue.trim() === '' || rawValue.trim() === '-' || Number.isNaN(parsed)) {
+      return Math.max(min, Math.min(max, currentVal));
+    }
+    return Math.max(min, Math.min(max, parsed));
   };
 
   const handleSave = async (e?: React.FormEvent) => {
@@ -912,7 +1056,32 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       showToast('Access Denied: Only administrators can modify church geofence parameters.');
       return;
     }
-    let updatedPayload: SystemSettings = { ...formData };
+    const committedOuter = parseDraftOrClamp(outerGeofenceDraft, formData.outerGeofenceMeters, 50, 5000);
+    const committedInner = parseDraftOrClamp(innerGeofenceDraft, formData.innerGeofenceMeters, 10, 1000);
+    const committedDwell = parseDraftOrClamp(dwellTimeDraft, formData.dwellTimeMinutes, 1, 60);
+    const committedBle = parseDraftOrClamp(bleBeaconDraft, formData.bleBeaconRssiThreshold, -95, -40);
+    const committedBefore = parseDraftOrClamp(
+      beforeWindowDraft,
+      formData.serviceWindowBeforeMinutes,
+      15,
+      90
+    );
+    const committedAfter = parseDraftOrClamp(
+      afterWindowDraft,
+      formData.serviceWindowAfterMinutes,
+      15,
+      60
+    );
+
+    let updatedPayload: SystemSettings = {
+      ...formData,
+      outerGeofenceMeters: Math.max(committedOuter, committedInner),
+      innerGeofenceMeters: committedInner,
+      dwellTimeMinutes: committedDwell,
+      bleBeaconRssiThreshold: committedBle,
+      serviceWindowBeforeMinutes: committedBefore,
+      serviceWindowAfterMinutes: committedAfter,
+    };
 
     if (latInput.trim() !== '' && lngInput.trim() !== '') {
       const parsedLat = Number(latInput);
@@ -949,7 +1118,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
     const ok = await updateSystemSettings(updatedPayload);
     if (ok) {
+      lastSyncedSettingsRef.current = { ...updatedPayload };
+      hasChangesRef.current = false;
       setFormData(updatedPayload);
+      syncNumericDraftsFromSettings(updatedPayload, false);
       setHasChanges(false);
       setGpsCaptureError(null);
       setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -990,6 +1162,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
           outerGeofenceMeters: nextForm.outerGeofenceMeters,
           dwellTimeMinutes: nextForm.dwellTimeMinutes,
         });
+        lastSyncedSettingsRef.current = { ...nextForm };
+        hasChangesRef.current = false;
         setHasChanges(false);
         setIsCapturingGps(false);
       },
@@ -1034,13 +1208,19 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       dwellTimeMinutes: formData.dwellTimeMinutes,
     });
     if (ok) {
-      setFormData((prev) => ({
-        ...prev,
-        campusLatitude: parsedLat,
-        campusLongitude: parsedLng,
-        campusLocationAccuracyM: null,
-        campusLocationUpdatedAt: new Date().toISOString(),
-      }));
+      const updatedTimestamp = new Date().toISOString();
+      setFormData((prev) => {
+        const next = {
+          ...prev,
+          campusLatitude: parsedLat,
+          campusLongitude: parsedLng,
+          campusLocationAccuracyM: null,
+          campusLocationUpdatedAt: updatedTimestamp,
+        };
+        lastSyncedSettingsRef.current = next;
+        return next;
+      });
+      hasChangesRef.current = false;
       setHasChanges(false);
     }
   };
@@ -1091,15 +1271,21 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       });
 
       if (ok) {
-        setFormData((prev) => ({
-          ...prev,
-          campusName: updatedCampusName,
-          campusLatitude: data.lat,
-          campusLongitude: data.lng,
-          campusLocationAccuracyM: null,
-          campusLocationUpdatedAt: new Date().toISOString(),
-        }));
+        const updatedTimestamp = new Date().toISOString();
+        setFormData((prev) => {
+          const next = {
+            ...prev,
+            campusName: updatedCampusName,
+            campusLatitude: data.lat,
+            campusLongitude: data.lng,
+            campusLocationAccuracyM: null,
+            campusLocationUpdatedAt: updatedTimestamp,
+          };
+          lastSyncedSettingsRef.current = next;
+          return next;
+        });
         setSharedMapLink('');
+        hasChangesRef.current = false;
         setHasChanges(false);
       }
     } catch (err: unknown) {
@@ -1113,13 +1299,19 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     await clearChurchPremiseLocation();
     setLatInput('');
     setLngInput('');
-    setFormData((prev) => ({
-      ...prev,
-      campusLatitude: null,
-      campusLongitude: null,
-      campusLocationAccuracyM: null,
-      campusLocationUpdatedAt: null,
-    }));
+    setFormData((prev) => {
+      const next = {
+        ...prev,
+        campusLatitude: null,
+        campusLongitude: null,
+        campusLocationAccuracyM: null,
+        campusLocationUpdatedAt: null,
+      };
+      lastSyncedSettingsRef.current = next;
+      return next;
+    });
+    hasChangesRef.current = false;
+    setHasChanges(false);
   };
 
   const handleReset = async () => {
@@ -1132,6 +1324,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     setConfirmReset(false);
     setLatInput('');
     setLngInput('');
+    hasChangesRef.current = false;
     setHasChanges(false);
   };
 
@@ -1253,12 +1446,21 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               Premise Latitude (-90 to 90)
             </label>
             <input
-              type="number"
-              step="any"
+              type="text"
+              inputMode="decimal"
               placeholder="e.g. 5.603717"
               value={latInput}
+              onFocus={() => {
+                focusedFieldRef.current = 'lat';
+              }}
+              onBlur={() => {
+                if (focusedFieldRef.current === 'lat') focusedFieldRef.current = null;
+              }}
               onChange={(e) => {
-                setLatInput(e.target.value);
+                const next = e.target.value;
+                if (!/^-?\d*(\.\d*)?$/.test(next)) return;
+                setLatInput(next);
+                hasChangesRef.current = true;
                 setHasChanges(true);
               }}
               className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
@@ -1269,12 +1471,21 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               Premise Longitude (-180 to 180)
             </label>
             <input
-              type="number"
-              step="any"
+              type="text"
+              inputMode="decimal"
               placeholder="e.g. -0.186964"
               value={lngInput}
+              onFocus={() => {
+                focusedFieldRef.current = 'lng';
+              }}
+              onBlur={() => {
+                if (focusedFieldRef.current === 'lng') focusedFieldRef.current = null;
+              }}
               onChange={(e) => {
-                setLngInput(e.target.value);
+                const next = e.target.value;
+                if (!/^-?\d*(\.\d*)?$/.test(next)) return;
+                setLngInput(next);
+                hasChangesRef.current = true;
                 setHasChanges(true);
               }}
               className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
@@ -1582,7 +1793,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  value={formData.churchName}
+                  value={formData.churchName ?? ''}
                   onChange={(e) => handleChange('churchName', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 />
@@ -1594,7 +1805,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  value={formData.campusName}
+                  value={formData.campusName ?? ''}
                   onChange={(e) => handleChange('campusName', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 />
@@ -1607,7 +1818,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  value={formData.campusAddress}
+                  value={formData.campusAddress ?? ''}
                   onChange={(e) => handleChange('campusAddress', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 />
@@ -1619,7 +1830,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  value={formData.seniorPastor}
+                  value={formData.seniorPastor ?? ''}
                   onChange={(e) => handleChange('seniorPastor', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 />
@@ -1631,7 +1842,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="text"
-                  value={formData.contactPhone}
+                  value={formData.contactPhone ?? ''}
                   onChange={(e) => handleChange('contactPhone', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
                 />
@@ -1643,7 +1854,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </label>
                 <input
                   type="email"
-                  value={formData.contactEmail}
+                  value={formData.contactEmail ?? ''}
                   onChange={(e) => handleChange('contactEmail', e.target.value)}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 />
@@ -2706,20 +2917,55 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </div>
               </div>
 
-              {/* Sliders & Calibration */}
+              {/* Sliders & Direct Numeric Calibration */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
                 <div>
-                  <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  <div className="flex items-center justify-between gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
                     <span>Outer Geofence Radius (Approach Wake-up)</span>
-                    <span className="text-[#6D5CF2] font-mono text-xs">{formData.outerGeofenceMeters} meters</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Outer Geofence Radius in meters"
+                        value={outerGeofenceDraft}
+                        onFocus={() => {
+                          focusedFieldRef.current = 'outerGeofenceMeters';
+                        }}
+                        onChange={(e) =>
+                          handleNumericDraftInput(
+                            'outerGeofenceMeters',
+                            e.target.value,
+                            setOuterGeofenceDraft,
+                            50,
+                            5000
+                          )
+                        }
+                        onBlur={() =>
+                          commitNumericDraftOnBlur(
+                            'outerGeofenceMeters',
+                            outerGeofenceDraft,
+                            setOuterGeofenceDraft,
+                            50,
+                            5000,
+                            300
+                          )
+                        }
+                        className="w-16 px-2 py-1 text-xs font-mono text-right rounded-lg bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#8C7DFF] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">m</span>
+                    </div>
                   </div>
                   <input
                     type="range"
                     min="150"
                     max="800"
                     step="50"
-                    value={formData.outerGeofenceMeters}
-                    onChange={(e) => handleChange('outerGeofenceMeters', parseInt(e.target.value, 10))}
+                    value={Math.min(800, Math.max(150, formData.outerGeofenceMeters))}
+                    onChange={(e) => {
+                      const next = parseInt(e.target.value, 10);
+                      setOuterGeofenceDraft(String(next));
+                      handleChange('outerGeofenceMeters', next);
+                    }}
                     className="w-full accent-[#6D5CF2] cursor-pointer"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
@@ -2728,17 +2974,52 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  <div className="flex items-center justify-between gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
                     <span>Inner Perimeter Radius (Sanctuary Grounds)</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono text-xs">{formData.innerGeofenceMeters} meters</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Inner Perimeter Radius in meters"
+                        value={innerGeofenceDraft}
+                        onFocus={() => {
+                          focusedFieldRef.current = 'innerGeofenceMeters';
+                        }}
+                        onChange={(e) =>
+                          handleNumericDraftInput(
+                            'innerGeofenceMeters',
+                            e.target.value,
+                            setInnerGeofenceDraft,
+                            10,
+                            1000
+                          )
+                        }
+                        onBlur={() =>
+                          commitNumericDraftOnBlur(
+                            'innerGeofenceMeters',
+                            innerGeofenceDraft,
+                            setInnerGeofenceDraft,
+                            10,
+                            1000,
+                            100
+                          )
+                        }
+                        className="w-16 px-2 py-1 text-xs font-mono text-right rounded-lg bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-emerald-600 dark:text-emerald-400 outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">m</span>
+                    </div>
                   </div>
                   <input
                     type="range"
                     min="30"
                     max="200"
                     step="10"
-                    value={formData.innerGeofenceMeters}
-                    onChange={(e) => handleChange('innerGeofenceMeters', parseInt(e.target.value, 10))}
+                    value={Math.min(200, Math.max(30, formData.innerGeofenceMeters))}
+                    onChange={(e) => {
+                      const next = parseInt(e.target.value, 10);
+                      setInnerGeofenceDraft(String(next));
+                      handleChange('innerGeofenceMeters', next);
+                    }}
                     className="w-full accent-emerald-500 cursor-pointer"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
@@ -2747,17 +3028,52 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  <div className="flex items-center justify-between gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
                     <span>Mandatory Dwell Verification Time</span>
-                    <span className="text-[#1D1B3A] dark:text-[#F2F2FA] font-mono text-xs">{formData.dwellTimeMinutes} minutes</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Mandatory Dwell Verification Time in minutes"
+                        value={dwellTimeDraft}
+                        onFocus={() => {
+                          focusedFieldRef.current = 'dwellTimeMinutes';
+                        }}
+                        onChange={(e) =>
+                          handleNumericDraftInput(
+                            'dwellTimeMinutes',
+                            e.target.value,
+                            setDwellTimeDraft,
+                            1,
+                            60
+                          )
+                        }
+                        onBlur={() =>
+                          commitNumericDraftOnBlur(
+                            'dwellTimeMinutes',
+                            dwellTimeDraft,
+                            setDwellTimeDraft,
+                            1,
+                            60,
+                            5
+                          )
+                        }
+                        className="w-14 px-2 py-1 text-xs font-mono text-right rounded-lg bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">min</span>
+                    </div>
                   </div>
                   <input
                     type="range"
                     min="1"
                     max="15"
                     step="1"
-                    value={formData.dwellTimeMinutes}
-                    onChange={(e) => handleChange('dwellTimeMinutes', parseInt(e.target.value, 10))}
+                    value={Math.min(15, Math.max(1, formData.dwellTimeMinutes))}
+                    onChange={(e) => {
+                      const next = parseInt(e.target.value, 10);
+                      setDwellTimeDraft(String(next));
+                      handleChange('dwellTimeMinutes', next);
+                    }}
                     className="w-full accent-[#6D5CF2] cursor-pointer"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
@@ -2766,17 +3082,53 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
+                  <div className="flex items-center justify-between gap-2 text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1.5">
                     <span>BLE Beacon Sensitivity Threshold</span>
-                    <span className="text-indigo-600 dark:text-indigo-400 font-mono text-xs">{formData.bleBeaconRssiThreshold} dBm</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="text"
+                        inputMode="text"
+                        aria-label="BLE Beacon Sensitivity Threshold in dBm"
+                        value={bleBeaconDraft}
+                        onFocus={() => {
+                          focusedFieldRef.current = 'bleBeaconRssiThreshold';
+                        }}
+                        onChange={(e) =>
+                          handleNumericDraftInput(
+                            'bleBeaconRssiThreshold',
+                            e.target.value,
+                            setBleBeaconDraft,
+                            -95,
+                            -40,
+                            true
+                          )
+                        }
+                        onBlur={() =>
+                          commitNumericDraftOnBlur(
+                            'bleBeaconRssiThreshold',
+                            bleBeaconDraft,
+                            setBleBeaconDraft,
+                            -95,
+                            -40,
+                            -70
+                          )
+                        }
+                        className="w-16 px-2 py-1 text-xs font-mono text-right rounded-lg bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-indigo-600 dark:text-indigo-400 outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">dBm</span>
+                    </div>
                   </div>
                   <input
                     type="range"
                     min="-85"
                     max="-50"
                     step="5"
-                    value={formData.bleBeaconRssiThreshold}
-                    onChange={(e) => handleChange('bleBeaconRssiThreshold', parseInt(e.target.value, 10))}
+                    value={Math.min(-50, Math.max(-85, formData.bleBeaconRssiThreshold))}
+                    onChange={(e) => {
+                      const next = parseInt(e.target.value, 10);
+                      setBleBeaconDraft(String(next));
+                      handleChange('bleBeaconRssiThreshold', next);
+                    }}
                     className="w-full accent-indigo-500 cursor-pointer"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
@@ -2792,15 +3144,35 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     Pre-Service Check-in Window (Minutes Before)
                   </label>
                   <input
-                    type="number"
-                    min="15"
-                    max="90"
-                    value={formData.serviceWindowBeforeMinutes}
-                    onChange={(e) => handleChange('serviceWindowBeforeMinutes', parseInt(e.target.value, 10) || 45)}
-                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    type="text"
+                    inputMode="numeric"
+                    value={beforeWindowDraft}
+                    onFocus={() => {
+                      focusedFieldRef.current = 'serviceWindowBeforeMinutes';
+                    }}
+                    onChange={(e) =>
+                      handleNumericDraftInput(
+                        'serviceWindowBeforeMinutes',
+                        e.target.value,
+                        setBeforeWindowDraft,
+                        15,
+                        90
+                      )
+                    }
+                    onBlur={() =>
+                      commitNumericDraftOnBlur(
+                        'serviceWindowBeforeMinutes',
+                        beforeWindowDraft,
+                        setBeforeWindowDraft,
+                        15,
+                        90,
+                        45
+                      )
+                    }
+                    className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                    E.g. 45 min allows early arrivals and choir rehearsal check-in.
+                    Range: 15–90 min (e.g. 45 min allows early arrivals and choir rehearsal check-in).
                   </p>
                 </div>
 
@@ -2809,15 +3181,35 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     Post-Service Grace Window (Minutes After)
                   </label>
                   <input
-                    type="number"
-                    min="15"
-                    max="60"
-                    value={formData.serviceWindowAfterMinutes}
-                    onChange={(e) => handleChange('serviceWindowAfterMinutes', parseInt(e.target.value, 10) || 30)}
-                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                    type="text"
+                    inputMode="numeric"
+                    value={afterWindowDraft}
+                    onFocus={() => {
+                      focusedFieldRef.current = 'serviceWindowAfterMinutes';
+                    }}
+                    onChange={(e) =>
+                      handleNumericDraftInput(
+                        'serviceWindowAfterMinutes',
+                        e.target.value,
+                        setAfterWindowDraft,
+                        15,
+                        60
+                      )
+                    }
+                    onBlur={() =>
+                      commitNumericDraftOnBlur(
+                        'serviceWindowAfterMinutes',
+                        afterWindowDraft,
+                        setAfterWindowDraft,
+                        15,
+                        60,
+                        30
+                      )
+                    }
+                    className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                   <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                    Keeps check-in active for delayed arrivals or usher reconciliation.
+                    Range: 15–60 min (keeps check-in active for delayed arrivals or usher reconciliation).
                   </p>
                 </div>
               </div>
@@ -3140,8 +3532,19 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   <input
                     type="text"
                     maxLength={11}
-                    value={formData.smsSenderId}
-                    onChange={(e) => handleChange('smsSenderId', e.target.value.toUpperCase())}
+                    value={formData.smsSenderId ?? ''}
+                    onChange={(e) => {
+                      const el = e.target;
+                      const start = el.selectionStart;
+                      const end = el.selectionEnd;
+                      const upper = el.value.toUpperCase().slice(0, 11);
+                      handleChange('smsSenderId', upper);
+                      requestAnimationFrame(() => {
+                        if (document.activeElement === el && start !== null && end !== null) {
+                          el.setSelectionRange(start, end);
+                        }
+                      });
+                    }}
                     placeholder={communicationStatus.defaultSmsSenderId || 'EKKLESPHERE'}
                     className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono uppercase"
                   />
@@ -3232,7 +3635,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     <input
                       type="email"
                       value={testEmailRecipient}
-                      onChange={(e) => setTestEmailRecipient(e.target.value)}
+                      onChange={(e) => {
+                        testEmailTouchedRef.current = true;
+                        setTestEmailRecipient(e.target.value);
+                      }}
                       placeholder={formData.contactEmail || currentUser?.email || 'pastor@church.org'}
                       className="flex-1 min-w-0 px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
                     />

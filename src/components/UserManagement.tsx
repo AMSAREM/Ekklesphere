@@ -17,6 +17,8 @@ import {
   Mail,
   Phone,
   X,
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import { ChurchRole } from '../../lib/auth';
 import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../constants/portfolios';
@@ -104,7 +106,9 @@ export const UserManagement: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<UserFilterMode>('all');
 
-  // Form state for issuing or resetting credentials
+  // Form state for issuing, editing, or resetting credentials
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<ChurchRole>('member');
   const [selectedDesignation, setSelectedDesignation] = useState<string>('Member');
@@ -164,24 +168,34 @@ export const UserManagement: React.FC = () => {
     fetchUsers();
   }, [fetchUsers, currentUser?.organization_id, members.length]);
 
+  useEffect(() => {
+    if (!confirmDeleteUserId) return;
+    const t = setTimeout(() => setConfirmDeleteUserId(null), 5000);
+    return () => clearTimeout(t);
+  }, [confirmDeleteUserId]);
+
   const populateCredentialFormFromMember = useCallback(
-    (memberOrUser: {
-      memberId?: string;
-      id?: string;
-      fullName?: string;
-      firstName?: string;
-      lastName?: string;
-      email?: string;
-      phoneE164?: string;
-      role?: ChurchRole;
-      designation?: string;
-      officerName?: string;
-    }) => {
+    (
+      memberOrUser: {
+        memberId?: string;
+        id?: string;
+        fullName?: string;
+        firstName?: string;
+        lastName?: string;
+        email?: string;
+        phoneE164?: string;
+        role?: ChurchRole;
+        designation?: string;
+        officerName?: string;
+      },
+      mode: 'credentials' | 'edit' = 'credentials'
+    ) => {
       const targetMemberId = memberOrUser.memberId || memberOrUser.id || '';
       const computedName =
         memberOrUser.fullName ||
         `${memberOrUser.firstName || ''} ${memberOrUser.lastName || ''}`.trim();
 
+      setEditingUserId(mode === 'edit' ? (memberOrUser.id || memberOrUser.memberId || null) : null);
       setSelectedMemberId(targetMemberId);
       setNewName(computedName);
       setNewEmail(memberOrUser.email || '');
@@ -240,6 +254,7 @@ export const UserManagement: React.FC = () => {
   }, [requestedUserTarget, usersList, members, populateCredentialFormFromMember]);
 
   const clearFormSelection = () => {
+    setEditingUserId(null);
     setSelectedMemberId('');
     setNewName('');
     setNewEmail('');
@@ -365,6 +380,45 @@ export const UserManagement: React.FC = () => {
       setErrorMsg('Full name is required.');
       return;
     }
+
+    // If editing an existing user profile without typing a new password, save profile via PATCH /api/users/:id
+    if (editingUserId && !newPassword.trim()) {
+      setSubmitting(true);
+      try {
+        const patchPayload = {
+          fullName: newName.trim(),
+          email: newEmail.trim().toLowerCase(),
+          phone: newPhone.trim(),
+          role: selectedRole,
+          designation: selectedDesignation || 'Member',
+        };
+        const res = await fetch(`/api/users/${encodeURIComponent(editingUserId)}`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(patchPayload),
+        });
+        if (handleUnauthorizedSession(res.status)) return;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.user) {
+          const msg = data?.message || 'Could not update user account.';
+          setErrorMsg(msg);
+          showToast(msg);
+          return;
+        }
+        setUsersList((prev) => prev.map((row) => (row.id === editingUserId ? data.user : row)));
+        showToast(`Updated profile for ${data.user.fullName}.`);
+        clearFormSelection();
+        await refreshMembers?.();
+      } catch {
+        const msg = 'Network error updating user profile.';
+        setErrorMsg(msg);
+        showToast(msg);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     if (!selectedMemberId && !newEmail.trim() && !newPhone.trim()) {
       setErrorMsg('Select a member or enter an email address or phone number.');
       return;
@@ -514,6 +568,34 @@ export const UserManagement: React.FC = () => {
     }
   };
 
+  const handleDeleteUserAccount = async (user: ManagedUser) => {
+    if (!canCreateUsers) return;
+    setConfirmDeleteUserId(null);
+    setBusyUserId(user.id);
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Failed to delete user account.');
+        return;
+      }
+      setUsersList((prev) => prev.filter((row) => row.id !== user.id));
+      if (editingUserId === user.id || selectedMemberId === (user.memberId || user.id)) {
+        clearFormSelection();
+      }
+      showToast(`Deleted user account for ${user.fullName}.`);
+      await refreshMembers?.();
+    } catch {
+      showToast('Network error deleting user account.');
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   const renderCredentialBadge = (u: ManagedUser) => {
     if (!u.hasCredentials || u.credentialStatus === 'unprovisioned') {
       return (
@@ -593,23 +675,23 @@ export const UserManagement: React.FC = () => {
       </div>
 
       {/* Live Credential Summary Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3 min-w-0 w-full">
         <button
           type="button"
           onClick={() => setFilterMode('all')}
-          className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+          className={`min-w-0 text-left p-3 sm:p-3.5 rounded-2xl border transition-all cursor-pointer ${
             filterMode === 'all'
               ? 'bg-[#EFEDFF] dark:bg-[#25234A] border-[#6D5CF2] shadow-xs'
               : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
           }`}
         >
-          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block truncate">
             Total Directory Users
           </span>
           <strong className="text-xl font-extrabold text-[#1D1B3A] dark:text-white tabular-nums">
             {stats.total}
           </strong>
-          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 tabular-nums">
+          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 tabular-nums truncate">
             {stats.membersCount} members · {stats.staffCount} staff
           </span>
         </button>
@@ -617,19 +699,19 @@ export const UserManagement: React.FC = () => {
         <button
           type="button"
           onClick={() => setFilterMode('has_login')}
-          className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+          className={`min-w-0 text-left p-3 sm:p-3.5 rounded-2xl border transition-all cursor-pointer ${
             filterMode === 'has_login'
               ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-500 shadow-xs'
               : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
           }`}
         >
-          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block truncate">
             Active Logins
           </span>
           <strong className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
             {stats.activeLoginCount}
           </strong>
-          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5">
+          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 truncate">
             Ready to sign in
           </span>
         </button>
@@ -637,19 +719,19 @@ export const UserManagement: React.FC = () => {
         <button
           type="button"
           onClick={() => setFilterMode('temp_password')}
-          className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+          className={`min-w-0 text-left p-3 sm:p-3.5 rounded-2xl border transition-all cursor-pointer ${
             filterMode === 'temp_password'
               ? 'bg-[#EFEDFF] dark:bg-[#25234A] border-[#6D5CF2] shadow-xs'
               : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
           }`}
         >
-          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block truncate">
             Temp Password
           </span>
           <strong className="text-xl font-extrabold text-[#6D5CF2] dark:text-[#9D90FF] tabular-nums">
             {stats.tempPasswordCount}
           </strong>
-          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5">
+          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 truncate">
             Password change on next login
           </span>
         </button>
@@ -657,19 +739,19 @@ export const UserManagement: React.FC = () => {
         <button
           type="button"
           onClick={() => setFilterMode('unprovisioned')}
-          className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+          className={`min-w-0 text-left p-3 sm:p-3.5 rounded-2xl border transition-all cursor-pointer ${
             filterMode === 'unprovisioned'
               ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500 shadow-xs'
               : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
           }`}
         >
-          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block truncate">
             No Credentials Yet
           </span>
           <strong className="text-xl font-extrabold text-amber-600 dark:text-amber-400 tabular-nums">
             {stats.unprovisionedCount}
           </strong>
-          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5">
+          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 truncate">
             Needs email/phone login
           </span>
         </button>
@@ -677,19 +759,19 @@ export const UserManagement: React.FC = () => {
         <button
           type="button"
           onClick={() => setFilterMode('suspended')}
-          className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+          className={`col-span-2 sm:col-span-2 lg:col-span-1 min-w-0 text-left p-3 sm:p-3.5 rounded-2xl border transition-all cursor-pointer ${
             filterMode === 'suspended'
               ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-500 shadow-xs'
               : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
           }`}
         >
-          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block">
+          <span className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] block truncate">
             Suspended / Locked
           </span>
           <strong className="text-xl font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
             {stats.suspendedCount}
           </strong>
-          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5">
+          <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block mt-0.5 truncate">
             Blocked or rate-locked
           </span>
         </button>
@@ -707,7 +789,9 @@ export const UserManagement: React.FC = () => {
               <h3 className="text-xs font-bold uppercase tracking-wider text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2">
                 <UserPlus className="w-4 h-4 text-[#6D5CF2]" />
                 <span>
-                  {selectedMemberId
+                  {editingUserId
+                    ? `Edit User Account — ${newName || 'Selected Account'}`
+                    : selectedMemberId
                     ? selectedTargetHasLogin
                       ? `Reset Credentials & Role — ${newName || 'Selected Member'}`
                       : `Issue Login Credentials — ${newName || 'Selected Member'}`
@@ -715,17 +799,19 @@ export const UserManagement: React.FC = () => {
                 </span>
               </h3>
               <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
-                Pick an enrolled congregation member to issue or reset their login, or create a brand-new user account.
+                {editingUserId
+                  ? 'Update name, email, phone, portfolio, or access role directly — or enter a new password below to reset login credentials.'
+                  : 'Pick an enrolled congregation member to issue or reset their login, or create a brand-new user account.'}
               </p>
             </div>
-            {selectedMemberId && (
+            {(selectedMemberId || editingUserId) && (
               <button
                 type="button"
                 onClick={clearFormSelection}
                 className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white flex items-center gap-1 cursor-pointer"
               >
                 <X className="w-3 h-3" />
-                <span>Clear Selection</span>
+                <span>{editingUserId ? 'Cancel Edit' : 'Clear Selection'}</span>
               </button>
             )}
           </div>
@@ -959,14 +1045,18 @@ export const UserManagement: React.FC = () => {
               disabled={submitting}
               className="min-h-[44px] px-5 py-2.5 bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
             >
-              {selectedMemberId && selectedTargetHasLogin ? (
+              {editingUserId && !newPassword.trim() ? (
+                <Edit3 className="w-4 h-4" />
+              ) : selectedMemberId && selectedTargetHasLogin ? (
                 <RotateCcw className="w-4 h-4" />
               ) : (
                 <KeyRound className="w-4 h-4" />
               )}
               <span>
                 {submitting
-                  ? 'Saving Credentials...'
+                  ? 'Saving Changes...'
+                  : editingUserId && !newPassword.trim()
+                  ? 'Save User Changes'
                   : selectedMemberId && selectedTargetHasLogin
                   ? 'Reset Credentials & Save'
                   : 'Issue Login Credentials'}
@@ -1167,7 +1257,18 @@ export const UserManagement: React.FC = () => {
                       <>
                         <button
                           type="button"
-                          onClick={() => populateCredentialFormFromMember(u)}
+                          onClick={() => populateCredentialFormFromMember(u, 'edit')}
+                          title={`Edit ${u.fullName}'s profile & role`}
+                          aria-label={`Edit ${u.fullName}`}
+                          className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-[#F6F7FC] hover:bg-[#EFEDFF] dark:bg-[#14142E] dark:hover:bg-[#2A2A55] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => populateCredentialFormFromMember(u, 'credentials')}
                           className="min-h-[38px] px-3 py-1.5 rounded-xl bg-[#EFEDFF] hover:bg-[#E2DEFF] dark:bg-[#2A2A55] dark:hover:bg-[#35356B] text-[#6D5CF2] dark:text-[#A398FF] font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
                           {u.hasCredentials ? (
@@ -1191,7 +1292,7 @@ export const UserManagement: React.FC = () => {
                             className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 ${
                               isBlocked
                                 ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
-                                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300 border border-rose-200 dark:border-rose-800/50'
+                                : 'bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50'
                             }`}
                           >
                             {isBlocked ? (
@@ -1206,6 +1307,32 @@ export const UserManagement: React.FC = () => {
                               </>
                             )}
                           </button>
+                        )}
+
+                        {!isSelf && (
+                          confirmDeleteUserId === u.id ? (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleDeleteUserAccount(u)}
+                              className="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Confirm</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => setConfirmDeleteUserId(u.id)}
+                              title={`Delete ${u.fullName}`}
+                              aria-label={`Delete ${u.fullName}`}
+                              className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:hover:bg-rose-950/70 dark:text-rose-300 border border-rose-200 dark:border-rose-800/50 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          )
                         )}
                       </>
                     )}

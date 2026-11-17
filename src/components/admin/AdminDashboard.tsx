@@ -127,6 +127,8 @@ export const AdminDashboard: React.FC = () => {
     showToast,
     followupTasks,
     resolveFollowupTask,
+    updateFollowupTask,
+    deleteFollowupTask,
     addFollowupTask,
     autoAssignAbsentees,
     isAutoAssigningAbsentees,
@@ -181,6 +183,7 @@ export const AdminDashboard: React.FC = () => {
   const [qrServiceTarget, setQrServiceTarget] = useState<ServiceQrTarget | null>(null);
   const [isAdminQrScannerOpen, setIsAdminQrScannerOpen] = useState(false);
   const [confirmDeleteCalendarSvcId, setConfirmDeleteCalendarSvcId] = useState<string | null>(null);
+  const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
   const [tickNowMs, setTickNowMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
@@ -195,6 +198,12 @@ export const AdminDashboard: React.FC = () => {
     const timer = window.setTimeout(() => setConfirmDeleteCalendarSvcId(null), 5000);
     return () => window.clearTimeout(timer);
   }, [confirmDeleteCalendarSvcId]);
+
+  useEffect(() => {
+    if (!confirmDeleteTaskId) return;
+    const timer = window.setTimeout(() => setConfirmDeleteTaskId(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [confirmDeleteTaskId]);
 
   useEffect(() => {
     if (adminSubTab) {
@@ -723,6 +732,47 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <QrCode className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
                     <span>Service QR</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!currentService?.id || isPlaceholderServiceId(currentService.id)}
+                    title={
+                      currentService?.id && !isPlaceholderServiceId(currentService.id)
+                        ? `Edit ${currentService.name}`
+                        : 'Schedule a service first'
+                    }
+                    onClick={() => {
+                      if (!currentService?.id || isPlaceholderServiceId(currentService.id)) return;
+                      const allowance =
+                        currentService.dwellMinutes ?? systemSettings.dwellTimeMinutes ?? 5;
+                      const rawStatus =
+                        currentService.status === 'closed' || currentService.manualClosed
+                          ? 'closed'
+                          : 'active';
+                      setEditingServiceTarget({
+                        id: currentService.id,
+                        name: currentService.name,
+                        date: currentService.date || getLocalIsoDate(),
+                        startsAt: currentService.startsAt,
+                        endsAt: currentService.endsAt,
+                        expectedAttendance: currentService.expectedAttendance,
+                        dwellMinutes: allowance,
+                        status: computeServiceBinaryStatus({
+                          date: currentService.date,
+                          startsAt: currentService.startsAt,
+                          endsAt: currentService.endsAt,
+                          startTimeIso: currentService.startTimeIso,
+                          endTimeIso: currentService.endTimeIso,
+                          allowanceMinutes: allowance,
+                          rawStatus,
+                        }),
+                      });
+                    }}
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 disabled:opacity-45 disabled:cursor-not-allowed border border-white/15 text-white rounded-lg px-2.5 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
+                    <span className="hidden sm:inline">Edit</span>
                   </button>
 
                   <button
@@ -1696,24 +1746,66 @@ export const AdminDashboard: React.FC = () => {
                                 </div>
                               </div>
 
-                              <ContactCallButton
-                                compact
-                                contactName={task.personName}
-                                contactPhone={
-                                  task.personPhone ||
-                                  linkedMember?.phoneE164 ||
-                                  linkedMember?.phoneNumber
-                                }
-                                contactEmail={task.personEmail || linkedMember?.email}
-                                contactGroup={task.groupName}
-                                onLogOutcome={async (outcome, markResolved) => {
-                                  await resolveFollowupTask(
-                                    task.id,
-                                    outcome,
-                                    markResolved ? 'resolved' : 'contacted'
-                                  );
-                                }}
-                              />
+                              <div className="flex items-center gap-1 shrink-0">
+                                <ContactCallButton
+                                  compact
+                                  contactName={task.personName}
+                                  contactPhone={
+                                    task.personPhone ||
+                                    linkedMember?.phoneE164 ||
+                                    linkedMember?.phoneNumber
+                                  }
+                                  contactEmail={task.personEmail || linkedMember?.email}
+                                  contactGroup={task.groupName}
+                                  onLogOutcome={async (outcome, markResolved) => {
+                                    await resolveFollowupTask(
+                                      task.id,
+                                      outcome,
+                                      markResolved ? 'resolved' : 'contacted'
+                                    );
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => resolveFollowupTask(task.id, 'Resolved from care queue', 'resolved')}
+                                  title="Mark care task resolved"
+                                  aria-label={`Resolve ${task.personName}`}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors cursor-pointer"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsFollowupModalOpen(true)}
+                                  title="Edit assignment in care queue"
+                                  aria-label={`Edit care assignment for ${task.personName}`}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                {confirmDeleteTaskId === task.id ? (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setConfirmDeleteTaskId(null);
+                                      await deleteFollowupTask(task.id);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold cursor-pointer"
+                                  >
+                                    Confirm
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteTaskId(task.id)}
+                                    title="Delete care assignment"
+                                    aria-label={`Delete care assignment for ${task.personName}`}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -2461,6 +2553,13 @@ export const AdminDashboard: React.FC = () => {
         onSaveService={async (svcId, updates) => {
           await updateService(svcId, updates);
         }}
+        onDeleteService={async (svcId) => {
+          try {
+            await deleteService(svcId);
+          } catch (err: any) {
+            showToast(err?.message || 'Could not delete scheduled service.');
+          }
+        }}
         onOpenServiceQr={setQrServiceTarget}
         onNotify={showToast}
         formatDateLabel={formatServiceDate}
@@ -2508,6 +2607,8 @@ export const AdminDashboard: React.FC = () => {
         onAutoAssignAbsentees={() => autoAssignAbsentees({ silent: false })}
         onOpenPastoralSettings={() => requestOpenSettings('pastoral')}
         onResolveTask={resolveFollowupTask}
+        onEditTask={updateFollowupTask}
+        onDeleteTask={deleteFollowupTask}
         onNotify={showToast}
       />
 

@@ -109,6 +109,49 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   customGroupCategories: [],
 };
 
+function areSystemSettingsEqual(a: SystemSettings, b: SystemSettings): boolean {
+  if (a === b) return true;
+  if (
+    (a.churchName || '') !== (b.churchName || '') ||
+    (a.campusName || '') !== (b.campusName || '') ||
+    (a.campusAddress || '') !== (b.campusAddress || '') ||
+    (a.campusLatitude ?? null) !== (b.campusLatitude ?? null) ||
+    (a.campusLongitude ?? null) !== (b.campusLongitude ?? null) ||
+    (a.campusLocationAccuracyM ?? null) !== (b.campusLocationAccuracyM ?? null) ||
+    (a.campusLocationUpdatedAt ?? null) !== (b.campusLocationUpdatedAt ?? null) ||
+    (a.seniorPastor || '') !== (b.seniorPastor || '') ||
+    (a.contactEmail || '') !== (b.contactEmail || '') ||
+    (a.contactPhone || '') !== (b.contactPhone || '') ||
+    a.timezone !== b.timezone ||
+    a.currency !== b.currency ||
+    a.outerGeofenceMeters !== b.outerGeofenceMeters ||
+    a.innerGeofenceMeters !== b.innerGeofenceMeters ||
+    a.dwellTimeMinutes !== b.dwellTimeMinutes ||
+    a.serviceWindowBeforeMinutes !== b.serviceWindowBeforeMinutes ||
+    a.serviceWindowAfterMinutes !== b.serviceWindowAfterMinutes ||
+    a.bleBeaconRssiThreshold !== b.bleBeaconRssiThreshold ||
+    a.driveByProtection !== b.driveByProtection ||
+    a.absenteeThresholdServices !== b.absenteeThresholdServices ||
+    a.firstTimerFollowupHours !== b.firstTimerFollowupHours ||
+    a.autoAssignCellLeaders !== b.autoAssignCellLeaders ||
+    a.requireExplicitConsent !== b.requireExplicitConsent ||
+    a.auditLogRetentionDays !== b.auditLogRetentionDays ||
+    (a.sessionTimeoutMinutes ?? 30) !== (b.sessionTimeoutMinutes ?? 30) ||
+    a.smsGatewayProvider !== b.smsGatewayProvider ||
+    a.smsSenderId !== b.smsSenderId ||
+    a.emailGatewayProvider !== b.emailGatewayProvider ||
+    (a.emailFromAddress || '') !== (b.emailFromAddress || '') ||
+    (a.emailSenderName || '') !== (b.emailSenderName || '') ||
+    a.enablePushNotifications !== b.enablePushNotifications
+  ) {
+    return false;
+  }
+  const catsA = a.customGroupCategories || [];
+  const catsB = b.customGroupCategories || [];
+  if (catsA.length !== catsB.length) return false;
+  return JSON.stringify(catsA) === JSON.stringify(catsB);
+}
+
 function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>): Person {
   const raw = (input || {}) as Partial<Person> & Record<string, unknown>;
   const firstName = String(raw.firstName ?? raw.first_name ?? 'Member').trim() || 'Member';
@@ -463,6 +506,16 @@ interface EkklesphereContextType {
     outcome: string,
     nextStatus?: 'open' | 'contacted' | 'resolved' | 'dismissed'
   ) => Promise<void>;
+  updateFollowupTask: (
+    taskId: string,
+    patch: {
+      status?: 'open' | 'contacted' | 'resolved' | 'dismissed';
+      outcome?: string;
+      assignedToName?: string;
+      notes?: string;
+    }
+  ) => Promise<FollowupTask | null>;
+  deleteFollowupTask: (taskId: string) => Promise<boolean>;
   addFollowupTask: (personId: string, reason: 'absent_2' | 'absent_3' | 'first_timer' | 'manual', notes: string) => Promise<void>;
   autoAssignAbsentees: (options?: {
     unarrivedMemberIds?: string[];
@@ -3574,8 +3627,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
-  let serverPremiseUnavailableErrors = 0;
-  let premisePollTicks = 0;
+  const serverPremiseUnavailableErrorsRef = useRef(0);
+  const premisePollTicksRef = useRef(0);
 
   const refreshSystemSettings = async (): Promise<void> => {
     const token =
@@ -3606,10 +3659,15 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...data.settings,
           churchName: fallbackOrgName,
         };
-        setSystemSettings(merged);
-        try {
-          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(merged));
-        } catch {}
+        setSystemSettings((prev) => {
+          if (areSystemSettingsEqual(prev, merged)) {
+            return prev;
+          }
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
       }
     } catch {
       // ignore transient network errors
@@ -3706,8 +3764,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
 
-    premisePollTicks++;
-    if (serverPremiseUnavailableErrors >= 2 && premisePollTicks % 8 !== 0) {
+    premisePollTicksRef.current += 1;
+    if (
+      serverPremiseUnavailableErrorsRef.current >= 2 &&
+      premisePollTicksRef.current % 8 !== 0
+    ) {
       return;
     }
 
@@ -3720,12 +3781,12 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (handleUnauthorizedSession(res.status)) return;
         if (res.ok) {
           serverData = await res.json();
-          serverPremiseUnavailableErrors = 0;
+          serverPremiseUnavailableErrorsRef.current = 0;
         } else {
-          serverPremiseUnavailableErrors++;
+          serverPremiseUnavailableErrorsRef.current += 1;
         }
       } catch {
-        serverPremiseUnavailableErrors++;
+        serverPremiseUnavailableErrorsRef.current += 1;
       }
 
       if (serverData?.premiseSettings) {
@@ -3736,20 +3797,21 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const nextCampusAddress = ps.campusAddress ?? prev.campusAddress;
           const nextLat = typeof ps.lat === 'number' ? ps.lat : null;
           const nextLng = typeof ps.lng === 'number' ? ps.lng : null;
-          const nextAcc = typeof ps.accuracyM === 'number' ? ps.accuracyM : null;
+          const nextAcc =
+            typeof ps.accuracyM === 'number' ? ps.accuracyM : prev.campusLocationAccuracyM ?? null;
           const nextUpdatedAt = ps.updatedAt || null;
           const nextInner = ps.innerGeofenceMeters ?? prev.innerGeofenceMeters;
           const nextOuter = ps.outerGeofenceMeters ?? prev.outerGeofenceMeters;
           const nextDwell = ps.dwellTimeMinutes ?? prev.dwellTimeMinutes;
 
           if (
-            prev.churchName === nextChurchName &&
-            prev.campusName === nextCampusName &&
-            prev.campusAddress === nextCampusAddress &&
-            prev.campusLatitude === nextLat &&
-            prev.campusLongitude === nextLng &&
-            prev.campusLocationAccuracyM === nextAcc &&
-            prev.campusLocationUpdatedAt === nextUpdatedAt &&
+            (prev.churchName || '') === (nextChurchName || '') &&
+            (prev.campusName || '') === (nextCampusName || '') &&
+            (prev.campusAddress || '') === (nextCampusAddress || '') &&
+            (prev.campusLatitude ?? null) === nextLat &&
+            (prev.campusLongitude ?? null) === nextLng &&
+            (prev.campusLocationAccuracyM ?? null) === nextAcc &&
+            (prev.campusLocationUpdatedAt ?? null) === (nextUpdatedAt ?? null) &&
             prev.innerGeofenceMeters === nextInner &&
             prev.outerGeofenceMeters === nextOuter &&
             prev.dwellTimeMinutes === nextDwell
@@ -3777,7 +3839,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
       } else if (serverData?.configured === false) {
         setSystemSettings((prev) => {
-          if (prev.campusLatitude === null && prev.campusLongitude === null) return prev;
+          if ((prev.campusLatitude ?? null) === null && (prev.campusLongitude ?? null) === null) {
+            return prev;
+          }
           const next = {
             ...prev,
             campusLatitude: null,
@@ -4455,7 +4519,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     dwellTimeMinutes?: number;
   }): Promise<boolean> => {
     try {
-      serverPremiseUnavailableErrors = 0;
+      serverPremiseUnavailableErrorsRef.current = 0;
       const parsedLat = typeof params.lat === 'number' ? params.lat : parseFloat(String(params.lat));
       const parsedLng = typeof params.lng === 'number' ? params.lng : parseFloat(String(params.lng));
 
@@ -4578,14 +4642,17 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const updateSystemSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
-    const optimisticNext: SystemSettings = {
-      ...systemSettings,
-      ...newSettings,
-    };
-    setSystemSettings(optimisticNext);
-    try {
-      localStorage.setItem('ekklesphere_system_settings', JSON.stringify(optimisticNext));
-    } catch {}
+    setSystemSettings((prev) => {
+      const optimisticNext: SystemSettings = {
+        ...prev,
+        ...newSettings,
+      };
+      if (areSystemSettingsEqual(prev, optimisticNext)) return prev;
+      try {
+        localStorage.setItem('ekklesphere_system_settings', JSON.stringify(optimisticNext));
+      } catch {}
+      return optimisticNext;
+    });
 
     setIsSyncingSystemSettings(true);
     try {
@@ -4610,10 +4677,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...DEFAULT_SYSTEM_SETTINGS,
           ...data.settings,
         };
-        setSystemSettings(synced);
-        try {
-          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(synced));
-        } catch {}
+        setSystemSettings((prev) => {
+          if (areSystemSettingsEqual(prev, synced)) return prev;
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(synced));
+          } catch {}
+          return synced;
+        });
       }
 
       refreshAuditLogs().catch(() => {});
@@ -5276,6 +5346,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         headers: getAuthHeaders(),
         body: JSON.stringify({ status: nextStatus, outcome }),
       });
+      if (handleUnauthorizedSession(res.status)) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.task) {
         showToast(data?.message || 'Could not update follow-up task in database.');
@@ -5289,6 +5360,57 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       );
     } catch {
       showToast('Network error updating follow-up task.');
+    }
+  };
+
+  const updateFollowupTask = async (
+    taskId: string,
+    patch: {
+      status?: 'open' | 'contacted' | 'resolved' | 'dismissed';
+      outcome?: string;
+      assignedToName?: string;
+      notes?: string;
+    }
+  ): Promise<FollowupTask | null> => {
+    try {
+      const res = await fetch(`/api/followup-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(patch),
+      });
+      if (handleUnauthorizedSession(res.status)) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.task) {
+        showToast(data?.message || 'Could not update follow-up task.');
+        return null;
+      }
+      setFollowupTasks((prev) => prev.map((t) => (t.id === taskId ? data.task : t)));
+      showToast(`Care assignment updated for ${data.task.personName}.`);
+      return data.task;
+    } catch {
+      showToast('Network error updating follow-up task.');
+      return null;
+    }
+  };
+
+  const deleteFollowupTask = async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/followup-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return false;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.message || 'Could not delete follow-up task.');
+        return false;
+      }
+      setFollowupTasks((prev) => prev.filter((t) => t.id !== taskId));
+      showToast('Care assignment deleted.');
+      return true;
+    } catch {
+      showToast('Network error deleting follow-up task.');
+      return false;
     }
   };
 
@@ -5620,6 +5742,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       followupTasks,
       isAutoAssigningAbsentees,
       resolveFollowupTask,
+      updateFollowupTask,
+      deleteFollowupTask,
       addFollowupTask,
       autoAssignAbsentees,
       memberConsents,

@@ -728,8 +728,8 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
       </div>
 
       {/* Quick Arrival Check-In Bar (Real-Time Check-In Action) */}
-      <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-4 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="text-xs">
+      <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-3.5 sm:p-4 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0 w-full">
+        <div className="text-xs min-w-0">
           <p className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
             Record Live Arrival
           </p>
@@ -745,18 +745,18 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
         </div>
 
         {!hasScheduledService ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setIsAddServiceOpen(true)}
-              className="min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="w-full sm:w-auto min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] text-white inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <CalendarIcon className="w-3.5 h-3.5" />
               <span>Schedule Service</span>
             </button>
           </div>
         ) : members.length === 0 ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             {onOpenAddMember && (
               <button
                 type="button"
@@ -779,7 +779,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
             )}
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-1 sm:flex sm:flex-wrap lg:flex-nowrap items-center gap-2 w-full lg:w-auto min-w-0">
             <label htmlFor="quick-checkin-member" className="sr-only">
               Select member to check in
             </label>
@@ -788,7 +788,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               value={quickMemberId}
               onChange={(e) => setQuickMemberId(e.target.value)}
               disabled={unarrivedMembers.length === 0}
-              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] w-full sm:w-auto sm:min-w-[200px] min-w-0"
+              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] w-full sm:flex-1 sm:min-w-[180px] lg:w-56 xl:w-64 min-w-0 truncate"
             >
               <option value="">
                 {unarrivedMembers.length > 0
@@ -810,7 +810,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               value={quickMethod}
               onChange={(e) => setQuickMethod(e.target.value as CheckinMethod)}
               disabled={unarrivedMembers.length === 0}
-              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2]"
+              className="min-h-[40px] px-3 py-2 rounded-xl text-xs bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] w-full sm:w-auto min-w-0"
             >
               <option value="usher">Usher Desk</option>
               <option value="geofence">GPS Geofence</option>
@@ -823,7 +823,7 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
               type="button"
               onClick={handleQuickRecordCheckin}
               disabled={unarrivedMembers.length === 0 || !hasScheduledService}
-              className="min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              className="w-full sm:w-auto min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#6D5CF2] hover:bg-[#5b4be0] disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               <Check className="w-3.5 h-3.5" />
               <span>Check In Member</span>

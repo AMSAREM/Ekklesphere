@@ -4679,6 +4679,48 @@ app.put(
   }
 );
 
+const memberDataRequestSchema = z.object({
+  requestType: z.enum(['export', 'deletion']),
+  reason: z.string().trim().max(500).optional(),
+});
+
+app.post(
+  '/api/data-requests/me',
+  requireUser,
+  enforceOrganizationScope,
+  async (req: Request, res: Response) => {
+    const parsed = memberDataRequestSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid data privacy request payload.',
+      });
+    }
+
+    try {
+      const requestedByEmail =
+        req.user?.email ||
+        `${(req.user?.name || 'member').toLowerCase().replace(/[^a-z0-9]+/g, '.')}@member.local`;
+      const dataRequest = await platformStore.createDataRequest({
+        organizationId: req.organizationId!,
+        requestType: parsed.data.requestType,
+        requestedByEmail,
+        reason:
+          parsed.data.reason ||
+          (parsed.data.requestType === 'deletion'
+            ? 'Member self-service deletion request (Ghana Act 843)'
+            : 'Member self-service data export'),
+      });
+      return res.status(201).json({ dataRequest });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'data_request_failed',
+        message: err?.message || 'Failed to submit data privacy request.',
+      });
+    }
+  }
+);
+
 // =========================================================================
 // ORGANISATION STAFF DIRECTORY & PROVISIONING (ADMIN / CREATOR)
 // =========================================================================
@@ -4800,13 +4842,27 @@ const manageUserCredentialsSchema = z
 
 const updateUserAccountSchema = z
   .object({
+    fullName: optionalTrimmedText(150),
+    email: optionalEmailField,
+    phone: optionalTrimmedText(40),
     role: z.enum(USER_ROLES_ENUM).optional(),
     status: z.enum(['active', 'suspended']).optional(),
     designation: optionalTrimmedText(120),
   })
-  .refine((data) => Boolean(data.role || data.status || data.designation !== undefined), {
-    message: 'Provide at least a role, portfolio/designation, or account status update.',
-  });
+  .refine(
+    (data) =>
+      Boolean(
+        data.fullName !== undefined ||
+          data.email !== undefined ||
+          data.phone !== undefined ||
+          data.role ||
+          data.status ||
+          data.designation !== undefined
+      ),
+    {
+      message: 'Provide at least a name, email, phone, role, portfolio/designation, or status update.',
+    }
+  );
 
 app.get(
   '/api/users',
@@ -4895,6 +4951,9 @@ app.patch(
       const user = await platformStore.updateOrganizationUserAccount({
         organizationId: req.organizationId!,
         targetId: String(req.params.id || ''),
+        fullName: parsed.data.fullName,
+        email: parsed.data.email,
+        phone: parsed.data.phone,
         role: parsed.data.role,
         status: parsed.data.status,
         designation: parsed.data.designation,
@@ -4908,6 +4967,35 @@ app.patch(
       return res.status(err?.status || 400).json({
         error: err?.code || 'user_account_update_failed',
         message: err?.message || 'Failed to update user account.',
+      });
+    }
+  }
+);
+
+app.delete(
+  '/api/users/:id',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const callerIsCreator =
+      req.user?.role === 'creator' ||
+      req.user?.role === 'super_admin' ||
+      Boolean(req.user?.is_creator);
+
+    try {
+      const deleted = await platformStore.deleteOrganizationUserAccount({
+        organizationId: req.organizationId!,
+        targetId: String(req.params.id || ''),
+        actorUserId: req.user?.id || null,
+        actorEmail: req.user?.email || null,
+        callerIsCreator,
+        ipAddress: req.ip,
+      });
+      return res.status(200).json({ success: true, ...deleted });
+    } catch (err: any) {
+      return res.status(err?.status || 400).json({
+        error: err?.code || 'user_account_delete_failed',
+        message: err?.message || 'Failed to delete user account.',
       });
     }
   }

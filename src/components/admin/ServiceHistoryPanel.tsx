@@ -527,17 +527,23 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
     await fetchHistory();
   };
 
-  const handleDeleteServiceConfirmed = async (svc: ServiceHistoryEntry) => {
-    setBusyServiceId(svc.id);
+  const handleDeleteService = async (serviceId: string) => {
+    setBusyServiceId(serviceId);
     setConfirmDeleteId(null);
     try {
-      await deleteService(svc.id);
+      await deleteService(serviceId);
       await fetchHistory();
+      showToast('Service deleted');
     } catch (err: any) {
       showToast(err?.message || 'Could not delete service');
+      throw err;
     } finally {
       setBusyServiceId(null);
     }
+  };
+
+  const handleDeleteServiceConfirmed = async (svc: ServiceHistoryEntry) => {
+    await handleDeleteService(svc.id).catch(() => {});
   };
 
   const handleQuickCheckinSubmit = async (e: React.FormEvent) => {
@@ -755,11 +761,11 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
       </section>
 
       {/* Filter & Search Toolbar (Strictly All / Live / Closed) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 min-w-0 w-full">
         <div
           role="tablist"
           aria-label="Filter service register by live or closed status"
-          className="inline-flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] self-start"
+          className="inline-flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] self-start max-w-full overflow-x-auto"
         >
           {(
             [
@@ -785,7 +791,7 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
           ))}
         </div>
 
-        <div className="relative w-full sm:w-72">
+        <div className="relative w-full sm:w-64 md:w-72 lg:w-80 min-w-0">
           <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8] pointer-events-none" />
           <input
             type="text"
@@ -1214,6 +1220,28 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
                       <ArrowUpRight className="w-3.5 h-3.5 text-[#6D5CF2]" />
                     </button>
                   )}
+
+                  {confirmDeleteId === selectedService.id ? (
+                    <button
+                      type="button"
+                      disabled={busyServiceId === selectedService.id}
+                      onClick={() => handleDeleteService(selectedService.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Confirm Delete</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busyServiceId === selectedService.id}
+                      onClick={() => setConfirmDeleteId(selectedService.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Service</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Inline Quick Check-In Drawer */}
@@ -1371,6 +1399,8 @@ export const ServiceHistoryPanel: React.FC<ServiceHistoryPanelProps> = ({
         defaultAllowanceMinutes={systemSettings.dwellTimeMinutes ?? 5}
         onClose={() => setEditingTarget(null)}
         onSaveService={handleSaveEditedService}
+        onDeleteService={handleDeleteService}
+        onOpenServiceQr={setQrTargetService}
         onNotify={showToast}
         formatDateLabel={formatDateInputLabel}
       />

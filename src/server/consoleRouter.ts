@@ -84,6 +84,7 @@ const UpdateOrgSchema = z.object({
   contactPhone: z.string().trim().max(40).optional(),
   status: OrgStatusEnum.optional(),
   customDomain: z.string().trim().max(180).nullable().optional(),
+  geofenceRadiusMeters: z.number().int().min(10).max(5000).optional(),
   smsConfigured: z.boolean().optional(),
   pushConfigured: z.boolean().optional(),
   reason: z.string().trim().max(400).optional(),

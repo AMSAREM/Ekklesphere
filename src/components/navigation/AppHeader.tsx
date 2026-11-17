@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { BrandLogo } from '../common/BrandLogo';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 export const AppHeader: React.FC = () => {
   const {
@@ -53,11 +54,14 @@ export const AppHeader: React.FC = () => {
   // Close dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (userMenuRef.current && !userMenuRef.current.contains(target)) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('[data-pwa-install-modal="true"]')) {
+        return;
+      }
+      if (userMenuRef.current && target && !userMenuRef.current.contains(target)) {
         setIsUserMenuOpen(false);
       }
-      if (notifMenuRef.current && !notifMenuRef.current.contains(target)) {
+      if (notifMenuRef.current && target && !notifMenuRef.current.contains(target)) {
         setIsNotifDropdownOpen(false);
       }
     };
@@ -196,6 +200,12 @@ export const AppHeader: React.FC = () => {
                 <span className="hidden sm:inline">Creator</span>
               </button>
             )}
+
+          {/* Install App (PWA) Quick Trigger */}
+          <PWAInstallButton
+            variant="header"
+            onInstalled={() => showToast('Ekklesphere installed on your device!')}
+          />
 
           {/* Minimal Theme Switcher */}
           <button
@@ -401,6 +411,11 @@ export const AppHeader: React.FC = () => {
                         <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" title="Temporary password active" />
                       )}
                     </button>
+                    <PWAInstallButton
+                      variant="menu"
+                      onActionComplete={() => setIsUserMenuOpen(false)}
+                      onInstalled={() => showToast('Ekklesphere installed on your device!')}
+                    />
                     <button
                       onClick={() => {
                         setIsUserMenuOpen(false);

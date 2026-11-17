@@ -430,34 +430,36 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-3xl w-full max-w-3xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 lg:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl sm:rounded-3xl w-full max-w-3xl xl:max-w-4xl max-h-[94dvh] sm:max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden min-w-0">
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between shrink-0 bg-slate-50/50 dark:bg-white/[0.02]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#6D5CF2]/10 dark:bg-[#6D5CF2]/20 flex items-center justify-center text-[#6D5CF2]">
-              <UserPlus className="w-5 h-5" />
+        <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-3 shrink-0 bg-slate-50/50 dark:bg-white/[0.02]">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-[#6D5CF2]/10 dark:bg-[#6D5CF2]/20 flex items-center justify-center text-[#6D5CF2] shrink-0">
+              <UserPlus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
                 {initialData ? 'Edit Member Record' : 'Register New Church Member'}
               </h2>
-              <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+              <p className="text-[11px] sm:text-xs text-[#666A86] dark:text-[#A9ACC8] truncate">
                 Complete 28-field demographic, church & spiritual profile
               </p>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
+            aria-label="Close member modal"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Form Category Navigation */}
-        <div className="flex items-center gap-1.5 px-5 py-2.5 border-b border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#14142E] overflow-x-auto shrink-0 scrollbar-none">
+        <div className="flex items-center gap-1.5 px-3 sm:px-5 py-2.5 border-b border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#14142E] overflow-x-auto shrink-0 scrollbar-none">
           {[
             { id: 'basic', label: '1. Identity & Contact', icon: Users },
             { id: 'location', label: '2. Residence & GPS', icon: MapPin },
@@ -472,13 +474,13 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                className={`min-h-[36px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                   isActive
                     ? 'bg-[#6D5CF2] text-white shadow-xs'
                     : 'text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className="w-3.5 h-3.5 shrink-0" />
                 <span>{tab.label}</span>
               </button>
             );
@@ -486,14 +488,14 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
         </div>
 
         {submitError && (
-          <div className="mx-5 mt-3 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 flex items-center gap-2 text-xs font-semibold text-rose-600 dark:text-rose-400 shrink-0">
+          <div className="mx-4 sm:mx-5 mt-3 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 flex items-center gap-2 text-xs font-semibold text-rose-600 dark:text-rose-400 shrink-0">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{submitError}</span>
           </div>
         )}
 
         {/* Modal Form Body */}
-        <form noValidate onSubmit={(e) => handleSubmit(e, false)} className="flex-1 overflow-y-auto p-5 space-y-4">
+        <form noValidate onSubmit={(e) => handleSubmit(e, false)} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-4">
           {/* TAB 1: IDENTITY & CONTACT */}
           {activeTab === 'basic' && (
             <div className="space-y-4">
@@ -766,15 +768,15 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   dateOfBirth,
                 });
                 return (
-                  <div className="space-y-3">
-                    <div>
+                  <div className="min-w-0 space-y-3.5">
+                    <div className="min-w-0">
                       <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
                         HOME CELL GROUP
                       </label>
                       <select
                         value={homeCellGroup}
                         onChange={(e) => setHomeCellGroup(e.target.value)}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                        className="w-full min-w-0 min-h-[40px] sm:min-h-[38px] px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                       >
                         {cellGroupOptions.map((g) => (
                           <option key={g} value={g}>
@@ -790,7 +792,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                       )}
                     </div>
 
-                    <div>
+                    <div className="w-full min-w-0 space-y-2.5">
                       <MultiDepartmentSelector
                         idPrefix="admin-member-depts"
                         label="DEPARTMENTS & MINISTRIES (SELECT ONE OR MORE)"
@@ -799,9 +801,9 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                         options={departmentOptions}
                       />
 
-                      <div className="mt-2 p-2.5 rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-1.5">
-                        <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
-                          <span>Automatic Ministries (Gender &amp; Under 35)</span>
+                      <div className="w-full min-w-0 p-3 rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
+                          <span className="min-w-0">Automatic Ministries (Gender &amp; Under 35)</span>
                           {!dateOfBirth && (
                             <span className="font-normal normal-case text-amber-600 dark:text-amber-400">
                               Add Date of Birth to check Youth (&lt;35)
@@ -813,7 +815,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                             {autoDemographic.ministries.map((am) => (
                               <span
                                 key={am.kind}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${
+                                className={`inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-lg text-[11px] font-bold border ${
                                   am.kind === 'youth'
                                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
                                     : am.kind === 'women'
@@ -822,22 +824,22 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                                 }`}
                               >
                                 <Check className="w-3 h-3 shrink-0" />
-                                <span>{am.name}</span>
-                                <span className="opacity-75 font-medium">({am.reason})</span>
+                                <span className="truncate">{am.name}</span>
+                                <span className="opacity-75 font-medium shrink-0">({am.reason})</span>
                               </span>
                             ))}
                           </div>
                         ) : (
-                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] leading-relaxed">
                             Select Male/Female or a Date of Birth under 35 to auto-assign demographic wings.
                           </p>
                         )}
                       </div>
 
                       {ministryGroups.length > 0 && (
-                        <div className="mt-1.5 space-y-0.5">
+                        <div className="space-y-0.5">
                           {ministryGroups.map((mg) => (
-                            <p key={mg.id} className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
+                            <p key={mg.id} className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] break-words">
                               {mg.name} Head:{' '}
                               <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{mg.leaderName}</strong>
                               {mg.meetingDay ? ` · ${mg.meetingDay}` : ''}
@@ -847,17 +849,17 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                      <span>Lists stay synchronized with active groups in System Settings.</span>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-3 text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                      <span className="min-w-0 leading-snug">Lists stay synchronized with active groups in System Settings.</span>
                       <button
                         type="button"
                         onClick={() => {
                           onClose();
                           requestOpenSettings('groups');
                         }}
-                        className="inline-flex items-center gap-1 font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+                        className="inline-flex items-center gap-1 font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline cursor-pointer shrink-0 self-start sm:self-auto"
                       >
-                        <Settings className="w-3 h-3" />
+                        <Settings className="w-3 h-3 shrink-0" />
                         <span>Manage Ministries &amp; Cells</span>
                       </button>
                     </div>
@@ -1209,8 +1211,8 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
           )}
 
           {/* Form Footer Action Buttons */}
-          <div className="pt-4 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between">
-            <div className="flex gap-1.5">
+          <div className="pt-4 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
               {activeTab !== 'basic' && (
                 <button
                   type="button"
@@ -1225,7 +1227,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     const idx = allTabs.indexOf(activeTab);
                     if (idx > 0) setActiveTab(allTabs[idx - 1]);
                   }}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5"
+                  className="min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
                 >
                   Previous
                 </button>
@@ -1244,19 +1246,19 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                     const idx = allTabs.indexOf(activeTab);
                     if (idx < allTabs.length - 1) setActiveTab(allTabs[idx + 1]);
                   }}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold text-[#6D5CF2] bg-[#EFEDFF] dark:bg-[#2A2A55]"
+                  className="min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#6D5CF2] bg-[#EFEDFF] dark:bg-[#2A2A55] cursor-pointer"
                 >
                   Next Step
                 </button>
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 disabled={savingMode !== null}
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-50 cursor-pointer"
+                className="min-h-[40px] sm:min-h-[38px] px-4 py-2 rounded-xl text-xs font-bold text-[#666A86] dark:text-[#A9ACC8] hover:bg-slate-100 dark:hover:bg-white/5 disabled:opacity-50 cursor-pointer"
               >
                 Cancel
               </button>
@@ -1266,7 +1268,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   type="button"
                   disabled={savingMode !== null}
                   onClick={(e) => handleSubmit(e, true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
+                  className="min-h-[40px] sm:min-h-[38px] inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] hover:bg-[#E2DEFF] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
                 >
                   {savingMode === 'another' ? (
                     <>
@@ -1282,7 +1284,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
               <button
                 type="submit"
                 disabled={savingMode !== null}
-                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] text-white hover:bg-[#5b4be0] active:scale-[0.98] disabled:opacity-60 shadow-sm transition-all cursor-pointer"
+                className="min-h-[40px] sm:min-h-[38px] inline-flex items-center justify-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] text-white hover:bg-[#5b4be0] active:scale-[0.98] disabled:opacity-60 shadow-sm transition-all cursor-pointer"
               >
                 {savingMode === 'close' ? (
                   <>

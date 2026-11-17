@@ -8389,6 +8389,7 @@ class PlatformStore {
       contactPhone: string;
       status: TenantStatus;
       customDomain: string | null;
+      geofenceRadiusMeters: number;
       smsConfigured: boolean;
       pushConfigured: boolean;
     }>
@@ -8406,6 +8407,9 @@ class PlatformStore {
       if (updates.contactName !== undefined) dbPatch.contact_name = updates.contactName;
       if (updates.contactEmail !== undefined) dbPatch.contact_email = updates.contactEmail;
       if (updates.contactPhone !== undefined) dbPatch.contact_phone = updates.contactPhone;
+      if (updates.geofenceRadiusMeters !== undefined) {
+        dbPatch.geofence_radius_meters = updates.geofenceRadiusMeters;
+      }
       if (updates.status !== undefined) {
         dbPatch.status = updates.status;
         const { data: curRow } = await this.supabase
@@ -12363,6 +12367,9 @@ class PlatformStore {
   public async updateOrganizationUserAccount(params: {
     organizationId: string;
     targetId: string;
+    fullName?: string;
+    email?: string;
+    phone?: string;
     role?: ChurchRole;
     status?: 'active' | 'suspended';
     designation?: string;
@@ -12394,6 +12401,24 @@ class PlatformStore {
       err.status = 400;
       throw err;
     }
+
+    const cleanName = params.fullName !== undefined ? params.fullName.trim() : undefined;
+    const cleanEmail = params.email !== undefined ? params.email.trim().toLowerCase() : undefined;
+    const cleanPhoneE164 =
+      params.phone !== undefined
+        ? params.phone.trim()
+          ? normalizePhone(params.phone.trim())
+          : ''
+        : undefined;
+    const splitName = cleanName
+      ? (() => {
+          const parts = cleanName.split(/\s+/).filter(Boolean);
+          return {
+            firstName: parts[0] || cleanName,
+            lastName: parts.slice(1).join(' ') || parts[0] || cleanName,
+          };
+        })()
+      : null;
 
     const sb = this.activeSupabase;
     const nowIso = new Date().toISOString();
@@ -12433,6 +12458,9 @@ class PlatformStore {
         }
 
         const patch: Record<string, unknown> = { updated_at: nowIso };
+        if (cleanName) patch.full_name = cleanName;
+        if (cleanEmail !== undefined) patch.email = cleanEmail || null;
+        if (cleanPhoneE164 !== undefined) patch.phone_e164 = cleanPhoneE164 || null;
         if (params.role) patch.role = params.role;
         if (params.status) {
           patch.status = params.status;
@@ -12452,8 +12480,16 @@ class PlatformStore {
         }
 
         const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
-        if ((params.role || params.designation !== undefined) && linkedMemberId) {
+        if (
+          linkedMemberId &&
+          (params.role || params.designation !== undefined || cleanName || cleanEmail !== undefined || cleanPhoneE164 !== undefined)
+        ) {
           await this.updateMember(cleanOrgId, linkedMemberId, {
+            ...(splitName ? { firstName: splitName.firstName, lastName: splitName.lastName } : {}),
+            ...(cleanEmail !== undefined ? { email: cleanEmail } : {}),
+            ...(cleanPhoneE164 !== undefined
+              ? { phoneE164: cleanPhoneE164, phoneNumber: cleanPhoneE164 }
+              : {}),
             ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
             ...(params.designation !== undefined
               ? { officerName: params.designation, designation: params.designation }
@@ -12464,7 +12500,6 @@ class PlatformStore {
           await this.resetDistributedAuthRateLimit(`login:${credRow.id}`);
         }
       } else {
-        // No credential row yet: allow updating member's role if only role was supplied
         if (params.status === 'suspended') {
           const err: any = new Error(
             'This member does not have login credentials yet. Issue credentials before suspending login.'
@@ -12481,8 +12516,19 @@ class PlatformStore {
           err.status = 404;
           throw err;
         }
-        if (params.role || params.designation !== undefined) {
+        if (
+          params.role ||
+          params.designation !== undefined ||
+          cleanName ||
+          cleanEmail !== undefined ||
+          cleanPhoneE164 !== undefined
+        ) {
           await this.updateMember(cleanOrgId, targetId, {
+            ...(splitName ? { firstName: splitName.firstName, lastName: splitName.lastName } : {}),
+            ...(cleanEmail !== undefined ? { email: cleanEmail } : {}),
+            ...(cleanPhoneE164 !== undefined
+              ? { phoneE164: cleanPhoneE164, phoneNumber: cleanPhoneE164 }
+              : {}),
             ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
             ...(params.designation !== undefined
               ? { officerName: params.designation, designation: params.designation }
@@ -12518,6 +12564,9 @@ class PlatformStore {
           err.status = 400;
           throw err;
         }
+        if (cleanName) cred.name = cleanName;
+        if (cleanEmail !== undefined) cred.email = cleanEmail || undefined;
+        if (cleanPhoneE164 !== undefined) cred.phoneE164 = cleanPhoneE164 || undefined;
         if (params.role) cred.role = params.role;
         if (params.status) {
           cred.status = params.status;
@@ -12526,8 +12575,16 @@ class PlatformStore {
             cred.failedAttempts = 0;
           }
         }
-        if ((params.role || params.designation !== undefined) && cred.memberId) {
+        if (
+          cred.memberId &&
+          (params.role || params.designation !== undefined || cleanName || cleanEmail !== undefined || cleanPhoneE164 !== undefined)
+        ) {
           await this.updateMember(cleanOrgId, cred.memberId, {
+            ...(splitName ? { firstName: splitName.firstName, lastName: splitName.lastName } : {}),
+            ...(cleanEmail !== undefined ? { email: cleanEmail } : {}),
+            ...(cleanPhoneE164 !== undefined
+              ? { phoneE164: cleanPhoneE164, phoneNumber: cleanPhoneE164 }
+              : {}),
             ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
             ...(params.designation !== undefined
               ? { officerName: params.designation, designation: params.designation }
@@ -12551,8 +12608,19 @@ class PlatformStore {
           err.status = 404;
           throw err;
         }
-        if (params.role || params.designation !== undefined) {
+        if (
+          params.role ||
+          params.designation !== undefined ||
+          cleanName ||
+          cleanEmail !== undefined ||
+          cleanPhoneE164 !== undefined
+        ) {
           await this.updateMember(cleanOrgId, targetId, {
+            ...(splitName ? { firstName: splitName.firstName, lastName: splitName.lastName } : {}),
+            ...(cleanEmail !== undefined ? { email: cleanEmail } : {}),
+            ...(cleanPhoneE164 !== undefined
+              ? { phoneE164: cleanPhoneE164, phoneNumber: cleanPhoneE164 }
+              : {}),
             ...(params.role ? { role: params.role === 'super_admin' ? 'admin' : params.role } : {}),
             ...(params.designation !== undefined
               ? { officerName: params.designation, designation: params.designation }
@@ -12571,6 +12639,8 @@ class PlatformStore {
       targetType: 'account_credentials',
       targetId,
       metadata: {
+        ...(cleanName ? { fullName: cleanName } : {}),
+        ...(cleanEmail !== undefined ? { email: cleanEmail || null } : {}),
         ...(params.role ? { role: params.role } : {}),
         ...(params.status ? { status: params.status } : {}),
       },
@@ -12586,6 +12656,160 @@ class PlatformStore {
       throw err;
     }
     return updatedUser;
+  }
+
+  public async deleteOrganizationUserAccount(params: {
+    organizationId: string;
+    targetId: string;
+    actorUserId?: string | null;
+    actorEmail?: string | null;
+    callerIsCreator?: boolean;
+    ipAddress?: string;
+  }): Promise<{ deletedCredentialId?: string; deletedMemberId?: string }> {
+    this.assertDatabaseAvailable();
+    const cleanOrgId = (params.organizationId || '').trim().toLowerCase();
+    const targetId = (params.targetId || '').trim();
+    if (!cleanOrgId || !targetId) {
+      const err: any = new Error('Target user account ID is required.');
+      err.code = 'INVALID_INPUT';
+      err.status = 400;
+      throw err;
+    }
+
+    if (params.actorUserId && params.actorUserId === targetId) {
+      const err: any = new Error('You cannot delete your own active signed-in account.');
+      err.code = 'SELF_DELETE_BLOCKED';
+      err.status = 400;
+      throw err;
+    }
+
+    let deletedCredentialId: string | undefined;
+    let deletedMemberId: string | undefined;
+    const sb = this.activeSupabase;
+
+    if (sb) {
+      let credRow: Record<string, any> | null = null;
+      if (UUID_REGEX.test(targetId) && UUID_REGEX.test(cleanOrgId)) {
+        const { data, error } = await sb
+          .from('account_credentials')
+          .select('*')
+          .eq('organization_id', cleanOrgId)
+          .or(`id.eq.${targetId},member_id.eq.${targetId}`)
+          .limit(1)
+          .maybeSingle();
+        if (error) {
+          throw new Error(`Failed querying user account in Supabase: ${error.message}`);
+        }
+        credRow = data || null;
+      }
+
+      if (credRow) {
+        if (credRow.is_creator && !params.callerIsCreator) {
+          const err: any = new Error('Platform creator accounts cannot be deleted here.');
+          err.code = 'FORBIDDEN';
+          err.status = 403;
+          throw err;
+        }
+        if (
+          params.actorUserId &&
+          (credRow.id === params.actorUserId || credRow.member_id === params.actorUserId)
+        ) {
+          const err: any = new Error('You cannot delete your own active signed-in account.');
+          err.code = 'SELF_DELETE_BLOCKED';
+          err.status = 400;
+          throw err;
+        }
+        const { error: delErr } = await sb
+          .from('account_credentials')
+          .delete()
+          .eq('organization_id', cleanOrgId)
+          .eq('id', credRow.id);
+        if (delErr) {
+          throw new Error(`Failed deleting user credentials in Supabase: ${delErr.message}`);
+        }
+        deletedCredentialId = String(credRow.id);
+        const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
+        if (linkedMemberId) {
+          await this.deleteMember(cleanOrgId, linkedMemberId).catch(() => {});
+          deletedMemberId = linkedMemberId;
+        }
+      } else {
+        const orgMembers = await this.getMembers(cleanOrgId);
+        const foundMember = orgMembers.find((m) => String(m.id) === targetId);
+        if (!foundMember) {
+          const err: any = new Error('User or member account not found in this organisation.');
+          err.code = 'NOT_FOUND';
+          err.status = 404;
+          throw err;
+        }
+        await this.deleteMember(cleanOrgId, targetId);
+        deletedMemberId = targetId;
+      }
+    } else {
+      let credKey: string | undefined;
+      let cred: UserCredentialRecord | undefined;
+      for (const [key, c] of this.userCredentials.entries()) {
+        if (
+          c.organizationId.toLowerCase() === cleanOrgId &&
+          (c.id === targetId || c.memberId === targetId)
+        ) {
+          credKey = key;
+          cred = c;
+          break;
+        }
+      }
+      if (cred && credKey) {
+        if (cred.isCreator && !params.callerIsCreator) {
+          const err: any = new Error('Platform creator accounts cannot be deleted here.');
+          err.code = 'FORBIDDEN';
+          err.status = 403;
+          throw err;
+        }
+        if (
+          params.actorUserId &&
+          (cred.id === params.actorUserId || cred.memberId === params.actorUserId)
+        ) {
+          const err: any = new Error('You cannot delete your own active signed-in account.');
+          err.code = 'SELF_DELETE_BLOCKED';
+          err.status = 400;
+          throw err;
+        }
+        this.userCredentials.delete(credKey);
+        deletedCredentialId = cred.id;
+        if (cred.memberId) {
+          await this.deleteMember(cleanOrgId, cred.memberId).catch(() => {});
+          deletedMemberId = cred.memberId;
+        }
+      } else {
+        const orgMembers = await this.getMembers(cleanOrgId);
+        const foundMember = orgMembers.find((m) => String(m.id) === targetId);
+        if (!foundMember) {
+          const err: any = new Error('User or member account not found in this organisation.');
+          err.code = 'NOT_FOUND';
+          err.status = 404;
+          throw err;
+        }
+        await this.deleteMember(cleanOrgId, targetId);
+        deletedMemberId = targetId;
+      }
+    }
+
+    await this.appendAuditLog({
+      organizationId: cleanOrgId,
+      actorId: params.actorUserId ?? null,
+      actorEmail: params.actorEmail || 'admin@ekklesphere.local',
+      actorRole: 'admin',
+      action: 'user_account.deleted',
+      targetType: 'account_credentials',
+      targetId,
+      metadata: {
+        ...(deletedCredentialId ? { deletedCredentialId } : {}),
+        ...(deletedMemberId ? { deletedMemberId } : {}),
+      },
+      ipAddress: params.ipAddress || null,
+    });
+
+    return { deletedCredentialId, deletedMemberId };
   }
 }
 

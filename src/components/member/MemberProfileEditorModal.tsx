@@ -356,11 +356,11 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
       aria-modal="true"
       aria-labelledby="member-profile-editor-title"
       onClick={() => !isSaving && onClose()}
-      className="fixed inset-0 z-[70] bg-black/65 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[70] bg-black/65 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 lg:p-6 animate-in fade-in duration-150"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[92dvh] bg-white dark:bg-[#1C1C3C] rounded-2xl sm:rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-2xl flex flex-col overflow-hidden min-w-0"
+        className="w-full max-w-2xl lg:max-w-3xl max-h-[94dvh] sm:max-h-[92dvh] bg-white dark:bg-[#1C1C3C] rounded-2xl sm:rounded-3xl border border-[#E3E5F2] dark:border-[#2D2D55] shadow-2xl flex flex-col overflow-hidden min-w-0"
       >
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 border-b border-[#E3E5F2] dark:border-[#2D2D55] flex items-center justify-between gap-3 shrink-0">
@@ -758,7 +758,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
                         {autoDemographicPreview.ministries.map((am) => (
                           <span
                             key={am.kind}
-                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold border ${
+                            className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-lg text-xs font-bold border ${
                               am.kind === 'youth'
                                 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
                                 : am.kind === 'women'
@@ -767,8 +767,8 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
                             }`}
                           >
                             <Check className="w-3 h-3 shrink-0" />
-                            <span>{am.name}</span>
-                            <span className="opacity-75 font-medium text-[11px]">({am.reason})</span>
+                            <span className="truncate">{am.name}</span>
+                            <span className="opacity-75 font-medium text-[11px] shrink-0">({am.reason})</span>
                           </span>
                         ))}
                       </div>

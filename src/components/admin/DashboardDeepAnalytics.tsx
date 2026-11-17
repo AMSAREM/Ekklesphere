@@ -104,6 +104,12 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   const [deptSortKey, setDeptSortKey] = useState<'members' | 'turnout'>('members');
   const [confirmDeleteSvcId, setConfirmDeleteSvcId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!confirmDeleteSvcId) return;
+    const t = window.setTimeout(() => setConfirmDeleteSvcId(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [confirmDeleteSvcId]);
+
   const allCategories = useMemo(
     () => getAllGroupCategories(customGroupCategories, analytics.groups),
     [customGroupCategories, analytics.groups]

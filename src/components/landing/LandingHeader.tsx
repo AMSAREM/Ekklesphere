@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowUpRight, Menu, X } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 interface LandingHeaderProps {
   onNavigate: (path: string) => void;
@@ -53,6 +54,7 @@ export const LandingHeader: React.FC<LandingHeaderProps> = ({ onNavigate, onOpen
         </div>
 
         <div className="flex items-center gap-3 sm:gap-5">
+          <PWAInstallButton variant="landing" className="hidden md:inline-flex" />
           <a
             href="/app?auth=login"
             onClick={(e) => handleRouteClick(e, '/app?auth=login')}
@@ -123,6 +125,10 @@ export const LandingHeader: React.FC<LandingHeaderProps> = ({ onNavigate, onOpen
               <span>Book a demo</span>
               <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
+            <PWAInstallButton
+              variant="landing-mobile"
+              onActionComplete={() => setMobileOpen(false)}
+            />
           </div>
         </div>
       )}

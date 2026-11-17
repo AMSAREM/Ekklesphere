@@ -407,6 +407,22 @@ export const CreatorsPanel: React.FC = () => {
   const [deleteOrgConfirmName, setDeleteOrgConfirmName] = useState<string>('');
   const [deleteOrgReason, setDeleteOrgReason] = useState<string>('');
   const [isDeletingOrg, setIsDeletingOrg] = useState<boolean>(false);
+  const [orgToEdit, setOrgToEdit] = useState<TenantChurch | null>(null);
+  const [editOrgForm, setEditOrgForm] = useState({
+    name: '',
+    orgType: 'church' as TenantChurch['orgType'],
+    city: '',
+    country: '',
+    seniorPastor: '',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    geofenceRadiusMeters: 250,
+    customDomain: '',
+    status: 'active' as TenantChurch['status'],
+    reason: '',
+  });
+  const [isSavingOrgEdit, setIsSavingOrgEdit] = useState<boolean>(false);
   const [orgAdminCreds, setOrgAdminCreds] = useState<
     Array<{
       id: string;
@@ -1111,6 +1127,73 @@ export const CreatorsPanel: React.FC = () => {
       showToast('Network error deleting organisation.');
     } finally {
       setIsDeletingOrg(false);
+    }
+  };
+
+  const openEditOrgModal = (org: TenantChurch) => {
+    setOrgToEdit(org);
+    setEditOrgForm({
+      name: org.name || '',
+      orgType: org.orgType || 'church',
+      city: org.city || '',
+      country: org.country || '',
+      seniorPastor: org.seniorPastor || '',
+      contactName: org.contactName || '',
+      contactEmail: org.contactEmail || '',
+      contactPhone: org.contactPhone || '',
+      geofenceRadiusMeters: org.geofenceRadiusMeters || 250,
+      customDomain: org.customDomain || '',
+      status: org.status || 'active',
+      reason: '',
+    });
+  };
+
+  const handleSaveOrgEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orgToEdit) return;
+    if (editOrgForm.name.trim().length < 2) {
+      showToast('Organisation name must be at least 2 characters.');
+      return;
+    }
+
+    setIsSavingOrgEdit(true);
+    try {
+      const headers = await getConsoleHeaders();
+      const res = await fetch(`/api/console/organisations/${orgToEdit.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          name: editOrgForm.name.trim(),
+          orgType: editOrgForm.orgType,
+          city: editOrgForm.city.trim(),
+          country: editOrgForm.country.trim(),
+          seniorPastor: editOrgForm.seniorPastor.trim(),
+          contactName: editOrgForm.contactName.trim(),
+          contactEmail: editOrgForm.contactEmail.trim(),
+          contactPhone: editOrgForm.contactPhone.trim(),
+          geofenceRadiusMeters: Math.max(10, Number(editOrgForm.geofenceRadiusMeters) || 250),
+          customDomain: editOrgForm.customDomain.trim() || null,
+          status: editOrgForm.status,
+          reason: editOrgForm.reason.trim() || 'Updated organisation details via Creator Console',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.organisation) {
+        showToast(data?.message || 'Failed to update organisation.');
+        return;
+      }
+
+      const targetId = orgToEdit.id;
+      showToast(`Updated "${data.organisation.name}".`);
+      setOrgToEdit(null);
+      await loadConsoleData(true);
+      if (selectedOrgId === targetId) {
+        await loadOrgDetail(targetId);
+      }
+    } catch {
+      showToast('Network error updating organisation.');
+    } finally {
+      setIsSavingOrgEdit(false);
     }
   };
 
@@ -2677,6 +2760,15 @@ export const CreatorsPanel: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
+                      onClick={() => openEditOrgModal(selectedOrgDetail.organisation)}
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-[#14142E] border border-[#D8DAE8] dark:border-[#25254A] text-[#1D1B3A] dark:text-[#F2F2FA] font-bold text-xs hover:border-[#6D5CF2] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                      <span>Edit Org</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => openOrgAdminCredModal(orgAdminCreds[0])}
                       className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] text-white font-bold text-xs hover:bg-[#5b4be0] flex items-center gap-1.5 cursor-pointer"
                     >
@@ -3312,6 +3404,14 @@ export const CreatorsPanel: React.FC = () => {
                                 >
                                   <span>Manage</span>
                                   <ChevronRight className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Edit Organisation Details"
+                                  onClick={() => openEditOrgModal(org)}
+                                  className="p-1.5 rounded-lg text-[#6D5CF2] hover:bg-[#6D5CF2]/15 transition-colors cursor-pointer"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
                                 </button>
                                 <button
                                   type="button"
@@ -6057,6 +6157,173 @@ export const CreatorsPanel: React.FC = () => {
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>{isDeletingOrg ? 'Deleting...' : 'Delete Forever'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDIT ORGANISATION */}
+      {orgToEdit && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="max-w-lg w-full max-h-[90dvh] overflow-y-auto bg-white dark:bg-[#181838] rounded-3xl p-5 sm:p-6 shadow-2xl border border-[#D8DAE8] dark:border-[#25254A] space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[#6D5CF2]">
+                <Edit3 className="w-5 h-5" />
+                <div>
+                  <h3 className="font-black text-base text-[#1D1B3A] dark:text-white">
+                    Edit Organisation Profile
+                  </h3>
+                  <p className="text-[11px] text-[#666A86]">
+                    {orgToEdit.name} ({orgToEdit.slug})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrgToEdit(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveOrgEdit} className="space-y-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Organisation Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editOrgForm.name}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Status</label>
+                  <select
+                    value={editOrgForm.status}
+                    onChange={(e) =>
+                      setEditOrgForm((p) => ({ ...p, status: e.target.value as TenantChurch['status'] }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-bold"
+                  >
+                    <option value="active">Active</option>
+                    <option value="trial">Trial</option>
+                    <option value="suspended">Suspended</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">City</label>
+                  <input
+                    type="text"
+                    value={editOrgForm.city}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, city: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Country</label>
+                  <input
+                    type="text"
+                    value={editOrgForm.country}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, country: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Senior Pastor</label>
+                  <input
+                    type="text"
+                    value={editOrgForm.seniorPastor}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, seniorPastor: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Contact Name</label>
+                  <input
+                    type="text"
+                    value={editOrgForm.contactName}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, contactName: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Contact Email</label>
+                  <input
+                    type="email"
+                    value={editOrgForm.contactEmail}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, contactEmail: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Contact Phone</label>
+                  <input
+                    type="tel"
+                    value={editOrgForm.contactPhone}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, contactPhone: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">Geofence Radius (m)</label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={5000}
+                    value={editOrgForm.geofenceRadiusMeters}
+                    onChange={(e) =>
+                      setEditOrgForm((p) => ({
+                        ...p,
+                        geofenceRadiusMeters: Math.max(10, Number(e.target.value) || 250),
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">Custom Domain</label>
+                  <input
+                    type="text"
+                    value={editOrgForm.customDomain}
+                    onChange={(e) => setEditOrgForm((p) => ({ ...p, customDomain: e.target.value }))}
+                    placeholder="portal.church.org"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrgToEdit(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingOrgEdit}
+                  className="px-4 py-2 rounded-xl bg-[#6D5CF2] text-white text-xs font-bold hover:bg-[#5b4be0] disabled:opacity-60 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingOrgEdit ? 'Saving...' : 'Save Organisation'}</span>
                 </button>
               </div>
             </form>

@@ -156,6 +156,13 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   const [gridAttemptIndices, setGridAttemptIndices] = useState<Record<string, number>>({});
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
+  const [confirmDeleteMemberId, setConfirmDeleteMemberId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!confirmDeleteMemberId) return;
+    const t = setTimeout(() => setConfirmDeleteMemberId(null), 5000);
+    return () => clearTimeout(t);
+  }, [confirmDeleteMemberId]);
 
   const openPhotoPreview = (member: Person) => {
     setPreviewAttemptIndex(0);
@@ -475,34 +482,145 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
       </div>
 
       {/* Filter and View Toolbar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white dark:bg-[#1D1D3D] p-3 rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs">
-        {/* Search */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8]" />
-          <input
-            type="text"
-            placeholder="Search by name, ID, phone, digital address, cell, squad..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-8 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-          />
-          {searchQuery && (
+      <div className="bg-white dark:bg-[#1D1D3D] p-3 sm:p-4 rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col gap-3 min-w-0 w-full">
+        {/* Top Row: Search + View Mode & Column Utilities */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 min-w-0 w-full">
+          {/* Search */}
+          <div className="relative w-full lg:flex-1 lg:max-w-md min-w-0">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#666A86] dark:text-[#A9ACC8] pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search by name, ID, phone, digital address, cell, squad..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full min-h-[38px] pl-8 pr-8 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] placeholder-[#666A86] dark:placeholder-[#A9ACC8] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label="Clear member search"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Display Mode, Photo Filter, Groups & Column Picker */}
+          <div className="flex flex-wrap items-center gap-2 min-w-0 w-full lg:w-auto lg:justify-end">
+            {/* Photo Gallery / Uploaded Photos Toggle */}
+            <div className="inline-flex items-center bg-slate-100 dark:bg-[#14142E] p-1 rounded-xl max-w-full overflow-x-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setDisplayMode('table')}
+                className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                  displayMode === 'table'
+                    ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
+                    : 'text-[#666A86] dark:text-[#A9ACC8]'
+                }`}
+              >
+                <Table2 className="w-3 h-3 shrink-0" />
+                <span>Table</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisplayMode('photos')}
+                className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 tabular-nums ${
+                  displayMode === 'photos'
+                    ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
+                    : 'text-[#666A86] dark:text-[#A9ACC8]'
+                }`}
+              >
+                <LayoutGrid className="w-3 h-3 shrink-0" />
+                <span>Uploaded Photos ({uploadedPhotosCount})</span>
+              </button>
+            </div>
+
+            {displayMode === 'table' && (
+              <button
+                type="button"
+                onClick={() => setPhotosOnlyFilter((prev) => !prev)}
+                className={`min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl border flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
+                  photosOnlyFilter
+                    ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
+                    : 'bg-slate-50 dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
+                }`}
+                title="Filter table to members who have uploaded photos"
+              >
+                <Camera className="w-3.5 h-3.5 shrink-0" />
+                <span>With Photo ({uploadedPhotosCount})</span>
+              </button>
+            )}
+
             <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              type="button"
+              onClick={() => requestOpenSettings('groups')}
+              title="Add or edit ministries, departments & cell groups in Settings"
+              className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center gap-1.5 hover:border-[#6D5CF2]/50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
-              <X className="w-3 h-3" />
+              <Settings className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Manage Groups</span>
             </button>
-          )}
+
+            {/* Column Picker Dropdown */}
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsColumnPickerOpen(!isColumnPickerOpen)}
+                className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-white/5 transition-all cursor-pointer whitespace-nowrap"
+              >
+                <Columns className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
+                <span>Columns</span>
+                <ChevronDown className="w-3 h-3 text-[#666A86] shrink-0" />
+              </button>
+
+              {isColumnPickerOpen && (
+                <div className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-64 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl shadow-xl p-3 z-30">
+                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
+                    <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Toggle Columns</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allTrue: Record<string, boolean> = {};
+                        MEMBERSHIP_TABLE_HEADERS.forEach((h) => (allTrue[h.header] = true));
+                        setVisibleColumns(allTrue);
+                      }}
+                      className="text-[10px] text-[#6D5CF2] font-bold hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {MEMBERSHIP_TABLE_HEADERS.map((col) => (
+                      <label
+                        key={col.header}
+                        className="flex items-center gap-2 text-[11px] text-[#1D1B3A] dark:text-[#F2F2FA] cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 p-1 rounded-lg"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!visibleColumns[col.header]}
+                          onChange={() => toggleColumn(col.header)}
+                          className="rounded text-[#6D5CF2] focus:ring-[#6D5CF2]"
+                        />
+                        <span className="font-mono text-[10px]">{col.header}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* View Presets & Column Picker */}
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+        {/* Bottom Row: Field Presets + Responsive Multi-Filter Bar */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 pt-2.5 border-t border-[#E9EBF5] dark:border-[#2D2D55] min-w-0 w-full">
           {/* Preset Buttons */}
-          <div className="flex items-center bg-slate-100 dark:bg-[#14142E] p-1 rounded-xl">
+          <div className="inline-flex items-center bg-slate-100 dark:bg-[#14142E] p-1 rounded-xl gap-0.5 max-w-full overflow-x-auto self-start shrink-0">
             <button
+              type="button"
               onClick={() => applyPreset('all')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+              className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 viewPreset === 'all'
                   ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -511,8 +629,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
               All 28 Fields
             </button>
             <button
+              type="button"
               onClick={() => applyPreset('essential')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+              className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 viewPreset === 'essential'
                   ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -521,8 +640,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
               Essential
             </button>
             <button
+              type="button"
               onClick={() => applyPreset('church')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+              className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 viewPreset === 'church'
                   ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -531,8 +651,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
               Church & Squads
             </button>
             <button
+              type="button"
               onClick={() => applyPreset('spiritual')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+              className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 viewPreset === 'spiritual'
                   ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
                   : 'text-[#666A86] dark:text-[#A9ACC8]'
@@ -542,181 +663,84 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
             </button>
           </div>
 
-          {/* Photo Gallery / Uploaded Photos Toggle */}
-          <div className="flex items-center bg-slate-100 dark:bg-[#14142E] p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setDisplayMode('table')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                displayMode === 'table'
-                  ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
-                  : 'text-[#666A86] dark:text-[#A9ACC8]'
-              }`}
+          {/* Responsive Filter Selects */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 w-full xl:w-auto xl:flex xl:flex-wrap xl:items-center xl:justify-end min-w-0">
+            {/* Status / Visitors / Officers Filter */}
+            <select
+              aria-label="Filter by congregation status"
+              value={selectedStatusFilter}
+              onChange={(e) =>
+                setSelectedStatusFilter(
+                  e.target.value as 'all' | 'member' | 'visitor' | 'officers'
+                )
+              }
+              className="w-full xl:w-auto xl:max-w-[175px] min-w-0 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] truncate cursor-pointer"
             >
-              <Table2 className="w-3 h-3" />
-              <span>Table</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDisplayMode('photos')}
-              className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                displayMode === 'photos'
-                  ? 'bg-white dark:bg-[#1D1D3D] text-[#6D5CF2] shadow-xs'
-                  : 'text-[#666A86] dark:text-[#A9ACC8]'
-              }`}
+              <option value="all">All Statuses</option>
+              <option value="member">Registered Members</option>
+              <option value="visitor">Visitors / Guests</option>
+              <option value="officers">Church Officers &amp; Leaders</option>
+            </select>
+
+            {/* Portfolio / Designation Filter */}
+            <select
+              aria-label="Filter by church portfolio"
+              value={selectedPortfolioFilter}
+              onChange={(e) => setSelectedPortfolioFilter(e.target.value)}
+              className="w-full xl:w-auto xl:max-w-[175px] min-w-0 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] truncate cursor-pointer"
             >
-              <LayoutGrid className="w-3 h-3" />
-              <span>Uploaded Photos ({uploadedPhotosCount})</span>
-            </button>
-          </div>
+              <option value="all">All Portfolios</option>
+              {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
 
-          {displayMode === 'table' && (
-            <button
-              type="button"
-              onClick={() => setPhotosOnlyFilter((prev) => !prev)}
-              className={`px-2.5 py-1.5 text-xs font-semibold rounded-xl border flex items-center gap-1.5 transition-all cursor-pointer ${
-                photosOnlyFilter
-                  ? 'bg-[#EFEDFF] dark:bg-[#2A2A55] border-[#6D5CF2] text-[#6D5CF2] dark:text-[#8C7DFF]'
-                  : 'bg-slate-50 dark:bg-[#14142E] border-[#E9EBF5] dark:border-[#2D2D55] text-[#666A86] dark:text-[#A9ACC8]'
-              }`}
-              title="Filter table to members who have uploaded photos"
+            {/* Department Filter */}
+            <select
+              aria-label="Filter by department"
+              value={selectedDepartmentFilter}
+              onChange={(e) => setSelectedDepartmentFilter(e.target.value)}
+              className="w-full xl:w-auto xl:max-w-[175px] min-w-0 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] truncate cursor-pointer"
             >
-              <Camera className="w-3.5 h-3.5" />
-              <span>With Photo ({uploadedPhotosCount})</span>
-            </button>
-          )}
+              <option value="all">All Departments</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
 
-          {/* Status / Visitors / Officers Filter */}
-          <select
-            aria-label="Filter by congregation status"
-            value={selectedStatusFilter}
-            onChange={(e) =>
-              setSelectedStatusFilter(
-                e.target.value as 'all' | 'member' | 'visitor' | 'officers'
-              )
-            }
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
-          >
-            <option value="all">All Statuses</option>
-            <option value="member">Registered Members</option>
-            <option value="visitor">Visitors / Guests</option>
-            <option value="officers">Church Officers &amp; Leaders</option>
-          </select>
-
-          {/* Portfolio / Designation Filter */}
-          <select
-            aria-label="Filter by church portfolio"
-            value={selectedPortfolioFilter}
-            onChange={(e) => setSelectedPortfolioFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
-          >
-            <option value="all">All Portfolios</option>
-            {CHURCH_PORTFOLIO_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Department Filter */}
-          <select
-            aria-label="Filter by department"
-            value={selectedDepartmentFilter}
-            onChange={(e) => setSelectedDepartmentFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
-          >
-            <option value="all">All Departments</option>
-            {departments.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-
-          {/* Group Filter */}
-          <select
-            aria-label="Filter by cell group or ministry"
-            value={selectedGroupFilter}
-            onChange={(e) => setSelectedGroupFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
-          >
-            <option value="all">All Cell Groups</option>
-            {cellGroups.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-
-          {/* Birth Month Group Filter */}
-          <select
-            aria-label="Filter by birth month group"
-            value={selectedBirthMonthGroupFilter}
-            onChange={(e) => setSelectedBirthMonthGroupFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
-          >
-            <option value="all">All Birth Month Groups</option>
-            {ALL_BIRTH_MONTH_GROUPS.map((bg) => (
-              <option key={bg.groupName} value={bg.groupName}>
-                {bg.groupName}
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            onClick={() => requestOpenSettings('groups')}
-            title="Add or edit ministries, departments & cell groups in Settings"
-            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#6D5CF2] dark:text-[#8C7DFF] flex items-center gap-1 hover:border-[#6D5CF2]/50 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Manage Groups</span>
-          </button>
-
-          {/* Column Picker Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setIsColumnPickerOpen(!isColumnPickerOpen)}
-              className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5 hover:bg-slate-100 transition-all cursor-pointer"
+            {/* Group Filter */}
+            <select
+              aria-label="Filter by cell group or ministry"
+              value={selectedGroupFilter}
+              onChange={(e) => setSelectedGroupFilter(e.target.value)}
+              className="w-full xl:w-auto xl:max-w-[175px] min-w-0 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] truncate cursor-pointer"
             >
-              <Columns className="w-3.5 h-3.5 text-[#6D5CF2]" />
-              <span>Columns</span>
-              <ChevronDown className="w-3 h-3 text-[#666A86]" />
-            </button>
+              <option value="all">All Cell Groups</option>
+              {cellGroups.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
 
-            {isColumnPickerOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-64 max-h-80 overflow-y-auto bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl shadow-xl p-3 z-30">
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
-                  <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">Toggle Columns</span>
-                  <button
-                    onClick={() => {
-                      const allTrue: Record<string, boolean> = {};
-                      MEMBERSHIP_TABLE_HEADERS.forEach((h) => (allTrue[h.header] = true));
-                      setVisibleColumns(allTrue);
-                    }}
-                    className="text-[10px] text-[#6D5CF2] font-bold hover:underline"
-                  >
-                    Select All
-                  </button>
-                </div>
-                <div className="space-y-1">
-                  {MEMBERSHIP_TABLE_HEADERS.map((col) => (
-                    <label
-                      key={col.header}
-                      className="flex items-center gap-2 text-[11px] text-[#1D1B3A] dark:text-[#F2F2FA] cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 p-1 rounded-lg"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!!visibleColumns[col.header]}
-                        onChange={() => toggleColumn(col.header)}
-                        className="rounded text-[#6D5CF2] focus:ring-[#6D5CF2]"
-                      />
-                      <span className="font-mono text-[10px]">{col.header}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Birth Month Group Filter */}
+            <select
+              aria-label="Filter by birth month group"
+              value={selectedBirthMonthGroupFilter}
+              onChange={(e) => setSelectedBirthMonthGroupFilter(e.target.value)}
+              className="w-full sm:col-span-2 md:col-span-1 xl:w-auto xl:max-w-[185px] min-w-0 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] truncate cursor-pointer"
+            >
+              <option value="all">All Birth Month Groups</option>
+              {ALL_BIRTH_MONTH_GROUPS.map((bg) => (
+                <option key={bg.groupName} value={bg.groupName}>
+                  {bg.groupName}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
@@ -778,18 +802,51 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       View
                     </span>
                   </button>
-                  <div className="p-3 space-y-1">
-                    <div className="text-xs font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
-                      {member.firstName} {member.lastName}
-                    </div>
-                    <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] truncate">
-                      {member.homeCellGroup || member.groupName || 'General Congregation'}
-                    </div>
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[10px] font-mono text-[#6D5CF2] dark:text-[#8C7DFF]">
+                  <div className="p-3 space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {member.firstName} {member.lastName}
+                        </div>
+                        <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] truncate">
+                          {member.homeCellGroup || member.groupName || 'General Congregation'}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono text-[#6D5CF2] dark:text-[#8C7DFF] shrink-0">
                         {member.memberId || 'ID Pending'}
                       </span>
-                      <div className="flex items-center gap-2">
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1.5 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={!canCheckIn || checkedInIds.has(member.id)}
+                          onClick={() => onCheckinMember(member.id)}
+                          title={
+                            !canCheckIn
+                              ? checkInDisabledReason || 'Schedule a service window first'
+                              : checkedInIds.has(member.id)
+                              ? 'Checked in today'
+                              : 'Check in to active service'
+                          }
+                          className={`p-1 rounded-lg transition-colors ${
+                            !canCheckIn
+                              ? 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                              : checkedInIds.has(member.id)
+                              ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 cursor-default'
+                              : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer'
+                          }`}
+                        >
+                          <CheckSquare className="w-3.5 h-3.5" />
+                        </button>
+                        <ContactCallButton
+                          compact
+                          contactName={`${member.firstName} ${member.lastName}`}
+                          contactPhone={member.phoneE164 || member.phoneNumber}
+                          contactEmail={member.email}
+                          contactRole={getMemberPortfolio(member)}
+                          contactGroup={member.homeCellGroup || member.groupName}
+                        />
                         <button
                           type="button"
                           onClick={() =>
@@ -798,19 +855,44 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                               searchQuery: `${member.firstName} ${member.lastName}`.trim(),
                             })
                           }
-                          className="text-[10px] font-bold text-[#6D5CF2] hover:underline dark:text-[#9D90FF] cursor-pointer flex items-center gap-0.5"
+                          className="p-1 rounded-lg text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
                           title="Manage login & credentials"
                         >
-                          <KeyRound className="w-3 h-3" />
-                          <span>Login</span>
+                          <KeyRound className="w-3.5 h-3.5" />
                         </button>
+                      </div>
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
                           onClick={() => onEditMember(member)}
-                          className="text-[10px] font-bold text-[#666A86] hover:text-[#6D5CF2] dark:text-[#A9ACC8] cursor-pointer"
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer flex items-center gap-1"
+                          title="Edit member profile"
                         >
-                          Edit
+                          <Edit3 className="w-3 h-3" />
+                          <span>Edit</span>
                         </button>
+                        {confirmDeleteMemberId === member.id ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmDeleteMemberId(null);
+                              onDeleteMember(member.id);
+                            }}
+                            className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 cursor-pointer"
+                          >
+                            Confirm
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteMemberId(member.id)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                            title="Delete member"
+                            aria-label={`Delete ${member.firstName} ${member.lastName}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1330,20 +1412,37 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                           </button>
 
                           <button
+                            type="button"
                             onClick={() => onEditMember(member)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-[#6D5CF2] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-[#6D5CF2] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
                             title="Edit all 28 member fields"
+                            aria-label={`Edit ${member.firstName} ${member.lastName}`}
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
 
-                          <button
-                            onClick={() => onDeleteMember(member.id)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                            title="Remove member"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {confirmDeleteMemberId === member.id ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmDeleteMemberId(null);
+                                onDeleteMember(member.id);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold transition-colors cursor-pointer"
+                            >
+                              Confirm
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteMemberId(member.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="Delete member"
+                              aria-label={`Delete ${member.firstName} ${member.lastName}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1450,17 +1549,41 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {previewMember.memberId ? ` · ${previewMember.memberId}` : ''}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const target = previewMember;
-                      setPreviewMember(null);
-                      onEditMember(target);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shrink-0 cursor-pointer"
-                  >
-                    Edit Profile
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = previewMember;
+                        setPreviewMember(null);
+                        onEditMember(target);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-xs font-bold shrink-0 cursor-pointer"
+                    >
+                      Edit Profile
+                    </button>
+                    {confirmDeleteMemberId === previewMember.id ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetId = previewMember.id;
+                          setConfirmDeleteMemberId(null);
+                          setPreviewMember(null);
+                          onDeleteMember(targetId);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shrink-0 cursor-pointer"
+                      >
+                        Confirm Delete
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteMemberId(previewMember.id)}
+                        className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-xs font-bold shrink-0 cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {externalUrl && (
