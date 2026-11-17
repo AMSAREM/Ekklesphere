@@ -1,5 +1,7 @@
 // tests/api.test.ts - Ekklesphere Church Management & Role-Level Security Test Suite
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 import { app } from '../server';
 import { signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
@@ -1119,6 +1121,19 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.error).toBe('creator_required');
+    });
+
+    it('Vercel config routes /api/* to /api/index.js (never .cjs) and excludes /api from static index.html fallback', () => {
+      const rootDir = process.cwd();
+      const vercelConfig = JSON.parse(fs.readFileSync(path.join(rootDir, 'vercel.json'), 'utf8'));
+      const apiRewrite = vercelConfig.rewrites.find((r: any) => r.source === '/api/(.*)');
+      const spaRewrite = vercelConfig.rewrites.find((r: any) => r.destination === '/index.html');
+
+      expect(apiRewrite?.destination).toBe('/api/index.js');
+      expect(spaRewrite?.source).toBe('/((?!api(?:/|$)).*)');
+      expect(vercelConfig.functions?.['api/index.js']?.includeFiles).toBe('api/_server.cjs');
+      expect(fs.existsSync(path.join(rootDir, 'api/index.js'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'api/index.cjs'))).toBe(false);
     });
   });
 });

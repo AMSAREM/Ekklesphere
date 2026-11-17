@@ -1,6 +1,8 @@
-// api/index.cjs - Vercel Serverless Function Entrypoint (CommonJS)
-// Uses pre-bundled CommonJS server (api/_server.cjs) generated during `npm run build`
-// so Vercel never encounters ESM `.ts` extension errors or CJS dynamic-require failures.
+// api/index.js - Vercel Serverless Function Entrypoint (ESM wrapper for CJS server bundle)
+// Must use the `.js` extension so Vercel's builder registers it as a Node.js Serverless Function.
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 let cachedApp = null;
 let bootError = null;
@@ -21,7 +23,7 @@ function resolveApp() {
   }
 }
 
-module.exports = (req, res) => {
+export default function handler(req, res) {
   try {
     const app = resolveApp();
     return app(req, res);
@@ -41,4 +43,4 @@ module.exports = (req, res) => {
       );
     }
   }
-};
+}

@@ -6,13 +6,18 @@
       "schedule": "15 0 * * *"
     }
   ],
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "api/_server.cjs"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api/index.cjs"
+      "destination": "/api/index.js"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api(?:/|$)).*)",
       "destination": "/index.html"
     }
   ]
