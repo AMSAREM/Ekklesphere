@@ -1,6 +1,6 @@
 // lib/auth.ts - Ekklesphere Hardened Authentication, Supabase JWT Verification & RBAC Engine
 import type { Request, Response, NextFunction } from 'express';
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 export const PRIMARY_ORGANIZATION_ID = '';
@@ -135,6 +135,49 @@ export function getJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
   }
 
   return RUNTIME_SECURE_SECRET;
+}
+
+function getTemporaryPasswordSealKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  return createHash('sha256')
+    .update(`ekklesphere-temp-pw-seal-v1:${getJwtSecret(env)}`)
+    .digest();
+}
+
+/**
+ * Encrypts a short-lived temporary password with AES-256-GCM so organisation admins
+ * can view/copy active onboarding/reset temporary passwords until the user sets a personal one.
+ */
+export function sealTemporaryPassword(
+  plaintext: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const clean = String(plaintext || '');
+  if (!clean) return '';
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', getTemporaryPasswordSealKey(env), iv);
+  const encrypted = Buffer.concat([cipher.update(clean, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1:${iv.toString('base64url')}:${tag.toString('base64url')}:${encrypted.toString('base64url')}`;
+}
+
+export function unsealTemporaryPassword(
+  sealed?: string | null,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  if (!sealed || typeof sealed !== 'string') return undefined;
+  const parts = sealed.split(':');
+  if (parts.length !== 4 || parts[0] !== 'v1') return undefined;
+  try {
+    const iv = Buffer.from(parts[1], 'base64url');
+    const tag = Buffer.from(parts[2], 'base64url');
+    const payload = Buffer.from(parts[3], 'base64url');
+    const decipher = createDecipheriv('aes-256-gcm', getTemporaryPasswordSealKey(env), iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(payload), decipher.final()]).toString('utf8');
+    return decrypted || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

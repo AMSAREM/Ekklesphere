@@ -14,7 +14,9 @@ import {
   TEST_CAMPUS_SITE_ID,
   normalizeIdleTimeoutMinutes,
   resetSessionRegistryForTests,
+  sealTemporaryPassword,
   signSessionToken,
+  unsealTemporaryPassword,
   type ActiveSupportGrantContext,
   type AuthUserPayload,
   type ChurchRole,
@@ -144,6 +146,7 @@ export interface UserCredentialRecord {
   passwordSalt: string;
   status: 'active' | 'suspended' | 'locked';
   mustChangePassword?: boolean;
+  temporaryPassword?: string;
   passwordUpdatedAt?: string | null;
   failedAttempts?: number;
   lockedUntil?: string | null;
@@ -165,6 +168,7 @@ export interface OrganizationUserAccount {
   credentialStatus: 'active' | 'temp_password' | 'suspended' | 'locked' | 'unprovisioned';
   status: 'active' | 'suspended';
   mustChangePassword: boolean;
+  temporaryPassword?: string;
   lastLoginAt: string | null;
   createdAt?: string;
   homeCellGroup?: string;
@@ -476,6 +480,7 @@ class PlatformStore {
   private eventRsvpsByOrg = new Map<string, Record<string, boolean>>();
   private legacyTenantsForDryRun: Array<{ id: string; name: string; slug: string }> = [];
   private userCredentials = new Map<string, UserCredentialRecord>();
+  private tempPasswordByCredId = new Map<string, string>();
 
   constructor() {
     this.isTestRuntime = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
@@ -584,6 +589,7 @@ class PlatformStore {
     this.eventRsvpsByOrg.clear();
     this.legacyTenantsForDryRun = [];
     this.userCredentials.clear();
+    this.tempPasswordByCredId.clear();
     this.customSupabaseClientOverride = null;
     this.customSupabaseAuthVerifier = null;
     this.landingLeads.clear();
@@ -1364,8 +1370,16 @@ class PlatformStore {
       )
     ) {
       const stripped = { ...payload };
-      delete stripped.must_change_password;
-      delete stripped.password_updated_at;
+      if (
+        /temp_password_encrypted/i.test(firstErr.message || '') &&
+        !/must_change_password|password_updated_at/i.test(firstErr.message || '')
+      ) {
+        delete stripped.temp_password_encrypted;
+      } else {
+        delete stripped.must_change_password;
+        delete stripped.password_updated_at;
+        delete stripped.temp_password_encrypted;
+      }
       const retry = await sb
         .from('account_credentials')
         .upsert(stripped, { onConflict: 'id' });
@@ -1468,6 +1482,8 @@ class PlatformStore {
       });
 
       const omitStoredHashes = Boolean(authUserId && this.canVerifyViaSupabaseAuth);
+      const isTempPassword = Boolean(params.mustChangePassword) && !params.isCreator;
+      const sealedTempPassword = isTempPassword ? sealTemporaryPassword(params.password) : null;
       const payload: Record<string, unknown> = {
         id: resolvedId,
         member_id: params.memberId && UUID_REGEX.test(params.memberId) ? params.memberId : null,
@@ -1486,10 +1502,16 @@ class PlatformStore {
         locked_until: null,
         must_change_password: Boolean(params.mustChangePassword),
         password_updated_at: params.passwordUpdatedAt ?? null,
+        temp_password_encrypted: sealedTempPassword,
         ...(authUserId ? { auth_user_id: authUserId } : {}),
       };
 
       await this.upsertAccountCredentialsRow(sb, payload, { hash, salt });
+      if (isTempPassword) {
+        this.tempPasswordByCredId.set(resolvedId, params.password);
+      } else {
+        this.tempPasswordByCredId.delete(resolvedId);
+      }
 
       return {
         id: resolvedId,
@@ -1506,6 +1528,7 @@ class PlatformStore {
         passwordSalt: authUserId ? '' : salt,
         status: 'active',
         mustChangePassword: Boolean(params.mustChangePassword),
+        ...(isTempPassword ? { temporaryPassword: params.password } : {}),
         passwordUpdatedAt: params.passwordUpdatedAt ?? null,
         failedAttempts: 0,
         lockedUntil: null,
@@ -1513,6 +1536,7 @@ class PlatformStore {
       };
     }
 
+    const isTempPassword = Boolean(params.mustChangePassword) && !params.isCreator;
     const record: UserCredentialRecord = {
       id: requestedId,
       memberId: params.memberId,
@@ -1527,6 +1551,7 @@ class PlatformStore {
       passwordSalt: salt,
       status: 'active',
       mustChangePassword: Boolean(params.mustChangePassword),
+      ...(isTempPassword ? { temporaryPassword: params.password } : {}),
       passwordUpdatedAt: params.passwordUpdatedAt ?? null,
       failedAttempts: 0,
       lockedUntil: null,
@@ -1541,9 +1566,15 @@ class PlatformStore {
       const samePhone = Boolean(record.phoneE164 && existing.phoneE164 && existing.phoneE164 === record.phoneE164);
       if (existingKey === record.id || sameEmail || sameUsername || samePhone) {
         this.userCredentials.delete(existingKey);
+        this.tempPasswordByCredId.delete(existingKey);
       }
     }
     this.userCredentials.set(record.id, record);
+    if (isTempPassword) {
+      this.tempPasswordByCredId.set(record.id, params.password);
+    } else {
+      this.tempPasswordByCredId.delete(record.id);
+    }
     return record;
   }
 
@@ -1848,6 +1879,7 @@ class PlatformStore {
         updated_at: nowIso,
         must_change_password: false,
         password_updated_at: nowIso,
+        temp_password_encrypted: null,
         ...(syncedAuthUserId ? { auth_user_id: syncedAuthUserId } : {}),
       };
 
@@ -1878,8 +1910,16 @@ class PlatformStore {
         )
       ) {
         const stripped = { ...baseUpdate };
-        delete stripped.must_change_password;
-        delete stripped.password_updated_at;
+        if (
+          /temp_password_encrypted/i.test(updateErr.message || '') &&
+          !/must_change_password|password_updated_at/i.test(updateErr.message || '')
+        ) {
+          delete stripped.temp_password_encrypted;
+        } else {
+          delete stripped.must_change_password;
+          delete stripped.password_updated_at;
+          delete stripped.temp_password_encrypted;
+        }
         const retry = await sb
           .from('account_credentials')
           .update(stripped)
@@ -1895,12 +1935,14 @@ class PlatformStore {
       cred.passwordHash = hash;
       cred.passwordSalt = salt;
       cred.mustChangePassword = false;
+      cred.temporaryPassword = undefined;
       cred.passwordUpdatedAt = nowIso;
       cred.failedAttempts = 0;
       cred.lockedUntil = null;
       this.userCredentials.set(cred.id, cred);
     }
 
+    this.tempPasswordByCredId.delete(cred.id);
     await this.resetDistributedAuthRateLimit(`login:${cred.id}`);
     await this.recordAuthAuditEvent({
       organizationId: cred.organizationId,
@@ -11923,13 +11965,17 @@ class PlatformStore {
     };
   }
 
-  public async listOrganizationUsers(organizationId: string): Promise<OrganizationUserAccount[]> {
+  public async listOrganizationUsers(
+    organizationId: string,
+    options?: { includeTemporaryPasswords?: boolean }
+  ): Promise<OrganizationUserAccount[]> {
     this.assertDatabaseAvailable();
     const cleanOrgId = (organizationId || '').trim().toLowerCase();
     if (!cleanOrgId) return [];
 
     const sb = this.activeSupabase;
     const orgMembers = await this.getMembers(cleanOrgId);
+    const includeTemporaryPasswords = Boolean(options?.includeTemporaryPasswords);
 
     const resolveCredentialStatus = (
       status: string,
@@ -11956,6 +12002,9 @@ class PlatformStore {
       role: ChurchRole;
       status: string;
       mustChangePassword: boolean;
+      temporaryPassword?: string;
+      tempPasswordEncrypted?: string | null;
+      passwordUpdatedAt?: string | null;
       lockedUntil: string | null;
       lastLoginAt: string | null;
       createdAt?: string;
@@ -11963,20 +12012,36 @@ class PlatformStore {
 
     if (sb) {
       if (UUID_REGEX.test(cleanOrgId)) {
-        const { data, error } = await sb
+        let queryRes = await sb
           .from('account_credentials')
           .select(
-            'id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password'
+            'id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password, password_updated_at, temp_password_encrypted'
           )
           .eq('organization_id', cleanOrgId)
           .eq('is_creator', false)
           .order('created_at', { ascending: false });
 
-        if (error) {
-          throw new Error(`Failed to load organisation user accounts: ${error.message}`);
+        if (
+          queryRes.error &&
+          /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+            queryRes.error.message || ''
+          )
+        ) {
+          queryRes = await sb
+            .from('account_credentials')
+            .select(
+              'id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password'
+            )
+            .eq('organization_id', cleanOrgId)
+            .eq('is_creator', false)
+            .order('created_at', { ascending: false }) as typeof queryRes;
         }
 
-        for (const row of data || []) {
+        if (queryRes.error) {
+          throw new Error(`Failed to load organisation user accounts: ${queryRes.error.message}`);
+        }
+
+        for (const row of (queryRes.data || []) as Array<Record<string, any>>) {
           credRows.push({
             id: String(row.id),
             memberId: row.member_id ? String(row.member_id) : undefined,
@@ -11990,6 +12055,10 @@ class PlatformStore {
                 : mapSupabaseRoleToChurchRole(row.role),
             status: String(row.status || 'active'),
             mustChangePassword: Boolean(row.must_change_password),
+            tempPasswordEncrypted: row.temp_password_encrypted
+              ? String(row.temp_password_encrypted)
+              : null,
+            passwordUpdatedAt: row.password_updated_at ? String(row.password_updated_at) : null,
             lockedUntil: row.locked_until ? String(row.locked_until) : null,
             lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
             createdAt: row.created_at ? String(row.created_at) : undefined,
@@ -12009,6 +12078,8 @@ class PlatformStore {
             role: c.role,
             status: c.status,
             mustChangePassword: Boolean(c.mustChangePassword),
+            temporaryPassword: c.temporaryPassword,
+            passwordUpdatedAt: c.passwordUpdatedAt ?? null,
             lockedUntil: c.lockedUntil || null,
             lastLoginAt: null,
             createdAt: c.createdAt,
@@ -12045,6 +12116,16 @@ class PlatformStore {
         ? `${String(linkedMember.firstName || '').trim()} ${String(linkedMember.lastName || '').trim()}`.trim()
         : '';
       const role = c.role;
+      const resolvedTemporaryPassword =
+        includeTemporaryPasswords && c.mustChangePassword && role !== 'super_admin' && role !== 'creator'
+          ? unsealTemporaryPassword(c.tempPasswordEncrypted) ||
+            this.tempPasswordByCredId.get(c.id) ||
+            c.temporaryPassword ||
+            (role === 'member' && !c.passwordUpdatedAt
+              ? this.getGenericOnboardingPassword()
+              : undefined)
+          : undefined;
+
       results.push({
         id: c.id,
         memberId: linkedMember ? String(linkedMember.id) : c.memberId,
@@ -12062,6 +12143,7 @@ class PlatformStore {
         credentialStatus: resolveCredentialStatus(c.status, c.mustChangePassword, c.lockedUntil),
         status: c.status === 'suspended' ? 'suspended' : 'active',
         mustChangePassword: Boolean(c.mustChangePassword),
+        ...(resolvedTemporaryPassword ? { temporaryPassword: resolvedTemporaryPassword } : {}),
         lastLoginAt: c.lastLoginAt,
         createdAt: c.createdAt,
         homeCellGroup: linkedMember?.homeCellGroup || linkedMember?.groupName || undefined,
@@ -12404,6 +12486,7 @@ class PlatformStore {
         credentialStatus: record.mustChangePassword ? 'temp_password' : 'active',
         status: 'active',
         mustChangePassword: Boolean(record.mustChangePassword),
+        ...(record.mustChangePassword ? { temporaryPassword: effectivePassword } : {}),
         lastLoginAt: null,
         createdAt: record.createdAt || nowIso,
         homeCellGroup: targetMember?.homeCellGroup || targetMember?.groupName || undefined,
@@ -12753,7 +12836,9 @@ class PlatformStore {
       ipAddress: params.ipAddress || null,
     });
 
-    const refreshed = await this.listOrganizationUsers(cleanOrgId);
+    const refreshed = await this.listOrganizationUsers(cleanOrgId, {
+      includeTemporaryPasswords: true,
+    });
     const updatedUser = refreshed.find((u) => u.id === targetId || u.memberId === targetId);
     if (!updatedUser) {
       const err: any = new Error('Updated user account could not be loaded.');
@@ -12834,6 +12919,7 @@ class PlatformStore {
           throw new Error(`Failed deleting user credentials in Supabase: ${delErr.message}`);
         }
         deletedCredentialId = String(credRow.id);
+        this.tempPasswordByCredId.delete(deletedCredentialId);
         const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
         if (linkedMemberId) {
           await this.deleteMember(cleanOrgId, linkedMemberId).catch(() => {});
@@ -12881,6 +12967,7 @@ class PlatformStore {
           throw err;
         }
         this.userCredentials.delete(credKey);
+        this.tempPasswordByCredId.delete(cred.id);
         deletedCredentialId = cred.id;
         if (cred.memberId) {
           await this.deleteMember(cleanOrgId, cred.memberId).catch(() => {});

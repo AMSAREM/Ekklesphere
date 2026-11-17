@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
-import { signToken, TEST_ANCHOR_ORGANIZATION_ID } from '../lib/auth';
-import { platformStore } from '../src/server/platformStore';
+import {
+  sealTemporaryPassword,
+  signToken,
+  TEST_ANCHOR_ORGANIZATION_ID,
+  unsealTemporaryPassword,
+} from '../lib/auth';
+import { DEFAULT_MEMBER_ONBOARDING_PASSWORD, platformStore } from '../src/server/platformStore';
 
 describe('Member & Staff User Credentials Management (/api/users)', () => {
   beforeEach(() => {
@@ -139,8 +144,19 @@ describe('Member & Staff User Credentials Management (/api/users)', () => {
       expect(abenaRow).toBeTruthy();
       expect(abenaRow.hasCredentials).toBe(true);
       expect(abenaRow.credentialStatus).toBe('temp_password');
+      expect(abenaRow.temporaryPassword).toBe(DEFAULT_MEMBER_ONBOARDING_PASSWORD);
       expect(abenaRow.accountCategory).toBe('member');
       expect(abenaRow.homeCellGroup).toBe('Grace Fellowship');
+
+      // Pastor read-only GET /api/users must NOT expose working temporary passwords
+      const pastorListRes = await request(app)
+        .get('/api/users')
+        .set('Authorization', `Bearer ${pastorToken}`);
+      expect(pastorListRes.status).toBe(200);
+      const abenaForPastor = pastorListRes.body.users.find(
+        (u: any) => u.memberId === abenaId || u.id === abenaId
+      );
+      expect(abenaForPastor?.temporaryPassword).toBeUndefined();
 
       expect(kojoRow).toBeTruthy();
       expect(kojoRow.hasCredentials).toBe(false);
@@ -163,7 +179,17 @@ describe('Member & Staff User Credentials Management (/api/users)', () => {
       expect(typeof issueRes.body.temporaryPassword).toBe('string');
       expect(issueRes.body.user.hasCredentials).toBe(true);
       expect(issueRes.body.user.credentialStatus).toBe('temp_password');
+      expect(issueRes.body.user.temporaryPassword).toBe(issueRes.body.temporaryPassword);
       const tempPw = issueRes.body.temporaryPassword as string;
+
+      // Admin listing reflects Kojo's newly issued working temporary password
+      const listAfterIssue = await request(app)
+        .get('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const kojoAfterIssue = listAfterIssue.body.users.find(
+        (u: any) => u.memberId === kojoId || u.id === kojoId
+      );
+      expect(kojoAfterIssue?.temporaryPassword).toBe(tempPw);
 
       // 4. Verify Kojo can sign in using the issued temporary password
       const firstLogin = await request(app)
@@ -172,6 +198,32 @@ describe('Member & Staff User Credentials Management (/api/users)', () => {
       expect(firstLogin.status).toBe(200);
       expect(firstLogin.body.role).toBe('member');
       expect(firstLogin.body.mustChangePassword).toBe(true);
+
+      // Member setting their own personal password clears temporaryPassword from admin view
+      const abenaLogin = await request(app)
+        .post('/api/auth/login')
+        .send({ identifier: 'abena.osei@grace.org', password: DEFAULT_MEMBER_ONBOARDING_PASSWORD });
+      expect(abenaLogin.status).toBe(200);
+
+      const abenaChangePw = await request(app)
+        .post('/api/auth/change-password')
+        .set('Authorization', `Bearer ${abenaLogin.body.token}`)
+        .send({
+          currentPassword: DEFAULT_MEMBER_ONBOARDING_PASSWORD,
+          newPassword: 'AbenaPersonal!2026',
+          confirmPassword: 'AbenaPersonal!2026',
+        });
+      expect(abenaChangePw.status).toBe(200);
+
+      const listAfterAbenaChange = await request(app)
+        .get('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const abenaAfterChange = listAfterAbenaChange.body.users.find(
+        (u: any) => u.memberId === abenaId || u.id === abenaId
+      );
+      expect(abenaAfterChange?.credentialStatus).toBe('active');
+      expect(abenaAfterChange?.mustChangePassword).toBe(false);
+      expect(abenaAfterChange?.temporaryPassword).toBeUndefined();
 
       // 5. Reset Kojo's password with an explicit admin-assigned password (no forced change)
       const resetRes = await request(app)
@@ -188,6 +240,7 @@ describe('Member & Staff User Credentials Management (/api/users)', () => {
       expect(resetRes.status).toBe(201);
       expect(resetRes.body.resetExisting).toBe(true);
       expect(resetRes.body.temporaryPassword).toBeUndefined();
+      expect(resetRes.body.user.temporaryPassword).toBeUndefined();
       expect(resetRes.body.user.credentialStatus).toBe('active');
 
       // Old temp password rejected; new password accepted
@@ -201,6 +254,14 @@ describe('Member & Staff User Credentials Management (/api/users)', () => {
         .send({ identifier: 'kojo.appiah@grace.org', password: 'NewKojoPassword!2026' });
       expect(newPwLogin.status).toBe(200);
       expect(newPwLogin.body.mustChangePassword).toBe(false);
+    });
+
+    it('seals and unseals temporary passwords with AES-256-GCM and rejects tampered ciphertexts', () => {
+      const sealed = sealTemporaryPassword('Ek!TempPass2026');
+      expect(sealed.startsWith('v1:')).toBe(true);
+      expect(sealed).not.toContain('Ek!TempPass2026');
+      expect(unsealTemporaryPassword(sealed)).toBe('Ek!TempPass2026');
+      expect(unsealTemporaryPassword(`${sealed}tampered`)).toBeUndefined();
     });
   });
 

@@ -4939,7 +4939,14 @@ app.get(
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
   async (req: Request, res: Response) => {
     try {
-      const users = await platformStore.listOrganizationUsers(req.organizationId!);
+      const includeTemporaryPasswords =
+        req.user?.role === 'admin' ||
+        req.user?.role === 'super_admin' ||
+        req.user?.role === 'creator' ||
+        Boolean(req.user?.is_creator);
+      const users = await platformStore.listOrganizationUsers(req.organizationId!, {
+        includeTemporaryPasswords,
+      });
       return res.status(200).json({ users });
     } catch (err: any) {
       return res.status(err?.status || 500).json({

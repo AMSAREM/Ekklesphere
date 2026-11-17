@@ -19,6 +19,8 @@ import {
   X,
   Edit3,
   Trash2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { ChurchRole } from '../../lib/auth';
 import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../constants/portfolios';
@@ -55,6 +57,7 @@ export interface ManagedUser {
   credentialStatus: CredentialStatus;
   status: 'active' | 'suspended';
   mustChangePassword?: boolean;
+  temporaryPassword?: string;
   lastLoginAt?: string | null;
   createdAt?: string;
   homeCellGroup?: string;
@@ -131,6 +134,8 @@ export const UserManagement: React.FC = () => {
     mustChangePassword: boolean;
   } | null>(null);
   const [copiedField, setCopiedField] = useState<'pass' | 'bundle' | null>(null);
+  const [copiedRowPassId, setCopiedRowPassId] = useState<string | null>(null);
+  const [maskedTempIds, setMaskedTempIds] = useState<Record<string, boolean>>({});
 
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.role === 'creator';
   const canManageUsers =
@@ -515,7 +520,9 @@ export const UserManagement: React.FC = () => {
         email: savedUser.email,
         phoneE164: savedUser.phoneE164,
         role: savedUser.role,
-        temporaryPassword: data.temporaryPassword,
+        temporaryPassword:
+          data.temporaryPassword ||
+          (savedUser.mustChangePassword ? savedUser.temporaryPassword : undefined),
         resetExisting: Boolean(data.resetExisting),
         mustChangePassword: Boolean(savedUser.mustChangePassword),
       });
@@ -1246,6 +1253,72 @@ export const UserManagement: React.FC = () => {
                         </span>
                       )}
                     </div>
+
+                    {canCreateUsers && u.mustChangePassword && u.temporaryPassword && (
+                      <div className="mt-1.5 inline-flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#EFEDFF]/80 dark:bg-[#23214A] border border-[#6D5CF2]/25 text-[11px]">
+                        <span className="inline-flex items-center gap-1 font-bold text-[#5B4BE0] dark:text-[#B3AAFF]">
+                          <KeyRound className="w-3 h-3" />
+                          <span>Working Temp Password:</span>
+                        </span>
+                        <code
+                          data-testid={`temp-password-${u.id}`}
+                          className="px-2 py-0.5 rounded-md bg-white dark:bg-[#14142E] border border-[#6D5CF2]/20 font-mono font-bold text-[#1D1B3A] dark:text-[#F2F2FA] select-all"
+                        >
+                          {maskedTempIds[u.id] ? '••••••••••••' : u.temporaryPassword}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMaskedTempIds((prev) => ({
+                              ...prev,
+                              [u.id]: !prev[u.id],
+                            }))
+                          }
+                          className="p-1 rounded-md text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-white hover:bg-white/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                          title={
+                            maskedTempIds[u.id]
+                              ? 'Show temporary password'
+                              : 'Hide temporary password'
+                          }
+                          aria-label={
+                            maskedTempIds[u.id]
+                              ? `Show temporary password for ${u.fullName}`
+                              : `Hide temporary password for ${u.fullName}`
+                          }
+                        >
+                          {maskedTempIds[u.id] ? (
+                            <Eye className="w-3.5 h-3.5" />
+                          ) : (
+                            <EyeOff className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(u.temporaryPassword || '');
+                            setCopiedRowPassId(u.id);
+                            showToast(`Copied temporary password for ${u.fullName}.`);
+                            setTimeout(() => {
+                              setCopiedRowPassId((curr) => (curr === u.id ? null : curr));
+                            }, 1800);
+                          }}
+                          className="px-2 py-0.5 rounded-md bg-white dark:bg-[#14142E] border border-[#6D5CF2]/25 hover:border-[#6D5CF2] text-[#5B4BE0] dark:text-[#B3AAFF] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          title={`Copy temporary password for ${u.fullName}`}
+                        >
+                          {copiedRowPassId === u.id ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              <span>Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Portfolio + Role Selector + Call + Credential & Access Actions */}
