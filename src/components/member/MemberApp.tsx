@@ -54,6 +54,15 @@ import {
   formatBirthMonthGroupName,
   resolveMemberBirthFields,
 } from '../../utils/birthMonth';
+import {
+  normalizeMemberDepartmentFields,
+  resolveMemberDepartments,
+} from '../../utils/memberDepartments';
+import {
+  getAutomaticMinistryKind,
+  resolveAutomaticDemographicMinistries,
+} from '../../utils/demographicMinistries';
+import { MultiDepartmentSelector } from '../common/MultiDepartmentSelector';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -160,29 +169,39 @@ export const MemberApp: React.FC = () => {
       .join('') ||
     'MB';
   const memberGroup = matchedMember?.groupName || matchedMember?.homeCellGroup || 'General Congregation';
-  const memberDepartment = matchedMember?.department;
+  const memberDepartments = resolveMemberDepartments(matchedMember);
+  const memberDepartment =
+    memberDepartments.length > 0 ? memberDepartments.join(', ') : 'General Congregation';
   const memberEmail = matchedMember?.email || currentUser?.email || systemSettings.contactEmail;
   const memberPhone = matchedMember?.phoneE164 || systemSettings.contactPhone;
+  const memberEffectiveDob = matchedMember?.dateOfBirth || '';
+  const memberAutoDemographic = resolveAutomaticDemographicMinistries({
+    gender: matchedMember?.gender,
+    dateOfBirth: memberEffectiveDob,
+  });
 
-  const { cellOrFellowshipGroup, ministryGroup } = findMatchingChurchGroup(churchGroups, {
+  const { cellOrFellowshipGroup, ministryGroups } = findMatchingChurchGroup(churchGroups, {
     groupName: matchedMember?.groupName,
     homeCellGroup: matchedMember?.homeCellGroup,
-    department: matchedMember?.department,
+    department: memberDepartments,
+    gender: matchedMember?.gender,
+    dateOfBirth: memberEffectiveDob,
   });
   const selectableCellGroups = mergeSelectableCellGroups(churchGroups, members);
   const selectableDepartments = mergeSelectableDepartments(churchGroups, members);
 
   const [isEditingMyGroups, setIsEditingMyGroups] = useState(false);
   const [draftCellGroup, setDraftCellGroup] = useState(memberGroup);
-  const [draftDepartment, setDraftDepartment] = useState(memberDepartment || 'General Congregation');
+  const [draftDepartments, setDraftDepartments] = useState<string[]>(memberDepartments);
   const [isSavingMyGroups, setIsSavingMyGroups] = useState(false);
 
+  const memberDeptSignature = memberDepartments.join('|');
   useEffect(() => {
     if (!isEditingMyGroups) {
       setDraftCellGroup(memberGroup);
-      setDraftDepartment(memberDepartment || 'General Congregation');
+      setDraftDepartments(memberDepartments);
     }
-  }, [memberGroup, memberDepartment, isEditingMyGroups]);
+  }, [memberGroup, memberDeptSignature, isEditingMyGroups]);
 
   const [localPhotoOverride, setLocalPhotoOverride] = useState<string | null>(() => {
     try {
@@ -311,14 +330,15 @@ export const MemberApp: React.FC = () => {
   const handleSaveMyGroups = async (e: React.FormEvent) => {
     e.preventDefault();
     const nextCell = draftCellGroup.trim() || 'General Congregation';
-    const nextDept = draftDepartment.trim() || 'General Congregation';
+    const deptFields = normalizeMemberDepartmentFields({ departments: draftDepartments });
     setIsSavingMyGroups(true);
     try {
       if (matchedMember) {
         await updateMember(matchedMember.id, {
           groupName: nextCell,
           homeCellGroup: nextCell,
-          department: nextDept,
+          department: deptFields.department,
+          departments: deptFields.departments,
         });
       } else {
         const res = await fetch('/api/members/me/profile', {
@@ -327,7 +347,8 @@ export const MemberApp: React.FC = () => {
           body: JSON.stringify({
             groupName: nextCell,
             homeCellGroup: nextCell,
-            department: nextDept,
+            department: deptFields.department,
+            departments: deptFields.departments,
           }),
         });
         if (res.ok) {
@@ -1317,33 +1338,79 @@ export const MemberApp: React.FC = () => {
               )}
             </div>
 
-            {/* Serving Ministry / Department */}
-            <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-1.5">
+            {/* Serving Ministries & Automatic Wings */}
+            <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-2">
               <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-                Serving Ministry / Department
+                Serving Ministries &amp; Wings
               </div>
-              <div className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                {ministryGroup?.name || memberDepartment || 'General Congregation'}
-              </div>
-              {ministryGroup ? (
-                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] space-y-0.5">
-                  <div>
-                    Ministry Lead: <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{ministryGroup.leaderName || systemSettings.seniorPastor}</span>
-                    {ministryGroup.leaderPhone && (
-                      <span className="ml-1.5 font-mono">· {ministryGroup.leaderPhone}</span>
-                    )}
-                  </div>
-                  {(ministryGroup.meetingDay || ministryGroup.meetingTime || ministryGroup.meetingLocation) && (
-                    <div>
-                      {[ministryGroup.meetingDay, ministryGroup.meetingTime, ministryGroup.meetingLocation]
-                        .filter(Boolean)
-                        .join(' · ')}
+              {(() => {
+                const explicitKinds = new Set(
+                  memberDepartments
+                    .map((d) => getAutomaticMinistryKind(d))
+                    .filter((k): k is NonNullable<typeof k> => Boolean(k))
+                );
+                const extraAuto = memberAutoDemographic.ministries.filter(
+                  (am) => !explicitKinds.has(am.kind)
+                );
+                if (memberDepartments.length === 0 && extraAuto.length === 0) {
+                  return (
+                    <div className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      General Congregation
                     </div>
-                  )}
+                  );
+                }
+                return (
+                  <div className="flex flex-wrap gap-1.5">
+                    {memberDepartments.map((deptName) => (
+                      <span
+                        key={deptName}
+                        className="px-2.5 py-0.5 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20"
+                      >
+                        {deptName}
+                      </span>
+                    ))}
+                    {extraAuto.map((am) => (
+                      <span
+                        key={am.kind}
+                        className={`px-2.5 py-0.5 rounded-lg text-xs font-bold border ${
+                          am.kind === 'youth'
+                            ? 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/25'
+                            : am.kind === 'women'
+                            ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25'
+                            : 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/25'
+                        }`}
+                        title={am.reason}
+                      >
+                        {am.name} ({am.badgeLabel})
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
+              {ministryGroups.length > 0 ? (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] space-y-1.5 pt-0.5">
+                  {ministryGroups.map((mg) => (
+                    <div key={mg.id} className="space-y-0.5">
+                      <div>
+                        <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">{mg.name}</span> Lead:{' '}
+                        <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          {mg.leaderName || systemSettings.seniorPastor}
+                        </span>
+                        {mg.leaderPhone && (
+                          <span className="ml-1.5 font-mono">· {mg.leaderPhone}</span>
+                        )}
+                      </div>
+                      {(mg.meetingDay || mg.meetingTime || mg.meetingLocation) && (
+                        <div>
+                          {[mg.meetingDay, mg.meetingTime, mg.meetingLocation].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
-                  Join a serving ministry from your Me profile to connect with department leads.
+                  Join one or more serving ministries from your Me profile to connect with department leads.
                 </div>
               )}
             </div>
@@ -1930,8 +1997,18 @@ export const MemberApp: React.FC = () => {
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">{memberGroup}</b>
               </div>
               <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
-                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Ministry / Department</span>
-                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">{memberDepartment || 'General Congregation'}</b>
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Ministries / Departments</span>
+                <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right break-words min-w-0">
+                  {memberDepartment}
+                </b>
+              </div>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Automatic Wings (Gender / &lt;35)</span>
+                <b className="text-emerald-700 dark:text-emerald-300 text-right break-words min-w-0">
+                  {memberAutoDemographic.names.length > 0
+                    ? memberAutoDemographic.names.join(', ')
+                    : 'Not assigned (set Gender / DOB)'}
+                </b>
               </div>
               <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
                 <span className="text-[#5B5F7A] dark:text-[#A9ACC8] inline-flex items-center gap-1 shrink-0">
@@ -1998,41 +2075,44 @@ export const MemberApp: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                    Serving Ministry / Department
-                  </label>
-                  <select
-                    value={draftDepartment}
-                    onChange={(e) => setDraftDepartment(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl text-xs border border-[#E3E5F2] dark:border-[#2D2D55] bg-white dark:bg-[#1C1C3C] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6C5CE7]"
-                  >
-                    {selectableDepartments.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                    {!selectableDepartments.includes(draftDepartment) && (
-                      <option value={draftDepartment}>{draftDepartment}</option>
-                    )}
-                  </select>
+                  <MultiDepartmentSelector
+                    compact
+                    idPrefix="member-portal-inline-depts"
+                    label="Serving Ministries & Departments (Multiple allowed)"
+                    value={draftDepartments}
+                    onChange={setDraftDepartments}
+                    options={selectableDepartments}
+                  />
                 </div>
 
                 {(() => {
                   const preview = findMatchingChurchGroup(churchGroups, {
                     groupName: draftCellGroup,
                     homeCellGroup: draftCellGroup,
-                    department: draftDepartment,
+                    department: draftDepartments,
+                    gender: matchedMember?.gender,
+                    dateOfBirth: memberDateOfBirth,
                   });
-                  const matchedInfo = preview.ministryGroup || preview.cellOrFellowshipGroup;
-                  if (!matchedInfo) return null;
+                  const previewLeads = [
+                    ...(preview.ministryGroups || []),
+                    ...(preview.cellOrFellowshipGroup &&
+                    !preview.ministryGroups?.some((g) => g.id === preview.cellOrFellowshipGroup?.id)
+                      ? [preview.cellOrFellowshipGroup]
+                      : []),
+                  ];
+                  if (previewLeads.length === 0) return null;
                   return (
-                    <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] flex items-center gap-1.5">
-                      <Phone className="w-3 h-3 text-[#6C5CE7] shrink-0" />
-                      <span>
-                        Lead: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{matchedInfo.leaderName || systemSettings.seniorPastor}</b>
-                        {matchedInfo.meetingDay ? ` · ${matchedInfo.meetingDay}` : ''}
-                        {matchedInfo.meetingTime ? ` ${matchedInfo.meetingTime}` : ''}
-                      </span>
+                    <div className="space-y-1">
+                      {previewLeads.map((matchedInfo) => (
+                        <div key={matchedInfo.id} className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8] flex items-center gap-1.5">
+                          <Phone className="w-3 h-3 text-[#6C5CE7] shrink-0" />
+                          <span>
+                            {matchedInfo.name} Lead: <b className="text-[#1D1B3A] dark:text-[#F2F2FA]">{matchedInfo.leaderName || systemSettings.seniorPastor}</b>
+                            {matchedInfo.meetingDay ? ` · ${matchedInfo.meetingDay}` : ''}
+                            {matchedInfo.meetingTime ? ` ${matchedInfo.meetingTime}` : ''}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   );
                 })()}

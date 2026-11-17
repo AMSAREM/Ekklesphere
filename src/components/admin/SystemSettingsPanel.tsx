@@ -30,14 +30,18 @@ import {
   BUILT_IN_GROUP_CATEGORIES,
   CUSTOM_GROUP_CATEGORY_PRESETS,
   GROUP_CATEGORY_COLOR_OPTIONS,
+  ResolvedChurchGroupItem,
+  expandAllAutomaticChurchGroups,
   getAllGroupCategories,
   getGroupCategoryMeta,
   getGroupCategoryStyles,
   isDepartmentLikeCategory,
+  isMonthBornCategory,
   normalizeGroupCategorySlug,
   pluralizeCategoryLabel,
   sanitizeCustomGroupCategories,
 } from '../../shared/groupCategories';
+import { resolveMemberBirthFields } from '../../utils/birthMonth';
 import {
   Building2,
   Radio,
@@ -300,13 +304,49 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     [customGroupCategories, churchGroups, leadershipHistory]
   );
 
+  const effectiveChurchGroups = useMemo(
+    () => expandAllAutomaticChurchGroups(churchGroups, allGroupCategories),
+    [churchGroups, allGroupCategories]
+  );
+
+  const birthAssignedMembersCount = useMemo(
+    () =>
+      members.filter((m) =>
+        Boolean(
+          resolveMemberBirthFields({
+            dateOfBirth: m.dateOfBirth,
+            monthOfBirth: m.monthOfBirth,
+            birthMonthGroup: m.birthMonthGroup,
+          }).monthOfBirth
+        )
+      ).length,
+    [members]
+  );
+
   // Groups Management Local States
   const [groupFilterCategory, setGroupFilterCategory] = useState<'all' | ChurchGroupCategory>('all');
   const [groupFilterStatus, setGroupFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [groupSearchQuery, setGroupSearchQuery] = useState('');
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [viewingMembersGroup, setViewingMembersGroup] = useState<ChurchGroup | null>(null);
+  const [viewingMembersGroup, setViewingMembersGroup] = useState<ResolvedChurchGroupItem | null>(null);
+
+  const filteredEffectiveGroups = useMemo(() => {
+    const q = groupSearchQuery.trim().toLowerCase();
+    return effectiveChurchGroups.filter((group) => {
+      if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
+      if (groupFilterStatus === 'active' && !group.active) return false;
+      if (groupFilterStatus === 'inactive' && group.active) return false;
+      if (!q) return true;
+      return (
+        group.name.toLowerCase().includes(q) ||
+        group.leaderName.toLowerCase().includes(q) ||
+        (group.meetingLocation && group.meetingLocation.toLowerCase().includes(q)) ||
+        (group.meetingDay && group.meetingDay.toLowerCase().includes(q)) ||
+        (group.description && group.description.toLowerCase().includes(q))
+      );
+    });
+  }, [effectiveChurchGroups, groupFilterCategory, groupFilterStatus, groupSearchQuery]);
 
   // Custom Group Category Creation & Management States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -671,8 +711,22 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     setGroupAssistant('');
     setGroupAssistantMemberId('');
     setLeaderChangeReason('');
-    setGroupDay(category === 'cell_group' ? 'Wednesdays' : category === 'ministry' ? 'Saturdays' : 'Monthly 2nd Saturday');
-    setGroupTime(category === 'cell_group' ? '18:30 - 19:45' : '16:00 - 17:30');
+    setGroupDay(
+      category === 'cell_group'
+        ? 'Wednesdays'
+        : category === 'ministry'
+        ? 'Saturdays'
+        : isMonthBornCategory(category)
+        ? 'Monthly Fellowship'
+        : 'Monthly 2nd Saturday'
+    );
+    setGroupTime(
+      category === 'cell_group'
+        ? '18:30 - 19:45'
+        : isMonthBornCategory(category)
+        ? ''
+        : '16:00 - 17:30'
+    );
     setGroupLocation('');
     setGroupDemographic('');
     setGroupDescription('');
@@ -1712,7 +1766,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     <Layers className="w-4 h-4 text-[#6D5CF2]" />
                   </div>
                   <div className="font-mono text-2xl font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA] mt-1">
-                    {churchGroups.length}
+                    {effectiveChurchGroups.length}
                   </div>
                   <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
@@ -1724,7 +1778,12 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </div>
 
                 {allGroupCategories.map((cat) => {
-                  const catCount = churchGroups.filter((g) => g.category === cat.id).length;
+                  const catGroups = effectiveChurchGroups.filter((g) => g.category === cat.id);
+                  const catCount = catGroups.length;
+                  const isMonthBornCat = isMonthBornCategory(cat.id);
+                  const monthBornAssignedLeads = isMonthBornCat
+                    ? catGroups.filter((g) => isAssignedLeaderName(g.leaderName)).length
+                    : 0;
                   const styles = getGroupCategoryStyles(cat.color);
                   const isActive = groupFilterCategory === cat.id;
                   const subNote =
@@ -1738,6 +1797,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       ? unconfiguredRosterGroups.length > 0
                         ? `${unconfiguredRosterGroups.length} roster group(s) unconfigured`
                         : 'All roster cells configured'
+                      : isMonthBornCat
+                      ? members.length > 0
+                        ? `${birthAssignedMembersCount}/${members.length} assigned · ${monthBornAssignedLeads}/12 leads`
+                        : `12 auto birth-month groups · ${monthBornAssignedLeads}/12 leads`
                       : `${catCount} configured group${catCount === 1 ? '' : 's'}`;
 
                   return (
@@ -1830,10 +1893,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       : 'bg-[#F6F7FC] dark:bg-[#14142E] text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A] dark:hover:text-[#F2F2FA]'
                   }`}
                 >
-                  All ({churchGroups.length})
+                  All ({effectiveChurchGroups.length})
                 </button>
                 {allGroupCategories.map((cat) => {
-                  const count = churchGroups.filter((g) => g.category === cat.id).length;
+                  const count = effectiveChurchGroups.filter((g) => g.category === cat.id).length;
                   return (
                     <button
                       key={cat.id}
@@ -1897,206 +1960,262 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
 
             {/* Groups Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-              {churchGroups
-                .filter((group) => {
-                  if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
-                  if (groupFilterStatus === 'active' && !group.active) return false;
-                  if (groupFilterStatus === 'inactive' && group.active) return false;
-                  if (!groupSearchQuery.trim()) return true;
-                  const q = groupSearchQuery.toLowerCase();
-                  return (
-                    group.name.toLowerCase().includes(q) ||
-                    group.leaderName.toLowerCase().includes(q) ||
-                    (group.meetingLocation && group.meetingLocation.toLowerCase().includes(q)) ||
-                    (group.meetingDay && group.meetingDay.toLowerCase().includes(q)) ||
-                    (group.description && group.description.toLowerCase().includes(q))
-                  );
-                })
-                .map((group) => {
-                  const enrolledMembers = getGroupMembers(group.name);
-                  const liveMetrics = groupMetricsByName.get(normalizeSettingLabel(group.name).toLowerCase());
-                  const hasAssignedLead = isAssignedLeaderName(group.leaderName);
-                  const catMeta = getGroupCategoryMeta(group.category, customGroupCategories);
-                  const catStyles = getGroupCategoryStyles(catMeta.color);
+              {filteredEffectiveGroups.map((group) => {
+                const enrolledMembers = getGroupMembers(group.name);
+                const analyticRow = groupMetricsByName.get(normalizeSettingLabel(group.name).toLowerCase());
+                const threshold = Math.max(1, Number(systemSettings.absenteeThresholdServices) || 2);
+                const checkedInIds = structureAnalytics.activeService.checkedInPersonIds;
+                const presentFallback = enrolledMembers.filter((m) => checkedInIds.has(m.id)).length;
+                const atRiskFallback = enrolledMembers.filter(
+                  (m) => !checkedInIds.has(m.id) && (m.consecutiveAbsences || 0) >= threshold
+                ).length;
+                const enrolledIdSet = new Set(enrolledMembers.map((m) => m.id));
+                const openFollowupFallback = followupTasks.filter(
+                  (t) =>
+                    t.status === 'open' &&
+                    (enrolledIdSet.has(t.personId) ||
+                      normalizeSettingLabel(t.groupName).toLowerCase() ===
+                        normalizeSettingLabel(group.name).toLowerCase())
+                ).length;
 
-                  return (
-                    <div
-                      key={group.id}
-                      className="min-w-0 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col justify-between hover:shadow-md transition-all group"
-                    >
-                      <div>
-                        {/* Top Badges & Status Toggle */}
-                        <div className="flex items-center justify-between gap-2 mb-3">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${catStyles.badgeClass}`}
-                          >
-                            {catMeta.label}
-                          </span>
+                const liveMetrics = analyticRow || {
+                  totalMembers: enrolledMembers.length,
+                  presentCount: presentFallback,
+                  turnoutPct:
+                    enrolledMembers.length > 0
+                      ? Math.round((presentFallback / enrolledMembers.length) * 100)
+                      : 0,
+                  atRiskCount: atRiskFallback,
+                  openFollowupCount: openFollowupFallback,
+                };
+                const hasAssignedLead = isAssignedLeaderName(group.leaderName);
+                const catMeta = getGroupCategoryMeta(group.category, customGroupCategories);
+                const catStyles = getGroupCategoryStyles(catMeta.color);
+                const isVirtualAutoMonth = Boolean(group.isAutoBirthMonthVirtual);
+                const isVirtualAutoDemographic = Boolean(group.isAutoDemographicVirtual);
+                const isVirtualAutoGroup = isVirtualAutoMonth || isVirtualAutoDemographic;
+                const autoBadgeText = isVirtualAutoMonth
+                  ? 'Auto · Birthdate'
+                  : group.autoDemographicKind === 'youth'
+                  ? 'Auto · Under 35'
+                  : 'Auto · Gender';
+                const autoBadgeTitle = isVirtualAutoMonth
+                  ? 'Automatically assigned from member birthdates'
+                  : group.autoDemographicKind === 'youth'
+                  ? 'Automatically includes every member aged under 35 from Date of Birth'
+                  : 'Automatically includes every member of this gender';
 
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => toggleChurchGroupStatus(group.id)}
-                              className={`flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full transition-all cursor-pointer ${
-                                group.active
-                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
-                                  : 'bg-slate-200 dark:bg-white/10 text-slate-500 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-white/20'
-                              }`}
-                              title={group.active ? 'Click to deactivate' : 'Click to activate'}
+                return (
+                  <div
+                    key={group.id}
+                    className="min-w-0 bg-white dark:bg-[#1D1D3D] rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-xs flex flex-col justify-between hover:shadow-md transition-all group"
+                  >
+                    <div>
+                      {/* Top Badges & Status Toggle */}
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${catStyles.badgeClass}`}
+                        >
+                          {catMeta.label}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          {isVirtualAutoGroup ? (
+                            <span
+                              className="flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                              title={autoBadgeTitle}
                             >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  group.active ? 'bg-emerald-500' : 'bg-slate-400'
-                                }`}
-                              />
-                              <span>{group.active ? 'Active' : 'Inactive'}</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Title & Description */}
-                        <h4 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-1.5">
-                          {group.name}
-                        </h4>
-                        <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] line-clamp-2 leading-relaxed mb-3.5">
-                          {group.description}
-                        </p>
-
-                        {/* Leader & Assistant */}
-                        <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55] mb-3 space-y-1.5">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-[#666A86] dark:text-[#A9ACC8] font-medium">Primary Leader</span>
-                            {hasAssignedLead ? (
-                              <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
-                                <span className="w-5 h-5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[9px] flex items-center justify-center shrink-0">
-                                  {group.leaderName
-                                    .split(' ')
-                                    .map((n) => n[0])
-                                    .slice(0, 2)
-                                    .join('')}
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <span>{autoBadgeText}</span>
+                            </span>
+                          ) : (
+                            <>
+                              {group.autoDemographicKind && (
+                                <span
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 text-[#6D5CF2] dark:text-[#9D90FF]"
+                                  title={
+                                    group.autoDemographicKind === 'youth'
+                                      ? 'Auto-enrolled: every member under 35'
+                                      : 'Auto-enrolled by member gender'
+                                  }
+                                >
+                                  {group.autoDemographicKind === 'youth' ? 'Auto <35' : 'Auto Gender'}
                                 </span>
-                                <span>{group.leaderName}</span>
-                              </span>
-                            ) : (
+                              )}
                               <button
                                 type="button"
-                                onClick={() => openEditGroupModal(group)}
-                                className="text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer"
+                                onClick={() => toggleChurchGroupStatus(group.id)}
+                                className={`flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full transition-all cursor-pointer ${
+                                  group.active
+                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                                    : 'bg-slate-200 dark:bg-white/10 text-slate-500 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-white/20'
+                                }`}
+                                title={group.active ? 'Click to deactivate' : 'Click to activate'}
                               >
-                                Assign Leader
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full ${
+                                    group.active ? 'bg-emerald-500' : 'bg-slate-400'
+                                  }`}
+                                />
+                                <span>{group.active ? 'Active' : 'Inactive'}</span>
                               </button>
-                            )}
-                          </div>
-
-                          {group.leaderPhone && (
-                            <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                              <span className="flex items-center gap-1">
-                                <Phone className="w-3 h-3 text-[#6D5CF2]" />
-                                <span>Phone</span>
-                              </span>
-                              <a
-                                href={`tel:${group.leaderPhone.replace(/\s+/g, '')}`}
-                                className="font-mono text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline"
-                              >
-                                {group.leaderPhone}
-                              </a>
-                            </div>
-                          )}
-
-                          {group.assistantLeader && (
-                            <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8] pt-1 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
-                              <span>Assistant / Co-Leader</span>
-                              <span className="font-medium text-[#1D1B3A] dark:text-[#F2F2FA]">
-                                {group.assistantLeader}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Live Turnout & Pastoral Care Snapshot (Synced with Dashboard Analytics) */}
-                        <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] px-2.5 py-2 mb-3 text-center tabular-nums">
-                          <div>
-                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                              Enrolled
-                            </div>
-                            <div className="font-mono text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                              {liveMetrics?.totalMembers ?? enrolledMembers.length}
-                            </div>
-                          </div>
-                          <div className="border-x border-[#E9EBF5] dark:border-[#2D2D55]">
-                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                              Live Turnout
-                            </div>
-                            <div className="font-mono text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
-                              {liveMetrics ? `${liveMetrics.presentCount} (${liveMetrics.turnoutPct}%)` : '0 (0%)'}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
-                              Care / Risk
-                            </div>
-                            <div
-                              className={`font-mono text-xs font-bold ${
-                                (liveMetrics?.atRiskCount || 0) + (liveMetrics?.openFollowupCount || 0) > 0
-                                  ? 'text-amber-600 dark:text-amber-400'
-                                  : 'text-emerald-600 dark:text-emerald-400'
-                              }`}
-                            >
-                              {liveMetrics ? `${liveMetrics.atRiskCount} / ${liveMetrics.openFollowupCount}` : '0 / 0'}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Schedule & Venue Information */}
-                        <div className="space-y-1.5 text-xs text-[#666A86] dark:text-[#A9ACC8] mb-4">
-                          {(group.meetingDay || group.meetingTime) && (
-                            <div className="flex items-center gap-1.5">
-                              <Calendar className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
-                              <span className="truncate">
-                                {group.meetingDay} {group.meetingTime ? `· ${group.meetingTime}` : ''}
-                              </span>
-                            </div>
-                          )}
-                          {group.meetingLocation && (
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                              <span className="truncate">{group.meetingLocation}</span>
-                            </div>
-                          )}
-                          {group.targetDemographic && (
-                            <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] italic">
-                              Focus: {group.targetDemographic}
-                            </div>
+                            </>
                           )}
                         </div>
                       </div>
 
-                        {/* Card Footer with Members Count & Actions */}
-                      <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => setViewingMembersGroup(group)}
-                            className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      {/* Title & Description */}
+                      <h4 className="text-base font-bold text-[#1D1B3A] dark:text-[#F2F2FA] leading-tight mb-1.5">
+                        {group.name}
+                      </h4>
+                      <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] line-clamp-2 leading-relaxed mb-3.5">
+                        {group.description}
+                      </p>
+
+                      {/* Leader & Assistant */}
+                      <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-xl p-3 border border-[#E9EBF5] dark:border-[#2D2D55] mb-3 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-[#666A86] dark:text-[#A9ACC8] font-medium">Primary Leader</span>
+                          {hasAssignedLead ? (
+                            <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] font-bold text-[9px] flex items-center justify-center shrink-0">
+                                {group.leaderName
+                                  .split(' ')
+                                  .map((n) => n[0])
+                                  .slice(0, 2)
+                                  .join('')}
+                              </span>
+                              <span>{group.leaderName}</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isVirtualAutoGroup
+                                  ? openAddGroupModal(group.category, group.name)
+                                  : openEditGroupModal(group)
+                              }
+                              className="text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:underline cursor-pointer"
+                            >
+                              Assign Leader
+                            </button>
+                          )}
+                        </div>
+
+                        {group.leaderPhone && (
+                          <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                            <span className="flex items-center gap-1">
+                              <Phone className="w-3 h-3 text-[#6D5CF2]" />
+                              <span>Phone</span>
+                            </span>
+                            <a
+                              href={`tel:${group.leaderPhone.replace(/\s+/g, '')}`}
+                              className="font-mono text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline"
+                            >
+                              {group.leaderPhone}
+                            </a>
+                          </div>
+                        )}
+
+                        {group.assistantLeader && (
+                          <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8] pt-1 border-t border-[#E9EBF5] dark:border-[#2D2D55]">
+                            <span>Assistant / Co-Leader</span>
+                            <span className="font-medium text-[#1D1B3A] dark:text-[#F2F2FA]">
+                              {group.assistantLeader}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Live Turnout & Pastoral Care Snapshot (Synced with Dashboard Analytics) */}
+                      <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] px-2.5 py-2 mb-3 text-center tabular-nums">
+                        <div>
+                          <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                            Enrolled
+                          </div>
+                          <div className="font-mono text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            {liveMetrics.totalMembers}
+                          </div>
+                        </div>
+                        <div className="border-x border-[#E9EBF5] dark:border-[#2D2D55]">
+                          <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                            Live Turnout
+                          </div>
+                          <div className="font-mono text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF]">
+                            {`${liveMetrics.presentCount} (${liveMetrics.turnoutPct}%)`}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                            Care / Risk
+                          </div>
+                          <div
+                            className={`font-mono text-xs font-bold ${
+                              liveMetrics.atRiskCount + liveMetrics.openFollowupCount > 0
+                                ? 'text-amber-600 dark:text-amber-400'
+                                : 'text-emerald-600 dark:text-emerald-400'
+                            }`}
                           >
-                            <Users className="w-3.5 h-3.5" />
-                            <span>{enrolledMembers.length} enrolled</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              requestOpenAnalytics({
-                                lens: isDepartmentLikeCategory(group.category) ? 'departments' : 'ministries',
-                                searchQuery: group.name,
-                                categoryFilter: group.category,
-                              })
-                            }
-                            className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] dark:hover:text-[#8C7DFF] flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                            title="Inspect in Congregation & Ministry Analytics"
-                          >
-                            <BarChart3 className="w-3 h-3" />
-                            <span>Analytics</span>
-                          </button>
+                            {`${liveMetrics.atRiskCount} / ${liveMetrics.openFollowupCount}`}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Schedule & Venue Information */}
+                      <div className="space-y-1.5 text-xs text-[#666A86] dark:text-[#A9ACC8] mb-4">
+                        {(group.meetingDay || group.meetingTime) && (
+                          <div className="flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
+                            <span className="truncate">
+                              {group.meetingDay} {group.meetingTime ? `· ${group.meetingTime}` : ''}
+                            </span>
+                          </div>
+                        )}
+                        {group.meetingLocation && (
+                          <div className="flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                            <span className="truncate">{group.meetingLocation}</span>
+                          </div>
+                        )}
+                        {group.targetDemographic && (
+                          <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] italic">
+                            Focus: {group.targetDemographic}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                      {/* Card Footer with Members Count & Actions */}
+                    <div className="pt-3 border-t border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => setViewingMembersGroup(group)}
+                          className="text-xs font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <Users className="w-3.5 h-3.5" />
+                          <span>{enrolledMembers.length} enrolled</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            requestOpenAnalytics({
+                              lens: isDepartmentLikeCategory(group.category)
+                                ? 'departments'
+                                : isMonthBornCategory(group.category)
+                                ? 'demographics'
+                                : 'ministries',
+                              searchQuery: group.name,
+                              categoryFilter: group.category,
+                            })
+                          }
+                          className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] dark:hover:text-[#8C7DFF] flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                          title="Inspect in Congregation & Ministry Analytics"
+                        >
+                          <BarChart3 className="w-3 h-3" />
+                          <span>Analytics</span>
+                        </button>
+                        {!isVirtualAutoGroup && (
                           <button
                             type="button"
                             onClick={() => {
@@ -2114,17 +2233,23 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                             <History className="w-3 h-3" />
                             <span>History</span>
                           </button>
-                        </div>
+                        )}
+                      </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => openEditGroupModal(group)}
-                            className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
-                            title="Edit Group"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            isVirtualAutoGroup
+                              ? openAddGroupModal(group.category, group.name)
+                              : openEditGroupModal(group)
+                          }
+                          className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] transition-colors cursor-pointer"
+                          title={isVirtualAutoGroup ? 'Assign Leader & Schedule' : 'Edit Group'}
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        {!isVirtualAutoGroup && (
                           <button
                             type="button"
                             onClick={() => {
@@ -2145,26 +2270,16 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        </div>
+                        )}
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Empty Search State */}
-            {churchGroups.filter((group) => {
-              if (groupFilterCategory !== 'all' && group.category !== groupFilterCategory) return false;
-              if (groupFilterStatus === 'active' && !group.active) return false;
-              if (groupFilterStatus === 'inactive' && group.active) return false;
-              if (!groupSearchQuery.trim()) return true;
-              const q = groupSearchQuery.toLowerCase();
-              return (
-                group.name.toLowerCase().includes(q) ||
-                group.leaderName.toLowerCase().includes(q) ||
-                (group.meetingLocation && group.meetingLocation.toLowerCase().includes(q))
-              );
-            }).length === 0 && (
+            {filteredEffectiveGroups.length === 0 && (
               <div className="bg-white dark:bg-[#1D1D3D] rounded-2xl p-10 text-center border border-[#E9EBF5] dark:border-[#2D2D55]">
                 <Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
                 <h4 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">No matching groups found</h4>
@@ -2173,7 +2288,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                 </p>
                 <button
                   type="button"
-                  onClick={() => openAddGroupModal('cell_group')}
+                  onClick={() =>
+                    openAddGroupModal(
+                      groupFilterCategory !== 'all' ? groupFilterCategory : 'cell_group'
+                    )
+                  }
                   className="mt-4 bg-[#6D5CF2] text-white rounded-xl px-4 py-2 text-xs font-bold inline-flex items-center gap-1.5 shadow-sm"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -4291,7 +4410,9 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     No members currently assigned to {viewingMembersGroup.name}
                   </p>
                   <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 max-w-xs mx-auto">
-                    You can assign members to this group when registering new members or editing existing members in the Roster.
+                    {isMonthBornCategory(viewingMembersGroup.category)
+                      ? `Members whose Date of Birth or Month of Birth matches ${viewingMembersGroup.birthMonthName || viewingMembersGroup.name} are automatically assigned here.`
+                      : 'You can assign members to this group when registering new members or editing existing members in the Roster.'}
                   </p>
                 </div>
               )}
@@ -4504,7 +4625,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                 {allGroupCategories.map((cat) => {
                   const styles = getGroupCategoryStyles(cat.color);
-                  const count = churchGroups.filter((g) => g.category === cat.id).length;
+                  const dbGroupCount = churchGroups.filter((g) => g.category === cat.id).length;
+                  const count = effectiveChurchGroups.filter((g) => g.category === cat.id).length;
                   const isCustomConfigured = customGroupCategories.some((c) => c.id === cat.id);
 
                   return (
@@ -4518,7 +4640,9 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                             {cat.label}
                           </span>
                           <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
-                            {count} {count === 1 ? 'group' : 'groups'}
+                            {isMonthBornCategory(cat.id)
+                              ? `12 auto groups (${dbGroupCount} custom)`
+                              : `${count} ${count === 1 ? 'group' : 'groups'}`}
                           </span>
                         </div>
                         <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
@@ -4545,11 +4669,11 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                               <button
                                 type="button"
                                 onClick={() => handleDeleteCustomCategory(cat.id)}
-                                disabled={isSavingCategory || count > 0}
+                                disabled={isSavingCategory || dbGroupCount > 0}
                                 className="p-1.5 rounded-lg text-[#666A86] dark:text-[#A9ACC8] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                 title={
-                                  count > 0
-                                    ? `Cannot delete while ${count} group(s) use this category`
+                                  dbGroupCount > 0
+                                    ? `Cannot delete while ${dbGroupCount} group(s) use this category`
                                     : 'Delete custom category'
                                 }
                               >

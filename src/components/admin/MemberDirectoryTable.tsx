@@ -39,10 +39,16 @@ import {
   isPastoralOfficerOrLeader,
 } from '../../constants/portfolios';
 import {
+  memberMatchesChurchGroup,
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
   normalizeSettingLabel,
 } from '../../utils/settingsConnections';
+import {
+  getAutomaticMinistryKind,
+  resolveAutomaticDemographicMinistries,
+} from '../../utils/demographicMinistries';
+import { resolveMemberDepartments } from '../../utils/memberDepartments';
 import {
   getExternalImageOpenUrl,
   getImageFallbackUrls,
@@ -253,7 +259,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   const departments = useMemo(
     () =>
       mergeSelectableDepartments(churchGroups, members).filter(
-        (d) => d.toLowerCase() !== 'general congregation' || members.some((m) => !m.department || m.department.toLowerCase() === 'general congregation')
+        (d) =>
+          d.toLowerCase() !== 'general congregation' ||
+          members.some((m) => resolveMemberDepartments(m).length === 0)
       ),
     [churchGroups, members]
   );
@@ -293,11 +301,16 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         const needle = normalizeSettingLabel(selectedGroupFilter).toLowerCase();
         const homeCell = normalizeSettingLabel(m.homeCellGroup).toLowerCase();
         const grp = normalizeSettingLabel(m.groupName).toLowerCase();
-        const dept = normalizeSettingLabel(m.department).toLowerCase();
+        const memberDepts = resolveMemberDepartments(m);
+        const autoDepts = resolveAutomaticDemographicMinistries(m).names;
+        const matchesDept =
+          memberMatchesChurchGroup(m, selectedGroupFilter) ||
+          memberDepts.some((d) => d.toLowerCase().includes(needle)) ||
+          autoDepts.some((d) => d.toLowerCase().includes(needle));
         if (
           !homeCell.includes(needle) &&
           !grp.includes(needle) &&
-          !dept.includes(needle)
+          !matchesDept
         ) {
           return false;
         }
@@ -305,13 +318,18 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
 
       // Department filter
       if (selectedDepartmentFilter !== 'all') {
-        const dept = normalizeSettingLabel(m.department).toLowerCase();
+        const memberDepts = resolveMemberDepartments(m);
+        const autoDepts = resolveAutomaticDemographicMinistries(m).names;
         const needle = normalizeSettingLabel(selectedDepartmentFilter).toLowerCase();
         if (needle === 'general congregation') {
-          if (dept && dept !== 'general congregation' && dept !== 'general') {
+          if (memberDepts.length > 0) {
             return false;
           }
-        } else if (!dept.includes(needle)) {
+        } else if (
+          !memberMatchesChurchGroup(m, selectedDepartmentFilter) &&
+          !memberDepts.some((d) => d.toLowerCase().includes(needle)) &&
+          !autoDepts.some((d) => d.toLowerCase().includes(needle))
+        ) {
           return false;
         }
       }
@@ -336,6 +354,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         monthOfBirth: m.monthOfBirth,
         birthMonthGroup: m.birthMonthGroup,
       });
+      const autoDepts = resolveAutomaticDemographicMinistries(m).names;
 
       return (
         (m.firstName && m.firstName.toLowerCase().includes(q)) ||
@@ -348,6 +367,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         (m.placeOfResidence && m.placeOfResidence.toLowerCase().includes(q)) ||
         (m.hometown && m.hometown.toLowerCase().includes(q)) ||
         (m.department && m.department.toLowerCase().includes(q)) ||
+        resolveMemberDepartments(m).some((d) => d.toLowerCase().includes(q)) ||
+        autoDepts.some((d) => d.toLowerCase().includes(q)) ||
         (m.homeCellGroup && m.homeCellGroup.toLowerCase().includes(q)) ||
         (m.squads && m.squads.toLowerCase().includes(q)) ||
         (resolvedBirth.monthOfBirth && resolvedBirth.monthOfBirth.toLowerCase().includes(q)) ||
@@ -972,9 +993,51 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* 8. DEPARTMENT */}
                       {visibleColumns['DEPARTMENT'] && (
                         <td className="py-3 px-3.5">
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-white/10 text-[#1D1B3A] dark:text-[#F2F2FA]">
-                            {member.department || 'General'}
-                          </span>
+                          {(() => {
+                            const depts = resolveMemberDepartments(member);
+                            const explicitKinds = new Set(
+                              depts
+                                .map((d) => getAutomaticMinistryKind(d))
+                                .filter((k): k is NonNullable<typeof k> => Boolean(k))
+                            );
+                            const autoMinistries = resolveAutomaticDemographicMinistries(
+                              member
+                            ).ministries.filter((am) => !explicitKinds.has(am.kind));
+
+                            return (
+                              <div className="flex flex-wrap gap-1 max-w-[240px]">
+                                {depts.length > 0 ? (
+                                  depts.map((deptName) => (
+                                    <span
+                                      key={deptName}
+                                      className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-white/10 text-[#1D1B3A] dark:text-[#F2F2FA]"
+                                    >
+                                      {deptName}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 dark:bg-white/10 text-[#666A86] dark:text-[#A9ACC8]">
+                                    General
+                                  </span>
+                                )}
+                                {autoMinistries.map((am) => (
+                                  <span
+                                    key={am.kind}
+                                    title={am.reason}
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                      am.kind === 'youth'
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                                        : am.kind === 'women'
+                                        ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60'
+                                        : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800/60'
+                                    }`}
+                                  >
+                                    {am.name} · Auto
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </td>
                       )}
 

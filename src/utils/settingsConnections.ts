@@ -12,6 +12,22 @@ import {
   isSeniorPastoralPortfolio,
 } from '../constants/portfolios';
 import { isDepartmentLikeCategory } from '../shared/groupCategories';
+import {
+  isBirthMonthGroupName,
+  normalizeMonthName,
+  resolveMemberBirthFields,
+} from './birthMonth';
+import {
+  isGeneralCongregationLabel,
+  parseMemberDepartments,
+  resolveMemberDepartments,
+} from './memberDepartments';
+import {
+  ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES,
+  AutomaticDemographicMinistryKind,
+  getAutomaticMinistryKind,
+  resolveAutomaticDemographicMinistries,
+} from './demographicMinistries';
 
 export type SettingsTabId =
   | 'general'
@@ -232,7 +248,35 @@ export function memberMatchesChurchGroup(member: Person, groupName?: string | nu
   const target = normalizeSettingLabel(groupName).toLowerCase();
   if (!target) return false;
 
-  const candidates = [member.groupName, member.homeCellGroup, member.department]
+  const targetAutoKind = getAutomaticMinistryKind(groupName);
+  if (targetAutoKind) {
+    const memberAuto = resolveAutomaticDemographicMinistries(member);
+    if (memberAuto.kinds.includes(targetAutoKind)) {
+      return true;
+    }
+  }
+
+  const resolvedBirth = resolveMemberBirthFields({
+    dateOfBirth: member.dateOfBirth,
+    monthOfBirth: member.monthOfBirth,
+    birthMonthGroup: member.birthMonthGroup,
+  });
+
+  if (isBirthMonthGroupName(groupName) && resolvedBirth.monthOfBirth) {
+    const targetMonth = normalizeMonthName(groupName);
+    if (targetMonth && targetMonth === resolvedBirth.monthOfBirth) {
+      return true;
+    }
+  }
+
+  const memberDepts = resolveMemberDepartments(member);
+  const candidates = [
+    member.groupName,
+    member.homeCellGroup,
+    member.department,
+    ...memberDepts,
+    resolvedBirth.birthMonthGroup,
+  ]
     .map((val) => normalizeSettingLabel(val).toLowerCase())
     .filter(Boolean);
 
@@ -251,9 +295,15 @@ export function findMatchingChurchGroup(
   criteria: {
     groupName?: string | null;
     homeCellGroup?: string | null;
-    department?: string | null;
+    department?: string | string[] | null;
+    gender?: string | null;
+    dateOfBirth?: string | null;
   }
-): { cellOrFellowshipGroup: ChurchGroup | null; ministryGroup: ChurchGroup | null } {
+): {
+  cellOrFellowshipGroup: ChurchGroup | null;
+  ministryGroup: ChurchGroup | null;
+  ministryGroups: ChurchGroup[];
+} {
   const ordered = [
     ...churchGroups.filter((g) => g.active !== false),
     ...churchGroups.filter((g) => g.active === false),
@@ -276,6 +326,21 @@ export function findMatchingChurchGroup(
     );
     if (exactAny) return exactAny;
 
+    const targetAutoKind = getAutomaticMinistryKind(raw);
+    if (targetAutoKind) {
+      const autoPreferred = ordered.find(
+        (g) =>
+          (!preferredCategories || preferredCategories.includes(g.category)) &&
+          getAutomaticMinistryKind(g.name) === targetAutoKind
+      );
+      if (autoPreferred) return autoPreferred;
+
+      const autoAny = ordered.find(
+        (g) => getAutomaticMinistryKind(g.name) === targetAutoKind
+      );
+      if (autoAny) return autoAny;
+    }
+
     return (
       ordered.find((g) => {
         if (preferredCategories && !preferredCategories.includes(g.category)) return false;
@@ -290,12 +355,35 @@ export function findMatchingChurchGroup(
     findByName(criteria.groupName, ['cell_group', 'fellowship']) ||
     findByName(criteria.homeCellGroup || criteria.groupName);
 
-  const ministryGroup =
-    findByName(criteria.department, ['ministry', 'department']) ||
-    findByName(criteria.department) ||
-    findByName(criteria.groupName, ['ministry', 'department']);
+  const explicitDeptList = parseMemberDepartments(criteria.department);
+  const autoDeptNames =
+    criteria.gender || criteria.dateOfBirth
+      ? resolveAutomaticDemographicMinistries({
+          gender: criteria.gender,
+          dateOfBirth: criteria.dateOfBirth,
+        }).names
+      : [];
+  const deptList = [...explicitDeptList, ...autoDeptNames];
 
-  return { cellOrFellowshipGroup, ministryGroup };
+  const matchedMinistryMap = new Map<string, ChurchGroup>();
+  for (const deptName of deptList) {
+    const found =
+      findByName(deptName, ['ministry', 'department']) || findByName(deptName);
+    if (found && !matchedMinistryMap.has(found.id)) {
+      matchedMinistryMap.set(found.id, found);
+    }
+  }
+  if (matchedMinistryMap.size === 0 && criteria.groupName) {
+    const fallbackGroup = findByName(criteria.groupName, ['ministry', 'department']);
+    if (fallbackGroup) {
+      matchedMinistryMap.set(fallbackGroup.id, fallbackGroup);
+    }
+  }
+
+  const ministryGroups = Array.from(matchedMinistryMap.values());
+  const ministryGroup = ministryGroups[0] || null;
+
+  return { cellOrFellowshipGroup, ministryGroup, ministryGroups };
 }
 
 export function mergeSelectableDepartments(
@@ -304,11 +392,14 @@ export function mergeSelectableDepartments(
   fallbackDefaults: readonly string[] = []
 ): string[] {
   const seen = new Map<string, string>();
+  const seenAutoKinds = new Set<AutomaticDemographicMinistryKind>();
   const addUnique = (raw?: string | null) => {
     const clean = normalizeSettingLabel(raw);
     if (!clean) return;
     const key = clean.toLowerCase();
     if (!seen.has(key)) seen.set(key, clean);
+    const kind = getAutomaticMinistryKind(clean);
+    if (kind) seenAutoKinds.add(kind);
   };
 
   addUnique('General Congregation');
@@ -317,11 +408,19 @@ export function mergeSelectableDepartments(
     .filter((g) => g.active !== false && isDepartmentLikeCategory(g.category))
     .forEach((g) => addUnique(g.name));
 
-  members.forEach((m) => addUnique(m.department));
+  members.forEach((m) => {
+    resolveMemberDepartments(m).forEach((dept) => addUnique(dept));
+  });
 
   if (fallbackDefaults.length > 0) {
     fallbackDefaults.forEach((d) => addUnique(d));
   }
+
+  ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES.forEach((autoDef) => {
+    if (!seenAutoKinds.has(autoDef.kind)) {
+      addUnique(autoDef.name);
+    }
+  });
 
   return Array.from(seen.values());
 }
@@ -381,28 +480,24 @@ export interface AutoAssignAbsenteesPlanItem {
 function getMemberGroupMatchScore(candidate: Person, targetMember?: Person): number {
   if (!targetMember) return 0;
   const targetCell = normalizeSettingLabel(targetMember.homeCellGroup || targetMember.groupName).toLowerCase();
-  const targetDept = normalizeSettingLabel(targetMember.department).toLowerCase();
   const candCell = normalizeSettingLabel(candidate.homeCellGroup || candidate.groupName).toLowerCase();
-  const candDept = normalizeSettingLabel(candidate.department).toLowerCase();
 
   let score = 0;
   if (
     targetCell &&
-    targetCell !== 'general' &&
-    targetCell !== 'general congregation' &&
+    !isGeneralCongregationLabel(targetCell) &&
     candCell &&
     candCell === targetCell
   ) {
     score += 40;
   }
-  if (
-    targetDept &&
-    targetDept !== 'general' &&
-    targetDept !== 'general congregation' &&
-    candDept &&
-    candDept === targetDept
-  ) {
-    score += 30;
+
+  const targetDepts = new Set(resolveMemberDepartments(targetMember).map((d) => d.toLowerCase()));
+  if (targetDepts.size > 0) {
+    const candDepts = resolveMemberDepartments(candidate).map((d) => d.toLowerCase());
+    if (candDepts.some((d) => targetDepts.has(d))) {
+      score += 30;
+    }
   }
   return score;
 }
@@ -452,19 +547,28 @@ export function resolveFollowupAssignee(
   existingOpenTasks: FollowupTask[] = [],
   loadOverride?: Map<string, number>
 ): ResolvedFollowupAssignee {
+  const memberDepts = member ? resolveMemberDepartments(member) : [];
   const memberGroupLabel =
     normalizeSettingLabel(member?.homeCellGroup) ||
     normalizeSettingLabel(member?.groupName) ||
+    memberDepts[0] ||
     normalizeSettingLabel(member?.department) ||
     'General';
 
-  const { cellOrFellowshipGroup, ministryGroup } = findMatchingChurchGroup(churchGroups, {
+  const { cellOrFellowshipGroup, ministryGroups } = findMatchingChurchGroup(churchGroups, {
     groupName: member?.groupName,
     homeCellGroup: member?.homeCellGroup,
-    department: member?.department,
+    department: memberDepts.length > 0 ? memberDepts : member?.department,
   });
+  const selfFullNameLower = member ? getMemberFullName(member).toLowerCase() : '';
+  const leadMinistryGroup =
+    ministryGroups.find(
+      (g) =>
+        normalizeSettingLabel(g.leaderName) &&
+        (!member || normalizeSettingLabel(g.leaderName).toLowerCase() !== selfFullNameLower)
+    ) || ministryGroups[0] || null;
 
-  const resolvedGroupName = cellOrFellowshipGroup?.name || ministryGroup?.name || memberGroupLabel;
+  const resolvedGroupName = cellOrFellowshipGroup?.name || leadMinistryGroup?.name || memberGroupLabel;
 
   const loadByName = loadOverride || new Map<string, number>();
   if (!loadOverride && existingOpenTasks.length > 0) {
@@ -493,7 +597,7 @@ export function resolveFollowupAssignee(
   };
 
   const cellLeaderName = cellOrFellowshipGroup?.leaderName?.trim() || '';
-  const ministryLeaderName = ministryGroup?.leaderName?.trim() || '';
+  const ministryLeaderName = leadMinistryGroup?.leaderName?.trim() || '';
 
   const pastoralOfficers = allMembers.filter((m) => isPastoralOfficerOrLeader(m));
   const bestOfficer = pickBestOfficerOrLeader(pastoralOfficers, member, reason, loadByName);
@@ -501,15 +605,15 @@ export function resolveFollowupAssignee(
   // If the absentee member happens to be the group's own leader, don't self-assign!
   const matchedGroupLeaderName =
     cellLeaderName &&
-    (!member || cellLeaderName.toLowerCase() !== getMemberFullName(member).toLowerCase())
+    (!member || cellLeaderName.toLowerCase() !== selfFullNameLower)
       ? cellLeaderName
       : ministryLeaderName &&
-        (!member || ministryLeaderName.toLowerCase() !== getMemberFullName(member).toLowerCase())
+        (!member || ministryLeaderName.toLowerCase() !== selfFullNameLower)
       ? ministryLeaderName
       : '';
 
   const matchedGroupRef =
-    matchedGroupLeaderName === cellLeaderName ? cellOrFellowshipGroup : ministryGroup;
+    matchedGroupLeaderName === cellLeaderName ? cellOrFellowshipGroup : leadMinistryGroup;
   const matchedLeaderMember = matchedGroupLeaderName
     ? findMemberByLeader(matchedGroupRef?.leaderMemberId, matchedGroupLeaderName)
     : undefined;

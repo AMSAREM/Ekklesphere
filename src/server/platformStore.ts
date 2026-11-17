@@ -27,6 +27,7 @@ import {
   sanitizeCustomGroupCategories,
 } from '../shared/groupCategories.ts';
 import { resolveMemberBirthFields } from '../utils/birthMonth.ts';
+import { normalizeMemberDepartmentFields } from '../utils/memberDepartments.ts';
 import type {
   BillingCycle,
   ChurchGroup,
@@ -5903,6 +5904,7 @@ class PlatformStore {
       'memberId',
       'squads',
       'department',
+      'departments',
       'officerName',
       'designation',
       'placeOfResidence',
@@ -5986,6 +5988,14 @@ class PlatformStore {
       birthMonthGroup: custom.birthMonthGroup,
     });
 
+    const deptFields = normalizeMemberDepartmentFields({
+      department:
+        typeof custom.department === 'string' && custom.department.trim()
+          ? custom.department
+          : row.department,
+      departments: Array.isArray(custom.departments) ? custom.departments : undefined,
+    });
+
     return {
       ...custom,
       ...row,
@@ -5999,7 +6009,8 @@ class PlatformStore {
       phoneE164,
       phoneNumber: row.phone_number ?? custom.phoneNumber ?? phoneE164,
       memberId: row.member_id ?? custom.memberId,
-      department: row.department ?? custom.department ?? 'General Congregation',
+      department: deptFields.department,
+      departments: deptFields.departments,
       squads: row.squads ?? custom.squads,
       officerName: row.member_officer_name ?? custom.officerName ?? custom.designation,
       designation: row.designation ?? custom.designation ?? row.member_officer_name ?? custom.officerName,
@@ -6067,8 +6078,14 @@ class PlatformStore {
         monthOfBirth: m.monthOfBirth,
         birthMonthGroup: m.birthMonthGroup,
       });
+      const deptFields = normalizeMemberDepartmentFields({
+        department: m.department,
+        departments: Array.isArray(m.departments) ? m.departments : undefined,
+      });
       return {
         ...m,
+        department: deptFields.department,
+        departments: deptFields.departments,
         monthOfBirth: birthFields.monthOfBirth ?? m.monthOfBirth,
         birthMonthGroup: birthFields.birthMonthGroup ?? m.birthMonthGroup,
       };
@@ -6135,8 +6152,14 @@ class PlatformStore {
       monthOfBirth: payload.monthOfBirth,
       birthMonthGroup: payload.birthMonthGroup,
     });
+    const deptFields = normalizeMemberDepartmentFields({
+      department: payload.department,
+      departments: Array.isArray(payload.departments) ? payload.departments : undefined,
+    });
     const normalizedCreatePayload = {
       ...payload,
+      department: deptFields.department,
+      departments: deptFields.departments,
       dateOfBirth: dobVal || undefined,
       monthOfBirth: birthFields.monthOfBirth,
       birthMonthGroup: birthFields.birthMonthGroup,
@@ -6177,7 +6200,7 @@ class PlatformStore {
         ...baseInsert,
         phone_number: phone,
         home_cell_group: payload.homeCellGroup || payload.groupName || 'General Congregation',
-        department: payload.department || 'General Congregation',
+        department: deptFields.department,
         member_id: payload.memberId || null,
         middle_name: payload.middleName || null,
         specific_location: payload.specificLocation || null,
@@ -6570,8 +6593,29 @@ class PlatformStore {
         monthOfBirth: nextMonthInput,
         birthMonthGroup: updates.birthMonthGroup ?? (existingCustom.birthMonthGroup as string | undefined),
       });
+      const hasDeptUpdate = updates.department !== undefined || updates.departments !== undefined;
+      const syncedDepts = hasDeptUpdate
+        ? normalizeMemberDepartmentFields({
+            department:
+              updates.department !== undefined
+                ? updates.department
+                : existingRow?.department ?? (existingCustom.department as string | undefined),
+            departments:
+              updates.departments !== undefined
+                ? Array.isArray(updates.departments)
+                  ? updates.departments
+                  : undefined
+                : undefined,
+          })
+        : null;
       const syncedUpdates = {
         ...updates,
+        ...(syncedDepts
+          ? {
+              department: syncedDepts.department,
+              departments: syncedDepts.departments,
+            }
+          : {}),
         monthOfBirth: syncedBirth.monthOfBirth ?? (updates.dateOfBirth === '' ? '' : updates.monthOfBirth),
         birthMonthGroup: syncedBirth.birthMonthGroup ?? (updates.dateOfBirth === '' && !syncedBirth.monthOfBirth ? '' : updates.birthMonthGroup),
       };
@@ -6580,6 +6624,9 @@ class PlatformStore {
         updated_at: new Date().toISOString(),
         custom_attributes: this.extractMemberCustomAttributes(syncedUpdates, existingCustom),
       };
+      if (syncedDepts) {
+        patch.department = syncedDepts.department;
+      }
       const firstName = updates.firstName ?? existingRow?.first_name;
       const lastName = updates.lastName ?? existingRow?.last_name;
       if (updates.firstName !== undefined) patch.first_name = updates.firstName;
@@ -6662,7 +6709,7 @@ class PlatformStore {
             error.message || ''
           )
         ) {
-          const { photo_url: _dropPhoto, ...minimalPatch } = fallbackPatch;
+          const { photo_url: _dropPhoto, department: _dropDept, ...minimalPatch } = fallbackPatch;
           const retryMinimal = await this.supabase
             .from('members')
             .update(minimalPatch)
@@ -6717,9 +6764,28 @@ class PlatformStore {
         birthMonthGroup: updates.birthMonthGroup ?? list[idx].birthMonthGroup,
       });
 
+      const hasDeptUpdate = updates.department !== undefined || updates.departments !== undefined;
+      const syncedDepts = hasDeptUpdate
+        ? normalizeMemberDepartmentFields({
+            department:
+              updates.department !== undefined ? updates.department : list[idx].department,
+            departments:
+              updates.departments !== undefined
+                ? Array.isArray(updates.departments)
+                  ? updates.departments
+                  : undefined
+                : undefined,
+          })
+        : normalizeMemberDepartmentFields({
+            department: list[idx].department,
+            departments: Array.isArray(list[idx].departments) ? list[idx].departments : undefined,
+          });
+
       const merged = {
         ...list[idx],
         ...updates,
+        department: syncedDepts.department,
+        departments: syncedDepts.departments,
         monthOfBirth: syncedBirth.monthOfBirth,
         birthMonthGroup: syncedBirth.birthMonthGroup,
         email: nextEmail,
@@ -6906,6 +6972,14 @@ class PlatformStore {
       safeUpdates.monthOfBirth = syncedBirth.monthOfBirth;
       safeUpdates.birthMonthGroup = syncedBirth.birthMonthGroup;
     }
+    if (updates.departments !== undefined || updates.department !== undefined) {
+      const normalizedDepts = normalizeMemberDepartmentFields({
+        department: typeof updates.department === 'string' ? updates.department : undefined,
+        departments: Array.isArray(updates.departments) ? updates.departments : undefined,
+      });
+      safeUpdates.departments = normalizedDepts.departments;
+      safeUpdates.department = normalizedDepts.department;
+    }
     if (safeUpdates.homeCellGroup && !safeUpdates.groupName) {
       safeUpdates.groupName = safeUpdates.homeCellGroup;
     } else if (safeUpdates.groupName && !safeUpdates.homeCellGroup) {
@@ -6922,6 +6996,10 @@ class PlatformStore {
       const parts = cleanName.split(/\s+/).filter(Boolean);
       const fallbackFirst = parts[0] || 'Church';
       const fallbackLast = parts.slice(1).join(' ') || 'Member';
+      const fallbackDepts = normalizeMemberDepartmentFields({
+        department: safeUpdates.department,
+        departments: Array.isArray(safeUpdates.departments) ? safeUpdates.departments : undefined,
+      });
       resultMember = await this.createMember(
         orgId,
         {
@@ -6938,7 +7016,8 @@ class PlatformStore {
           autoCheckinOptedIn: safeUpdates.autoCheckinOptedIn ?? true,
           groupName: safeUpdates.groupName || safeUpdates.homeCellGroup || 'General Congregation',
           homeCellGroup: safeUpdates.homeCellGroup || safeUpdates.groupName || 'General Congregation',
-          department: safeUpdates.department || 'General Congregation',
+          department: fallbackDepts.department,
+          departments: fallbackDepts.departments,
           status: 'member',
         },
         { skipAutoCredentials: true }

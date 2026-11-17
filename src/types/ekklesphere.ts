@@ -97,7 +97,8 @@ export interface Person {
   remarks?: string; // REMARKS
   memberId?: string; // ID (membership ID or card number)
   squads?: string; // SQUADS
-  department?: string; // DEPARTMENT (e.g. Ushering, Choir, Media)
+  department?: string; // DEPARTMENT (legacy/comma-joined display string, e.g. Ushering, Choir)
+  departments?: string[]; // Selected Departments & Ministries (multi-select support)
   officerName?: string; // MEMBERS/OFFICERS NAME (Designation/Role/Portfolio)
   designation?: string; // Alias synced with officerName / staff designation
   gender?: 'male' | 'female' | 'other' | string; // GENDER

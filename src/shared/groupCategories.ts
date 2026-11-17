@@ -6,6 +6,16 @@ import {
   ChurchGroupLeadershipHistoryEntry,
   GroupCategoryColor,
 } from '../types/ekklesphere';
+import {
+  ALL_BIRTH_MONTH_GROUPS,
+  isBirthMonthGroupName,
+  normalizeMonthName,
+} from '../utils/birthMonth';
+import {
+  ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES,
+  AutomaticDemographicMinistryKind,
+  getAutomaticMinistryKind,
+} from '../utils/demographicMinistries';
 
 export const BUILT_IN_GROUP_CATEGORIES: readonly ChurchGroupCategoryDefinition[] = [
   {
@@ -257,6 +267,185 @@ export function isDepartmentLikeCategory(category?: string | null): boolean {
     clean.includes('dept') ||
     clean.includes('ministry')
   );
+}
+
+export function isMonthBornCategory(category?: string | null): boolean {
+  const clean = normalizeGroupCategorySlug(category);
+  return (
+    clean === 'month_born' ||
+    clean === 'monthborn' ||
+    clean === 'birth_month' ||
+    clean === 'birth_months' ||
+    clean === 'birthday_group' ||
+    clean === 'birthday_groups' ||
+    clean === 'month_born_group' ||
+    clean === 'month_born_groups' ||
+    (clean.includes('month') && (clean.includes('born') || clean.includes('birth')))
+  );
+}
+
+export type ResolvedChurchGroupItem = ChurchGroup & {
+  isAutoBirthMonthVirtual?: boolean;
+  birthMonthIndex?: number;
+  birthMonthName?: string;
+  isAutoDemographicVirtual?: boolean;
+  autoDemographicKind?: AutomaticDemographicMinistryKind;
+};
+
+export function mergeTwelveMonthBornGroups(
+  churchGroups: ChurchGroup[],
+  categoryId: ChurchGroupCategory = 'month_born'
+): ResolvedChurchGroupItem[] {
+  const normalizedTargetCategory = normalizeGroupCategorySlug(categoryId) || 'month_born';
+  const usedIds = new Set<string>();
+
+  return ALL_BIRTH_MONTH_GROUPS.map((bg) => {
+    const exactMatch = churchGroups.find((g) => {
+      if (usedIds.has(g.id)) return false;
+      const gCat = normalizeGroupCategorySlug(g.category);
+      const sameMonth =
+        g.name.trim().toLowerCase() === bg.groupName.toLowerCase() ||
+        ((isMonthBornCategory(gCat) || isBirthMonthGroupName(g.name)) &&
+          normalizeMonthName(g.name) === bg.monthName);
+      return sameMonth && (gCat === normalizedTargetCategory || isMonthBornCategory(gCat));
+    });
+
+    const fallbackExactName =
+      exactMatch ||
+      churchGroups.find(
+        (g) => !usedIds.has(g.id) && g.name.trim().toLowerCase() === bg.groupName.toLowerCase()
+      );
+
+    if (fallbackExactName) {
+      usedIds.add(fallbackExactName.id);
+      return {
+        ...fallbackExactName,
+        category: isMonthBornCategory(fallbackExactName.category)
+          ? fallbackExactName.category
+          : categoryId,
+        isAutoBirthMonthVirtual: false,
+        birthMonthIndex: bg.monthIndex,
+        birthMonthName: bg.monthName,
+      };
+    }
+
+    return {
+      id: `auto-birth-month-${bg.monthName.toLowerCase()}`,
+      name: bg.groupName,
+      category: categoryId,
+      leaderName: 'Unassigned',
+      meetingDay: 'Monthly Fellowship',
+      meetingTime: '',
+      targetDemographic: `${bg.monthName} Celebrants (Auto-assigned by birthdate)`,
+      description: `Automatic month-born group assigned from Date of Birth for members born in ${bg.monthName}.`,
+      active: true,
+      createdAt: '',
+      isAutoBirthMonthVirtual: true,
+      birthMonthIndex: bg.monthIndex,
+      birthMonthName: bg.monthName,
+    };
+  });
+}
+
+export function expandGroupsWithMonthBorn(
+  churchGroups: ChurchGroup[],
+  allCategories: ChurchGroupCategoryDefinition[]
+): ResolvedChurchGroupItem[] {
+  const monthBornCats = allCategories.filter((c) => isMonthBornCategory(c.id));
+  if (monthBornCats.length === 0) {
+    return churchGroups.map((g) => ({ ...g }));
+  }
+
+  const primaryMonthBornCat = monthBornCats[0];
+  const monthBornResolved = mergeTwelveMonthBornGroups(churchGroups, primaryMonthBornCat.id);
+  const claimedIds = new Set(
+    monthBornResolved.filter((g) => !g.isAutoBirthMonthVirtual).map((g) => g.id)
+  );
+
+  const otherGroups: ResolvedChurchGroupItem[] = churchGroups
+    .filter((g) => !claimedIds.has(g.id))
+    .map((g) => ({ ...g }));
+
+  return [...otherGroups, ...monthBornResolved];
+}
+
+export function mergeDemographicMinistries(
+  churchGroups: ChurchGroup[]
+): ResolvedChurchGroupItem[] {
+  const usedIds = new Set<string>();
+
+  return ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES.map((def) => {
+    const preferredMatch = churchGroups.find(
+      (g) =>
+        !usedIds.has(g.id) &&
+        isDepartmentLikeCategory(g.category) &&
+        getAutomaticMinistryKind(g.name) === def.kind
+    );
+    const anyCategoryMatch =
+      preferredMatch ||
+      churchGroups.find(
+        (g) => !usedIds.has(g.id) && getAutomaticMinistryKind(g.name) === def.kind
+      );
+
+    if (anyCategoryMatch) {
+      usedIds.add(anyCategoryMatch.id);
+      return {
+        ...anyCategoryMatch,
+        isAutoDemographicVirtual: false,
+        autoDemographicKind: def.kind,
+      };
+    }
+
+    return {
+      id: `auto-demographic-${def.kind}`,
+      name: def.name,
+      category: 'ministry',
+      leaderName: 'Unassigned',
+      meetingDay: 'Scheduled Fellowship',
+      meetingTime: '',
+      targetDemographic: def.targetDemographic,
+      description: def.description,
+      active: true,
+      createdAt: '',
+      isAutoDemographicVirtual: true,
+      autoDemographicKind: def.kind,
+    };
+  });
+}
+
+export function expandAllAutomaticChurchGroups(
+  churchGroups: ChurchGroup[],
+  allCategories: ChurchGroupCategoryDefinition[]
+): ResolvedChurchGroupItem[] {
+  const withMonthBorn = expandGroupsWithMonthBorn(churchGroups, allCategories);
+  const demographicResolved = mergeDemographicMinistries(churchGroups);
+  const claimedDemographicIds = new Set(
+    demographicResolved.filter((g) => !g.isAutoDemographicVirtual).map((g) => g.id)
+  );
+  const demographicById = new Map(
+    demographicResolved.filter((g) => !g.isAutoDemographicVirtual).map((g) => [g.id, g])
+  );
+
+  const mergedBase = withMonthBorn.map((item) => {
+    const claimed = claimedDemographicIds.has(item.id) ? demographicById.get(item.id) : undefined;
+    return claimed ? { ...item, ...claimed } : item;
+  });
+
+  const virtualDemographics = demographicResolved.filter((g) => g.isAutoDemographicVirtual);
+  if (virtualDemographics.length === 0) {
+    return mergedBase;
+  }
+
+  const firstMonthBornIdx = mergedBase.findIndex((g) => isMonthBornCategory(g.category));
+  if (firstMonthBornIdx === -1) {
+    return [...mergedBase, ...virtualDemographics];
+  }
+
+  return [
+    ...mergedBase.slice(0, firstMonthBornIdx),
+    ...virtualDemographics,
+    ...mergedBase.slice(firstMonthBornIdx),
+  ];
 }
 
 export interface GroupCategoryStyleSet {

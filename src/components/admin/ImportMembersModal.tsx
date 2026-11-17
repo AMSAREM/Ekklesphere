@@ -300,6 +300,7 @@ export const ImportMembersModal: React.FC<ImportMembersModalProps> = ({
         memberId: d.memberId || `MEM-${new Date().getFullYear()}-${String(i + 1).padStart(3, '0')}`,
         squads: d.squads || undefined,
         department: d.department || 'General Congregation',
+        departments: Array.isArray(d.departments) ? d.departments : undefined,
         officerName: d.officerName || undefined,
         gender: d.gender || 'other',
         dateOfBirth: d.dateOfBirth || undefined,

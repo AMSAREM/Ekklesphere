@@ -163,3 +163,14 @@ export const ALL_BIRTH_MONTH_GROUPS = BIRTH_MONTH_NAMES.map((monthName, monthInd
   monthName,
   groupName: `${monthName} Birthday Group`,
 }));
+
+export function isBirthMonthGroupName(raw?: string | null): boolean {
+  if (!raw || typeof raw !== 'string') return false;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return false;
+  if (BIRTH_MONTH_NAMES.some((m) => m.toLowerCase() === trimmed)) {
+    return true;
+  }
+  const hasBirthCue = /\b(birthday\s*group|birthdays?|born|birth\s*month)\b/i.test(trimmed);
+  return hasBirthCue && Boolean(normalizeMonthName(trimmed));
+}

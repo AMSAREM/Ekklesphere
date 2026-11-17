@@ -28,6 +28,7 @@ import { memberMatchesChurchGroup } from '../../utils/settingsConnections';
 import { ServiceQrModal } from '../admin/ServiceQrModal';
 import { parseServiceQrPayload } from '../../utils/serviceQr';
 import { isPlaceholderServiceId } from '../../utils/serviceStatus';
+import { resolveMemberDepartments } from '../../utils/memberDepartments';
 
 export const UsherTool: React.FC = () => {
   const {
@@ -807,11 +808,13 @@ export const UsherTool: React.FC = () => {
                           <span>·</span>
                           <span className="truncate">
                             {m.groupName || m.homeCellGroup || 'General Congregation'}
-                            {m.department &&
-                            m.department !== 'General Congregation' &&
-                            m.department !== (m.groupName || m.homeCellGroup)
-                              ? ` · ${m.department}`
-                              : ''}
+                            {(() => {
+                              const cellLabel = m.groupName || m.homeCellGroup || '';
+                              const extraDepts = resolveMemberDepartments(m).filter(
+                                (d) => d !== cellLabel
+                              );
+                              return extraDepts.length > 0 ? ` · ${extraDepts.join(', ')}` : '';
+                            })()}
                           </span>
                         </div>
                       </div>

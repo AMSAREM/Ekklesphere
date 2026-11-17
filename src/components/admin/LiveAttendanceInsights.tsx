@@ -19,6 +19,16 @@ import { VisitorTrendsAnalysis } from './VisitorTrendsAnalysis';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { ContactCallButton } from '../common/ContactCallButton';
 import { getMemberPortfolio } from '../../constants/portfolios';
+import {
+  GENERAL_CONGREGATION_LABEL,
+  resolveMemberDepartments,
+} from '../../utils/memberDepartments';
+import {
+  ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES,
+  AutomaticDemographicMinistryKind,
+  getAutomaticMinistryKind,
+  resolveAutomaticDemographicMinistries,
+} from '../../utils/demographicMinistries';
 
 interface LiveAttendanceInsightsProps {
   onOpenAddMember?: () => void;
@@ -376,20 +386,54 @@ export const LiveAttendanceInsights: React.FC<LiveAttendanceInsightsProps> = ({
       });
     }
 
-    for (const m of members) {
-      const rawLabels =
-        groupDimension === 'department'
-          ? [normalizeSettingLabel(m.department) || 'General Congregation']
-          : Array.from(
-              new Set(
-                [normalizeSettingLabel(m.homeCellGroup), normalizeSettingLabel(m.groupName)].filter(Boolean)
-              )
-            );
+    const configuredAutoLabelByKind = new Map<AutomaticDemographicMinistryKind, string>();
+    if (groupDimension === 'department') {
+      for (const grp of targetGroups) {
+        const cleanName = normalizeSettingLabel(grp.name);
+        const k = getAutomaticMinistryKind(cleanName);
+        if (cleanName && k && !configuredAutoLabelByKind.has(k)) {
+          configuredAutoLabelByKind.set(k, cleanName);
+        }
+      }
+      for (const def of ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES) {
+        if (!configuredAutoLabelByKind.has(def.kind)) {
+          const cleanName = def.name;
+          configuredAutoLabelByKind.set(def.kind, cleanName);
+          if (!map.has(cleanName.toLowerCase())) {
+            map.set(cleanName.toLowerCase(), {
+              name: cleanName,
+              memberIds: new Set<string>(),
+              presentIds: new Set<string>(),
+              category: 'ministry',
+            });
+          }
+        }
+      }
+    }
 
-      const effectiveLabels =
-        rawLabels.length > 0
-          ? rawLabels
-          : [groupDimension === 'department' ? 'General Congregation' : 'Unassigned Cell'];
+    for (const m of members) {
+      const resolvedDepts = groupDimension === 'department' ? resolveMemberDepartments(m) : [];
+      let effectiveLabels: string[];
+      if (groupDimension === 'department') {
+        const autoEntries = resolveAutomaticDemographicMinistries(m).ministries;
+        const explicitKinds = new Set(
+          resolvedDepts
+            .map((d) => getAutomaticMinistryKind(d))
+            .filter((k): k is AutomaticDemographicMinistryKind => Boolean(k))
+        );
+        const autoLabels = autoEntries
+          .filter((entry) => !explicitKinds.has(entry.kind))
+          .map((entry) => configuredAutoLabelByKind.get(entry.kind) || entry.name);
+        const baseDepts = resolvedDepts.length > 0 ? resolvedDepts : [GENERAL_CONGREGATION_LABEL];
+        effectiveLabels = Array.from(new Set([...baseDepts, ...autoLabels]));
+      } else {
+        const rawCellLabels = Array.from(
+          new Set(
+            [normalizeSettingLabel(m.homeCellGroup), normalizeSettingLabel(m.groupName)].filter(Boolean)
+          )
+        );
+        effectiveLabels = rawCellLabels.length > 0 ? rawCellLabels : ['Unassigned Cell'];
+      }
 
       for (const label of effectiveLabels) {
         const key = label.toLowerCase();

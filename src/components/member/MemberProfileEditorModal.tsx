@@ -28,6 +28,12 @@ import {
   formatBirthMonthGroupName,
   resolveMemberBirthFields,
 } from '../../utils/birthMonth';
+import {
+  normalizeMemberDepartmentFields,
+  resolveMemberDepartments,
+} from '../../utils/memberDepartments';
+import { MultiDepartmentSelector } from '../common/MultiDepartmentSelector';
+import { resolveAutomaticDemographicMinistries } from '../../utils/demographicMinistries';
 
 interface MemberProfileEditorModalProps {
   isOpen: boolean;
@@ -120,7 +126,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
   const [hometown, setHometown] = useState('');
 
   const [homeCellGroup, setHomeCellGroup] = useState('General Congregation');
-  const [department, setDepartment] = useState('General Congregation');
+  const [departments, setDepartments] = useState<string[]>([]);
   const [portfolio, setPortfolio] = useState('Member');
   const [customPortfolio, setCustomPortfolio] = useState('');
   const [squads, setSquads] = useState('');
@@ -146,9 +152,9 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
   const departmentOptions = useMemo(() => {
     const merged = mergeSelectableDepartments(churchGroups, members, COMMON_DEPARTMENTS);
     const set = new Set<string>(merged);
-    if (department) set.add(department);
+    departments.forEach((d) => set.add(d));
     return Array.from(set);
-  }, [churchGroups, members, department]);
+  }, [churchGroups, members, departments]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -183,7 +189,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
     setHometown(member?.hometown || '');
 
     setHomeCellGroup(member?.homeCellGroup || member?.groupName || 'General Congregation');
-    setDepartment(member?.department || 'General Congregation');
+    setDepartments(resolveMemberDepartments(member));
     const rawPortfolio = (member?.designation || member?.officerName || 'Member').trim();
     const matchedPortfolio = CHURCH_PORTFOLIOS.find(
       (p) => p.toLowerCase() === rawPortfolio.toLowerCase()
@@ -264,7 +270,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
 
     const parsedChildren = Math.max(0, Math.min(50, Math.trunc(Number(numberOfChildren) || 0)));
     const nextGroup = homeCellGroup.trim() || 'General Congregation';
-    const nextDept = department.trim() || 'General Congregation';
+    const deptFields = normalizeMemberDepartmentFields({ departments });
 
     const nextPortfolio =
       (portfolio === 'Other' ? customPortfolio.trim() : portfolio.trim()) || 'Member';
@@ -296,7 +302,8 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
         hometown: hometown.trim(),
         homeCellGroup: nextGroup,
         groupName: nextGroup,
-        department: nextDept,
+        department: deptFields.department,
+        departments: deptFields.departments,
         officerName: nextPortfolio,
         designation: nextPortfolio,
         squads: squads.trim(),
@@ -318,12 +325,25 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
     }
   };
 
+  const autoDemographicPreview = useMemo(
+    () => resolveAutomaticDemographicMinistries({ gender, dateOfBirth }),
+    [gender, dateOfBirth]
+  );
+
   const groupLeadPreview = findMatchingChurchGroup(churchGroups, {
     groupName: homeCellGroup,
     homeCellGroup,
-    department,
+    department: departments,
+    gender,
+    dateOfBirth,
   });
-  const matchedLeadInfo = groupLeadPreview.ministryGroup || groupLeadPreview.cellOrFellowshipGroup;
+  const matchedLeadInfos = [
+    ...(groupLeadPreview.ministryGroups || []),
+    ...(groupLeadPreview.cellOrFellowshipGroup &&
+    !groupLeadPreview.ministryGroups?.some((g) => g.id === groupLeadPreview.cellOrFellowshipGroup?.id)
+      ? [groupLeadPreview.cellOrFellowshipGroup]
+      : []),
+  ];
 
   const inputClass =
     'w-full min-w-0 min-h-[42px] px-3 py-2 rounded-xl text-sm bg-[#F8F9FD] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E3E5F2] dark:border-[#2D2D55] outline-none focus:border-[#6D5CF2] focus:ring-2 focus:ring-[#6D5CF2]/20 transition-colors';
@@ -697,55 +717,84 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
 
             {activeTab === 'church' && (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div className="min-w-0">
-                    <label htmlFor="mpe-cell-group" className={labelClass}>
-                      Cell / Fellowship Group
-                    </label>
-                    <select
-                      id="mpe-cell-group"
-                      value={homeCellGroup}
-                      onChange={(e) => setHomeCellGroup(e.target.value)}
-                      className={inputClass}
-                    >
-                      {cellGroupOptions.map((group) => (
-                        <option key={group} value={group}>
-                          {group}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="min-w-0">
+                  <label htmlFor="mpe-cell-group" className={labelClass}>
+                    Cell / Fellowship Group
+                  </label>
+                  <select
+                    id="mpe-cell-group"
+                    value={homeCellGroup}
+                    onChange={(e) => setHomeCellGroup(e.target.value)}
+                    className={inputClass}
+                  >
+                    {cellGroupOptions.map((group) => (
+                      <option key={group} value={group}>
+                        {group}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-                  <div className="min-w-0">
-                    <label htmlFor="mpe-department" className={labelClass}>
-                      Serving Ministry / Department
-                    </label>
-                    <select
-                      id="mpe-department"
-                      value={department}
-                      onChange={(e) => setDepartment(e.target.value)}
-                      className={inputClass}
-                    >
-                      {departmentOptions.map((dept) => (
-                        <option key={dept} value={dept}>
-                          {dept}
-                        </option>
-                      ))}
-                    </select>
+                <div className="min-w-0 space-y-2.5">
+                  <MultiDepartmentSelector
+                    idPrefix="mpe-departments"
+                    label="Serving Ministries & Departments (Select one or more)"
+                    value={departments}
+                    onChange={setDepartments}
+                    options={departmentOptions}
+                  />
+
+                  <div className="p-3 rounded-xl bg-[#F8F9FD] dark:bg-[#14142E] border border-[#E3E5F2] dark:border-[#2D2D55] space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wider text-[#5B5F7A] dark:text-[#A9ACC8]">
+                      <span>Automatic Ministries (Gender &amp; Under 35)</span>
+                      {!dateOfBirth.trim() && (
+                        <span className="text-[10px] font-medium normal-case text-amber-600 dark:text-amber-400">
+                          Enter Date of Birth to verify Youth (&lt;35)
+                        </span>
+                      )}
+                    </div>
+                    {autoDemographicPreview.ministries.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {autoDemographicPreview.ministries.map((am) => (
+                          <span
+                            key={am.kind}
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold border ${
+                              am.kind === 'youth'
+                                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                                : am.kind === 'women'
+                                ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25'
+                                : 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/25'
+                            }`}
+                          >
+                            <Check className="w-3 h-3 shrink-0" />
+                            <span>{am.name}</span>
+                            <span className="opacity-75 font-medium text-[11px]">({am.reason})</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
+                        Assigned automatically from your Gender (Women&apos;s / Men&apos;s) and Date of Birth (Youth under 35).
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                {matchedLeadInfo && (
-                  <div className="p-3 rounded-xl bg-[#F8F9FD] dark:bg-[#14142E] border border-[#E3E5F2] dark:border-[#2D2D55] text-xs text-[#5B5F7A] dark:text-[#A9ACC8] flex items-center gap-2">
-                    <Phone className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
-                    <span className="min-w-0">
-                      Group Lead:{' '}
-                      <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
-                        {matchedLeadInfo.leaderName || systemSettings.seniorPastor || 'Church Office'}
-                      </strong>
-                      {matchedLeadInfo.meetingDay ? ` · ${matchedLeadInfo.meetingDay}` : ''}
-                      {matchedLeadInfo.meetingTime ? ` ${matchedLeadInfo.meetingTime}` : ''}
-                    </span>
+                {matchedLeadInfos.length > 0 && (
+                  <div className="p-3 rounded-xl bg-[#F8F9FD] dark:bg-[#14142E] border border-[#E3E5F2] dark:border-[#2D2D55] text-xs text-[#5B5F7A] dark:text-[#A9ACC8] space-y-1.5">
+                    {matchedLeadInfos.map((info) => (
+                      <div key={info.id} className="flex items-center gap-2">
+                        <Phone className="w-3.5 h-3.5 text-[#6D5CF2] shrink-0" />
+                        <span className="min-w-0">
+                          {info.name} Lead:{' '}
+                          <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            {info.leaderName || systemSettings.seniorPastor || 'Church Office'}
+                          </strong>
+                          {info.meetingDay ? ` · ${info.meetingDay}` : ''}
+                          {info.meetingTime ? ` ${info.meetingTime}` : ''}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
 

@@ -32,6 +32,12 @@ import {
   formatBirthMonthGroupName,
   resolveMemberBirthFields,
 } from '../../utils/birthMonth';
+import {
+  normalizeMemberDepartmentFields,
+  resolveMemberDepartments,
+} from '../../utils/memberDepartments';
+import { MultiDepartmentSelector } from '../common/MultiDepartmentSelector';
+import { resolveAutomaticDemographicMinistries } from '../../utils/demographicMinistries';
 
 interface AddMemberModalProps {
   isOpen: boolean;
@@ -90,7 +96,9 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const departmentOptions = useMemo(() => {
     const merged = mergeSelectableDepartments(churchGroups, [], COMMON_DEPARTMENTS);
     const set = new Set<string>(merged);
-    if (initialData?.department) set.add(initialData.department);
+    if (initialData) {
+      resolveMemberDepartments(initialData).forEach((d) => set.add(d));
+    }
     return Array.from(set);
   }, [churchGroups, initialData]);
 
@@ -125,7 +133,9 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     initialData?.homeCellGroup || initialData?.groupName || cellGroupOptions[0] || 'General Congregation'
   );
   const [squads, setSquads] = useState(initialData?.squads || '');
-  const [department, setDepartment] = useState(initialData?.department || 'General Congregation');
+  const [departments, setDepartments] = useState<string[]>(() =>
+    resolveMemberDepartments(initialData)
+  );
 
   // Designation / Portfolio dropdown state & custom fallback
   const initialOfficer = initialData?.officerName || initialData?.designation || 'Member';
@@ -231,7 +241,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
 
     setHomeCellGroup(source?.homeCellGroup || source?.groupName || cellGroupOptions[0] || 'General Congregation');
     setSquads(source?.squads || '');
-    setDepartment(source?.department || 'General Congregation');
+    setDepartments(resolveMemberDepartments(source));
 
     const srcOfficer = source?.officerName || source?.designation || 'Member';
     const matched = COMMON_DESIGNATIONS.find(
@@ -343,6 +353,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       monthOfBirth: monthOfBirth || undefined,
     });
 
+    const deptFields = normalizeMemberDepartmentFields({ departments });
     const memberPayload: Partial<Person> = {
       firstName: firstName.trim(),
       middleName: middleName.trim() || undefined,
@@ -351,7 +362,8 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       remarks: remarks.trim() || undefined,
       memberId: generatedId,
       squads: squads.trim() || undefined,
-      department: department.trim() || 'General Congregation',
+      department: deptFields.department,
+      departments: deptFields.departments,
       officerName: finalOfficer || 'Member',
       designation: finalOfficer || 'Member',
       gender,
@@ -398,12 +410,12 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
         setSavingMode(null);
 
         if (addAnother) {
-          // Reset member-specific fields while keeping cell group & department handy for batch entry
+          // Reset member-specific fields while keeping cell group & departments handy for batch entry
           const preservedCell = homeCellGroup;
-          const preservedDept = department;
+          const preservedDepts = departments;
           resetFormFields(null);
           setHomeCellGroup(preservedCell);
-          setDepartment(preservedDept);
+          setDepartments(preservedDepts);
           showToast(`${created.firstName} ${created.lastName} saved to database! Ready for next member.`);
         } else {
           onClose();
@@ -742,59 +754,97 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
           {activeTab === 'church' && (
             <div className="space-y-4">
               {(() => {
-                const { cellOrFellowshipGroup, ministryGroup } = findMatchingChurchGroup(churchGroups, {
+                const autoDemographic = resolveAutomaticDemographicMinistries({
+                  gender,
+                  dateOfBirth,
+                });
+                const { cellOrFellowshipGroup, ministryGroups } = findMatchingChurchGroup(churchGroups, {
                   homeCellGroup,
                   groupName: homeCellGroup,
-                  department,
+                  department: departments,
+                  gender,
+                  dateOfBirth,
                 });
                 return (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                          HOME CELL GROUP
-                        </label>
-                        <select
-                          value={homeCellGroup}
-                          onChange={(e) => setHomeCellGroup(e.target.value)}
-                          className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                        >
-                          {cellGroupOptions.map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
-                        {cellOrFellowshipGroup && (
-                          <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                            Leader: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{cellOrFellowshipGroup.leaderName}</strong>
-                            {cellOrFellowshipGroup.meetingDay ? ` · ${cellOrFellowshipGroup.meetingDay}` : ''}
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                        HOME CELL GROUP
+                      </label>
+                      <select
+                        value={homeCellGroup}
+                        onChange={(e) => setHomeCellGroup(e.target.value)}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      >
+                        {cellGroupOptions.map((g) => (
+                          <option key={g} value={g}>
+                            {g}
+                          </option>
+                        ))}
+                      </select>
+                      {cellOrFellowshipGroup && (
+                        <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                          Leader: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{cellOrFellowshipGroup.leaderName}</strong>
+                          {cellOrFellowshipGroup.meetingDay ? ` · ${cellOrFellowshipGroup.meetingDay}` : ''}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <MultiDepartmentSelector
+                        idPrefix="admin-member-depts"
+                        label="DEPARTMENTS & MINISTRIES (SELECT ONE OR MORE)"
+                        value={departments}
+                        onChange={setDepartments}
+                        options={departmentOptions}
+                      />
+
+                      <div className="mt-2 p-2.5 rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
+                          <span>Automatic Ministries (Gender &amp; Under 35)</span>
+                          {!dateOfBirth && (
+                            <span className="font-normal normal-case text-amber-600 dark:text-amber-400">
+                              Add Date of Birth to check Youth (&lt;35)
+                            </span>
+                          )}
+                        </div>
+                        {autoDemographic.ministries.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {autoDemographic.ministries.map((am) => (
+                              <span
+                                key={am.kind}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${
+                                  am.kind === 'youth'
+                                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                                    : am.kind === 'women'
+                                    ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25'
+                                    : 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/25'
+                                }`}
+                              >
+                                <Check className="w-3 h-3 shrink-0" />
+                                <span>{am.name}</span>
+                                <span className="opacity-75 font-medium">({am.reason})</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                            Select Male/Female or a Date of Birth under 35 to auto-assign demographic wings.
                           </p>
                         )}
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
-                          DEPARTMENT / MINISTRY
-                        </label>
-                        <select
-                          value={department}
-                          onChange={(e) => setDepartment(e.target.value)}
-                          className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                        >
-                          {departmentOptions.map((d) => (
-                            <option key={d} value={d}>
-                              {d}
-                            </option>
+                      {ministryGroups.length > 0 && (
+                        <div className="mt-1.5 space-y-0.5">
+                          {ministryGroups.map((mg) => (
+                            <p key={mg.id} className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
+                              {mg.name} Head:{' '}
+                              <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{mg.leaderName}</strong>
+                              {mg.meetingDay ? ` · ${mg.meetingDay}` : ''}
+                            </p>
                           ))}
-                        </select>
-                        {ministryGroup && (
-                          <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
-                            Ministry Head: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{ministryGroup.leaderName}</strong>
-                            {ministryGroup.meetingDay ? ` · ${ministryGroup.meetingDay}` : ''}
-                          </p>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-[#666A86] dark:text-[#A9ACC8]">

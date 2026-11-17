@@ -22,8 +22,21 @@ import {
 } from './settingsConnections';
 import {
   ALL_BIRTH_MONTH_GROUPS,
+  isBirthMonthGroupName,
+  normalizeMonthName,
   resolveMemberBirthFields,
 } from './birthMonth';
+import { isDepartmentLikeCategory, isMonthBornCategory } from '../shared/groupCategories';
+import {
+  GENERAL_CONGREGATION_LABEL,
+  resolveMemberDepartments,
+} from './memberDepartments';
+import {
+  ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES,
+  AutomaticDemographicMinistryKind,
+  getAutomaticMinistryKind,
+  resolveAutomaticDemographicMinistries,
+} from './demographicMinistries';
 
 export interface DepartmentAnalyticRow {
   name: string;
@@ -154,6 +167,22 @@ export interface BirthMonthGroupRow {
   pctOfRoster: number;
 }
 
+export interface DemographicMinistryRow {
+  kind: AutomaticDemographicMinistryKind;
+  name: string;
+  groupName: string;
+  ruleLabel: string;
+  totalMembers: number;
+  presentCount: number;
+  turnoutPct: number;
+  pctOfRoster: number;
+  groupId?: string;
+  isConfiguredInDb: boolean;
+  leaderName: string | null;
+  meetingDay?: string;
+  meetingTime?: string;
+}
+
 export interface DashboardAnalyticsResult {
   activeService: {
     id: string;
@@ -220,6 +249,7 @@ export interface DashboardAnalyticsResult {
   };
   leadership: LeadershipAnalyticsSummary;
   birthMonthGroups: BirthMonthGroupRow[];
+  demographicMinistries: DemographicMinistryRow[];
   serviceComparisons: ServiceComparisonRow[];
   giving: {
     totalPaidGhs: number;
@@ -412,6 +442,10 @@ export function computeDashboardAnalytics(
     }
   }
 
+  const demographicConfiguredDepts = churchGroups.filter(
+    (g) => isDepartmentLikeCategory(g.category) && Boolean(getAutomaticMinistryKind(g.name))
+  );
+
   for (const m of members) {
     const isPresent = checkedInPersonIds.has(m.id);
     const isAtRisk = !isPresent && (m.consecutiveAbsences || 0) >= threshold;
@@ -460,15 +494,42 @@ export function computeDashboardAnalytics(
       }
     }
 
-    const deptLabel = normalizeLabel(m.department) || 'General Congregation';
-    const deptBucket = ensureDept(deptLabel);
-    deptBucket.totalMembers++;
-    if (isPresent) deptBucket.presentCount++;
-    if (m.autoCheckinOptedIn) deptBucket.autoCheckinCount++;
-    if (isAtRisk) deptBucket.atRiskCount++;
+    const resolvedDepts = resolveMemberDepartments(m);
+    const autoDemo = resolveAutomaticDemographicMinistries(m, now);
+    const mergedDeptLabels = new Map<string, string>();
+    for (const d of resolvedDepts) {
+      const k = d.toLowerCase();
+      if (!mergedDeptLabels.has(k)) mergedDeptLabels.set(k, d);
+    }
+    if (demographicConfiguredDepts.length > 0 && autoDemo.kinds.length > 0) {
+      for (const cfgDept of demographicConfiguredDepts) {
+        const cfgKind = getAutomaticMinistryKind(cfgDept.name);
+        if (cfgKind && autoDemo.kinds.includes(cfgKind)) {
+          const alreadyCoversKind = resolvedDepts.some(
+            (existing) => getAutomaticMinistryKind(existing) === cfgKind
+          );
+          if (!alreadyCoversKind) {
+            const k = getCanonicalKey(cfgDept.name);
+            if (!mergedDeptLabels.has(k)) mergedDeptLabels.set(k, normalizeLabel(cfgDept.name));
+          }
+        }
+      }
+    }
+
+    const deptLabels =
+      mergedDeptLabels.size > 0
+        ? Array.from(mergedDeptLabels.values())
+        : [GENERAL_CONGREGATION_LABEL];
     const memberOpenTaskIds = openTaskIdsByPersonId.get(m.id);
-    if (memberOpenTaskIds) {
-      for (const tId of memberOpenTaskIds) deptBucket.openTaskIds.add(tId);
+    for (const deptLabel of deptLabels) {
+      const deptBucket = ensureDept(deptLabel);
+      deptBucket.totalMembers++;
+      if (isPresent) deptBucket.presentCount++;
+      if (m.autoCheckinOptedIn) deptBucket.autoCheckinCount++;
+      if (isAtRisk) deptBucket.atRiskCount++;
+      if (memberOpenTaskIds) {
+        for (const tId of memberOpenTaskIds) deptBucket.openTaskIds.add(tId);
+      }
     }
   }
 
@@ -612,17 +673,44 @@ export function computeDashboardAnalytics(
     }
   };
 
+  const monthBornConfiguredGroups = churchGroups.filter(
+    (g) => isMonthBornCategory(g.category) || isBirthMonthGroupName(g.name)
+  );
+  const demographicConfiguredGroups = churchGroups.filter((g) =>
+    Boolean(getAutomaticMinistryKind(g.name))
+  );
+
   for (const m of members) {
     addMemberToGroup(m.homeCellGroup || m.groupName, m, 'cell_group');
     if (m.groupName && getCanonicalKey(m.groupName) !== getCanonicalKey(m.homeCellGroup)) {
       addMemberToGroup(m.groupName, m, 'cell_group');
     }
-    if (
-      m.department &&
-      normalizeLabel(m.department).toLowerCase() !== 'general' &&
-      normalizeLabel(m.department).toLowerCase() !== 'general congregation'
-    ) {
-      addMemberToGroup(m.department, m, 'ministry');
+    for (const deptName of resolveMemberDepartments(m)) {
+      addMemberToGroup(deptName, m, 'ministry');
+    }
+    if (demographicConfiguredGroups.length > 0) {
+      const memberAutoKinds = resolveAutomaticDemographicMinistries(m, now).kinds;
+      for (const demoGrp of demographicConfiguredGroups) {
+        const demoKind = getAutomaticMinistryKind(demoGrp.name);
+        if (demoKind && memberAutoKinds.includes(demoKind)) {
+          addMemberToGroup(demoGrp.name, m, demoGrp.category);
+        }
+      }
+    }
+    if (monthBornConfiguredGroups.length > 0) {
+      const resolvedBirth = resolveMemberBirthFields({
+        dateOfBirth: m.dateOfBirth,
+        monthOfBirth: m.monthOfBirth,
+        birthMonthGroup: m.birthMonthGroup,
+      });
+      if (resolvedBirth.monthOfBirth) {
+        for (const mbGroup of monthBornConfiguredGroups) {
+          const grpMonth = normalizeMonthName(mbGroup.name);
+          if (grpMonth && grpMonth === resolvedBirth.monthOfBirth) {
+            addMemberToGroup(mbGroup.name, m, mbGroup.category);
+          }
+        }
+      }
     }
   }
 
@@ -841,6 +929,66 @@ export function computeDashboardAnalytics(
     };
   });
 
+  // 3d. Automatic Demographic Ministries (Women's Ministry, Men's Ministry, Youth Ministry < 35)
+  const demographicBuckets = new Map<
+    AutomaticDemographicMinistryKind,
+    { totalMembers: number; presentCount: number }
+  >([
+    ['women', { totalMembers: 0, presentCount: 0 }],
+    ['men', { totalMembers: 0, presentCount: 0 }],
+    ['youth', { totalMembers: 0, presentCount: 0 }],
+  ]);
+  for (const m of members) {
+    const auto = resolveAutomaticDemographicMinistries(m, now);
+    const memberDeptKinds = new Set(
+      resolveMemberDepartments(m)
+        .map((d) => getAutomaticMinistryKind(d))
+        .filter((k): k is AutomaticDemographicMinistryKind => Boolean(k))
+    );
+    const effectiveKinds = new Set<AutomaticDemographicMinistryKind>([
+      ...auto.kinds,
+      ...memberDeptKinds,
+    ]);
+    for (const k of effectiveKinds) {
+      const bucket = demographicBuckets.get(k);
+      if (!bucket) continue;
+      bucket.totalMembers++;
+      if (checkedInPersonIds.has(m.id)) {
+        bucket.presentCount++;
+      }
+    }
+  }
+  const demographicMinistries: DemographicMinistryRow[] = ALL_AUTOMATIC_DEMOGRAPHIC_MINISTRIES.map(
+    (def) => {
+      const bucket = demographicBuckets.get(def.kind) || { totalMembers: 0, presentCount: 0 };
+      const matchedGrp =
+        churchGroups.find(
+          (g) => isDepartmentLikeCategory(g.category) && getAutomaticMinistryKind(g.name) === def.kind
+        ) ||
+        churchGroups.find((g) => getAutomaticMinistryKind(g.name) === def.kind) ||
+        null;
+      const leader =
+        matchedGrp && isAssignedLeaderName(matchedGrp.leaderName)
+          ? normalizeLabel(matchedGrp.leaderName)
+          : null;
+      return {
+        kind: def.kind,
+        name: def.name,
+        groupName: matchedGrp ? normalizeLabel(matchedGrp.name) : def.name,
+        ruleLabel: def.badgeLabel,
+        totalMembers: bucket.totalMembers,
+        presentCount: bucket.presentCount,
+        turnoutPct: pct(bucket.presentCount, bucket.totalMembers),
+        pctOfRoster: pct(bucket.totalMembers, totalMembers),
+        groupId: matchedGrp?.id,
+        isConfiguredInDb: Boolean(matchedGrp),
+        leaderName: leader,
+        meetingDay: normalizeLabel(matchedGrp?.meetingDay) || undefined,
+        meetingTime: normalizeLabel(matchedGrp?.meetingTime) || undefined,
+      };
+    }
+  );
+
   // 4. Multi-Service Comparison
   const serviceComparisons: ServiceComparisonRow[] = services.map((svc) => {
     const records = attendanceRecords.filter(
@@ -993,6 +1141,7 @@ export function computeDashboardAnalytics(
     groupCounts,
     leadership,
     birthMonthGroups,
+    demographicMinistries,
     serviceComparisons,
     giving: {
       totalPaidGhs: Math.round((totalPaidMinor / 100) * 100) / 100,

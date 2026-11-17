@@ -4,6 +4,7 @@ import {
   formatBirthMonthGroupName,
   normalizeMonthName,
 } from '../utils/birthMonth';
+import { normalizeMemberDepartmentFields } from '../utils/memberDepartments';
 
 export type ImportDuplicateMode = 'skip' | 'update' | 'error';
 
@@ -468,7 +469,12 @@ export function validateMemberImportBatch(
     const resolvedGroup = data.homeCellGroup || data.groupName || 'General Congregation';
     data.groupName = resolvedGroup;
     data.homeCellGroup = resolvedGroup;
-    data.department = data.department || 'General Congregation';
+    const normalizedDepts = normalizeMemberDepartmentFields({
+      department: data.department,
+      departments: data.departments,
+    });
+    data.department = normalizedDepts.department;
+    data.departments = normalizedDepts.departments;
     data.status = 'member';
     data.autoCheckinOptedIn = true;
     data.consecutiveAbsences = 0;

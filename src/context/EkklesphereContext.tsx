@@ -59,6 +59,10 @@ import {
   type ParsedServiceQrPayload,
 } from '../utils/serviceQr';
 import { resolveMemberBirthFields } from '../utils/birthMonth';
+import {
+  normalizeMemberDepartmentFields,
+  resolveMemberDepartments,
+} from '../utils/memberDepartments';
 
 export interface ServiceQrCheckInResult {
   ok: boolean;
@@ -149,6 +153,11 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
         : undefined,
   });
 
+  const deptFields = normalizeMemberDepartmentFields({
+    department: typeof raw.department === 'string' ? raw.department : undefined,
+    departments: Array.isArray(raw.departments) ? (raw.departments as string[]) : undefined,
+  });
+
   return {
     ...(raw as Person),
     id: String(raw.id || `mem-${Date.now()}`),
@@ -158,6 +167,8 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     phoneE164,
     groupName,
     homeCellGroup: String(raw.homeCellGroup ?? raw.home_cell_group ?? groupName),
+    department: deptFields.department,
+    departments: deptFields.departments,
     dateOfBirth: rawDob || (raw as Person).dateOfBirth,
     monthOfBirth: birthFields.monthOfBirth ?? (raw as Person).monthOfBirth,
     birthMonthGroup: birthFields.birthMonthGroup ?? (raw as Person).birthMonthGroup,
@@ -3317,6 +3328,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       'groupName',
       'homeCellGroup',
       'department',
+      'departments',
       'squads',
       'dateOfSalvation',
       'dateOfBaptism',
@@ -4842,13 +4854,30 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const syncedMembers = prev.map((m) => {
             const matchesGroup = (m.groupName || '').trim().toLowerCase() === oldLower;
             const matchesCell = (m.homeCellGroup || '').trim().toLowerCase() === oldLower;
-            const matchesDept = (m.department || '').trim().toLowerCase() === oldLower;
-            if (!matchesGroup && !matchesCell && !matchesDept) return m;
+            const currentDepts = resolveMemberDepartments(m);
+            const hasMatchingDept =
+              currentDepts.some((d) => d.trim().toLowerCase() === oldLower) ||
+              (m.department || '').trim().toLowerCase() === oldLower;
+            if (!matchesGroup && !matchesCell && !hasMatchingDept) return m;
+
+            const nextDeptFields = hasMatchingDept
+              ? normalizeMemberDepartmentFields({
+                  departments: currentDepts.map((d) =>
+                    d.trim().toLowerCase() === oldLower ? resolvedNextName : d
+                  ),
+                })
+              : null;
+
             return {
               ...m,
               ...(matchesGroup ? { groupName: resolvedNextName } : {}),
               ...(matchesCell ? { homeCellGroup: resolvedNextName } : {}),
-              ...(matchesDept ? { department: resolvedNextName } : {}),
+              ...(nextDeptFields
+                ? {
+                    department: nextDeptFields.department,
+                    departments: nextDeptFields.departments,
+                  }
+                : {}),
             };
           });
           try {

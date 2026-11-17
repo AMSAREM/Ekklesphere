@@ -1375,6 +1375,82 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
             </div>
           </div>
 
+          {/* Automatic Demographic Ministries (Women's, Men's & Youth < 35) */}
+          {analytics.demographicMinistries && analytics.demographicMinistries.length > 0 && (
+            <div className="rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F8F9FD] dark:bg-[#14142E] p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Automatic Demographic Ministries (Gender &amp; Age &lt; 35)
+                  </h4>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Every woman joins Women&apos;s Ministry, every man joins Men&apos;s Ministry, and every member under 35 joins Youth Ministry automatically.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenSettings()}
+                  className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline cursor-pointer"
+                >
+                  Assign Leaders →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 tabular-nums">
+                {analytics.demographicMinistries.map((dm) => {
+                  const accentClass =
+                    dm.kind === 'women'
+                      ? 'border-rose-200/70 dark:border-rose-900/40'
+                      : dm.kind === 'men'
+                      ? 'border-sky-200/70 dark:border-sky-900/40'
+                      : 'border-emerald-200/70 dark:border-emerald-900/40';
+                  const pillClass =
+                    dm.kind === 'women'
+                      ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                      : dm.kind === 'men'
+                      ? 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                      : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+                  return (
+                    <button
+                      key={dm.kind}
+                      type="button"
+                      disabled={dm.totalMembers === 0}
+                      onClick={() => onInspectDepartment(dm.groupName)}
+                      className={`p-3 rounded-xl border bg-white dark:bg-[#1D1D3D] text-left transition-colors ${accentClass} ${
+                        dm.totalMembers > 0
+                          ? 'hover:border-[#6D5CF2] cursor-pointer'
+                          : 'opacity-70 cursor-default'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {dm.groupName}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${pillClass}`}>
+                          {dm.ruleLabel}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex items-baseline justify-between gap-2">
+                        <span className="font-mono text-lg font-extrabold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                          {dm.totalMembers}
+                          <span className="ml-1 text-[11px] font-normal text-[#666A86] dark:text-[#A9ACC8]">
+                            ({dm.pctOfRoster}%)
+                          </span>
+                        </span>
+                        <span className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF]">
+                          {dm.presentCount} present ({dm.turnoutPct}%)
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1 truncate">
+                        {dm.leaderName ? `Lead: ${dm.leaderName}` : 'Automatic cohort · Click to inspect'}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Automatic Birth Month Fellowship Groups Breakdown */}
           {analytics.birthMonthGroups && analytics.birthMonthGroups.length > 0 && (
             <div className="rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F8F9FD] dark:bg-[#14142E] p-4 sm:p-5 space-y-3">
