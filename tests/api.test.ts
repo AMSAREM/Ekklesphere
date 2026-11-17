@@ -1,5 +1,5 @@
 // tests/api.test.ts - Ekklesphere Church Management & Role-Level Security Test Suite
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { app } from '../server';
 import { signToken, TEST_ANCHOR_ORGANIZATION_ID, type ChurchRole } from '../lib/auth';
@@ -1052,6 +1052,73 @@ describe('Ekklesphere Church Management & GPS Premise Suite', () => {
         .set('Authorization', `Bearer ${memberToken}`)
         .send({ dateOfBirth: '15-06-1994' });
       expect(badDateRes.status).toBe(400);
+    });
+  });
+
+  describe('Production Serverless Resilience & Security Regression', () => {
+    it('GET /api/public/landing-overview returns 200 fallback even when database overview & config fail', async () => {
+      const overviewSpy = vi
+        .spyOn(platformStore, 'getPublicLandingOverview')
+        .mockRejectedValueOnce(Object.assign(new Error('Supabase unavailable'), { status: 503, code: 'SUPABASE_NOT_CONFIGURED' }));
+      const configSpy = vi
+        .spyOn(platformStore, 'getLandingConfig')
+        .mockRejectedValueOnce(Object.assign(new Error('Supabase unavailable'), { status: 503, code: 'SUPABASE_NOT_CONFIGURED' }));
+
+      try {
+        const res = await request(app).get('/api/public/landing-overview');
+        expect(res.status).toBe(200);
+        expect(res.body.landingConfig).toBeDefined();
+        expect(Array.isArray(res.body.plans)).toBe(true);
+        expect(res.body.liveStats).toEqual({
+          activeChurchesCount: 0,
+          activeSitesCount: 0,
+          totalCheckinsRecorded: 0,
+        });
+      } finally {
+        overviewSpy.mockRestore();
+        configSpy.mockRestore();
+      }
+    });
+
+    it('POST /api/auth/login returns clean 503 JSON instead of unhandled 500 when Supabase is unconfigured/failing', async () => {
+      const authSpy = vi
+        .spyOn(platformStore, 'authenticateWithCredentials')
+        .mockRejectedValueOnce(
+          Object.assign(new Error('Supabase PostgreSQL database is not configured.'), {
+            status: 503,
+            code: 'SUPABASE_NOT_CONFIGURED',
+          })
+        );
+
+      try {
+        const res = await request(app)
+          .post('/api/auth/login')
+          .set('x-forwarded-for', '198.51.100.222')
+          .send({ identifier: 'admin@example.com', password: 'SomePassword#2026' });
+
+        expect(res.status).toBe(503);
+        expect(res.body.error).toBe('service_unavailable');
+        expect(res.body.code).toBe('SUPABASE_NOT_CONFIGURED');
+      } finally {
+        authSpy.mockRestore();
+      }
+    });
+
+    it('REJECTS spoofed unsessioned creator claims on non-allowlisted emails with 403 creator_required', async () => {
+      const spoofedToken = signToken({
+        id: 'spoof-user-1',
+        email: 'hacker@malicious.org',
+        role: 'creator',
+        is_creator: true,
+        organization_id: TEST_ANCHOR_ORGANIZATION_ID,
+      });
+
+      const res = await request(app)
+        .get('/api/console/overview')
+        .set('Authorization', `Bearer ${spoofedToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('creator_required');
     });
   });
 });

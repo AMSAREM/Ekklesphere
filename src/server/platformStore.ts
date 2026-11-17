@@ -485,8 +485,12 @@ class PlatformStore {
       process.env.NEXT_PUBLIC_SUPABASE_URL ||
       ''
     ).trim();
-    // CRITICAL SECURITY RULE: Server uses ONLY SUPABASE_SERVICE_ROLE_KEY, never SUPABASE_ANON_KEY for DB writes.
-    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    // CRITICAL SECURITY RULE: Server uses ONLY SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY), never SUPABASE_ANON_KEY for DB writes.
+    const serviceRoleKey = (
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      ''
+    ).trim();
     const anonKey = (
       process.env.SUPABASE_ANON_KEY ||
       process.env.VITE_SUPABASE_ANON_KEY ||
@@ -2558,7 +2562,11 @@ class PlatformStore {
     const sb = this.activeSupabase;
     let foundCred: UserCredentialRecord | undefined;
     if (sb) {
-      const orFilters = [`email.ilike.${lowerId}`, `username.ilike.${lowerId}`];
+      const hasPostgrestDelimiters = /[,():]/.test(lowerId);
+      const safeId = lowerId.replace(/"/g, '');
+      const orFilters = hasPostgrestDelimiters
+        ? [`email.ilike."${safeId}"`, `username.ilike."${safeId}"`]
+        : [`email.ilike.${lowerId}`, `username.ilike.${lowerId}`];
       if (normalizedPhone) {
         orFilters.push(`phone_e164.eq.${normalizedPhone}`);
       }
@@ -2571,7 +2579,12 @@ class PlatformStore {
         .maybeSingle();
 
       if (credQueryErr) {
-        throw new Error(`Failed to verify credentials against Supabase: ${credQueryErr.message}`);
+        const queryErr: any = new Error(
+          `Failed to verify credentials against Supabase: ${credQueryErr.message}`
+        );
+        queryErr.status = 503;
+        queryErr.code = 'SUPABASE_QUERY_ERROR';
+        throw queryErr;
       }
 
       if (credRow && (credRow.auth_user_id || (credRow.password_hash && credRow.password_salt))) {

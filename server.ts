@@ -35,6 +35,7 @@ import {
 import { resolveServiceWindow } from './src/utils/serviceStatus.ts';
 import { buildServiceQrCheckInPath, formatServiceShortCode } from './src/utils/serviceQr.ts';
 import {
+  DEFAULT_LANDING_CMS,
   platformStore,
   type LiveCheckinItem,
   type StoredGeofenceEvent,
@@ -74,7 +75,10 @@ registerUserOrganizationResolver(async (user) => {
   return orgs[0]?.id || null;
 });
 
-const __filename = fileURLToPath(import.meta.url);
+const __filename =
+  typeof import.meta !== 'undefined' && typeof import.meta.url === 'string' && import.meta.url
+    ? fileURLToPath(import.meta.url)
+    : path.resolve(process.cwd(), 'server.ts');
 const __dirname = path.dirname(__filename);
 const PORT = 3000;
 
@@ -330,12 +334,23 @@ app.post(
       });
     } catch (err: any) {
       const status = typeof err?.status === 'number' ? err.status : 401;
+      if (status >= 500) {
+        console.error('[Ekklesphere Auth] Login error:', err?.message || err);
+      }
       if (status === 429 && err?.retryAfterSeconds) {
         res.setHeader('Retry-After', String(err.retryAfterSeconds));
       }
+      const errorType =
+        status === 429
+          ? 'rate_limit_exceeded'
+          : err?.code === 'ACCOUNT_INACTIVE'
+          ? 'forbidden'
+          : status >= 500
+          ? 'service_unavailable'
+          : 'unauthorized';
       return res.status(status).json({
-        error: status === 429 ? 'rate_limit_exceeded' : err?.code === 'ACCOUNT_INACTIVE' ? 'forbidden' : 'unauthorized',
-        code: err?.code || 'INVALID_CREDENTIALS',
+        error: errorType,
+        code: err?.code || (status >= 500 ? 'AUTH_SERVICE_UNAVAILABLE' : 'INVALID_CREDENTIALS'),
         message: err?.message || 'Authentication failed.',
         retryAfterSeconds: err?.retryAfterSeconds,
       });
@@ -524,153 +539,177 @@ app.post('/api/auth/change-password', authSessionLimiter, requireUser, async (re
 // Token refresh/exchange endpoint: requires a verified Bearer token (Supabase JWT or session JWT).
 // Role and organization_id ALWAYS come from the verified identity / database membership — NEVER from req.body.
 app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
-  const verifiedUser = req.user!;
-  const creator = isCreatorClaim(verifiedUser);
+  try {
+    const verifiedUser = req.user!;
+    const creator = isCreatorClaim(verifiedUser);
 
-  let resolvedRole: ChurchRole = verifiedUser.role;
-  let resolvedOrgId: string = verifiedUser.organization_id || verifiedUser.tenant_id || '';
-  let resolvedName: string = verifiedUser.name || verifiedUser.email.split('@')[0] || 'Church User';
+    let resolvedRole: ChurchRole = verifiedUser.role;
+    let resolvedOrgId: string = verifiedUser.organization_id || verifiedUser.tenant_id || '';
+    let resolvedName: string = verifiedUser.name || verifiedUser.email.split('@')[0] || 'Church User';
 
-  if (!resolvedOrgId || (verifiedUser.auth_provider === 'supabase' && !creator)) {
-    const dbMembership = await platformStore.lookupMemberRoleInStore(verifiedUser.id, verifiedUser.email);
-    resolvedOrgId = dbMembership.organizationId || resolvedOrgId;
-    resolvedRole = dbMembership.role || resolvedRole;
-    if (dbMembership.name) resolvedName = dbMembership.name;
-  }
+    if (!resolvedOrgId || (verifiedUser.auth_provider === 'supabase' && !creator)) {
+      const dbMembership = await platformStore.lookupMemberRoleInStore(verifiedUser.id, verifiedUser.email);
+      resolvedOrgId = dbMembership.organizationId || resolvedOrgId;
+      resolvedRole = dbMembership.role || resolvedRole;
+      if (dbMembership.name) resolvedName = dbMembership.name;
+    }
 
-  if (!resolvedOrgId) {
-    const orgs = await platformStore.listOrganisations();
-    resolvedOrgId = orgs[0]?.id || '';
-  }
+    if (!resolvedOrgId) {
+      const orgs = await platformStore.listOrganisations();
+      resolvedOrgId = orgs[0]?.id || '';
+    }
 
-  const [sessionTimeoutMinutes, org] = await Promise.all([
-    platformStore.getOrganizationSessionTimeoutMinutes(resolvedOrgId),
-    resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null),
-  ]);
-  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
-    {
-      id: verifiedUser.id,
-      email: verifiedUser.email,
+    const [sessionTimeoutMinutes, org] = await Promise.all([
+      platformStore.getOrganizationSessionTimeoutMinutes(resolvedOrgId),
+      resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null),
+    ]);
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
+        name: resolvedName,
+        organization_id: resolvedOrgId,
+        tenant_id: resolvedOrgId,
+        campus_id: verifiedUser.campus_id,
+        is_creator: creator,
+        auth_provider: 'session_jwt',
+      },
+      sessionTimeoutMinutes
+    );
+
+    return res.status(200).json({
+      token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
       role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
-      name: resolvedName,
-      organization_id: resolvedOrgId,
-      tenant_id: resolvedOrgId,
-      campus_id: verifiedUser.campus_id,
-      is_creator: creator,
-      auth_provider: 'session_jwt',
-    },
-    sessionTimeoutMinutes
-  );
-
-  return res.status(200).json({
-    token,
-    idleTimeoutMinutes,
-    sessionExpiresAt: expiresAt,
-    role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
-    organizationId: resolvedOrgId,
-    organizationName: org?.name || undefined,
-    organization: org
-      ? {
-          id: org.id,
-          name: org.name,
-          slug: org.slug,
-          city: org.city,
-        }
-      : null,
-    isCreator: creator,
-    user: {
-      id: verifiedUser.id,
-      email: verifiedUser.email,
-      name: resolvedName,
-      role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
-      organization_id: resolvedOrgId,
-      tenant_id: resolvedOrgId,
+      organizationId: resolvedOrgId,
       organizationName: org?.name || undefined,
-      is_creator: creator,
-    },
-  });
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+            slug: org.slug,
+            city: org.city,
+          }
+        : null,
+      isCreator: creator,
+      user: {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        name: resolvedName,
+        role: creator ? (verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator') : resolvedRole,
+        organization_id: resolvedOrgId,
+        tenant_id: resolvedOrgId,
+        organizationName: org?.name || undefined,
+        is_creator: creator,
+      },
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 500;
+    return res.status(status).json({
+      error: err?.code || 'token_exchange_failed',
+      message: err?.message || 'Unable to exchange authentication token.',
+    });
+  }
 });
 
 // Active user session keepalive endpoint: validates session hasn't timed out, resets sliding idle window, and mints fresh JWT
 app.post('/api/auth/session/keepalive', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
-  const verifiedUser = req.user!;
-  const orgId = verifiedUser.organization_id || verifiedUser.tenant_id || '';
-  const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(orgId);
-  const effectiveTimeout = normalizeIdleTimeoutMinutes(orgTimeout);
+  try {
+    const verifiedUser = req.user!;
+    const orgId = verifiedUser.organization_id || verifiedUser.tenant_id || '';
+    const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(orgId);
+    const effectiveTimeout = normalizeIdleTimeoutMinutes(orgTimeout);
 
-  if (verifiedUser.sid) {
-    revokeServerSession(verifiedUser.sid);
+    if (verifiedUser.sid) {
+      revokeServerSession(verifiedUser.sid);
+    }
+
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        role: verifiedUser.role,
+        name: verifiedUser.name,
+        organization_id: orgId,
+        tenant_id: orgId,
+        campus_id: verifiedUser.campus_id,
+        is_creator: isCreatorClaim(verifiedUser),
+        auth_provider: 'session_jwt',
+      },
+      effectiveTimeout
+    );
+
+    return res.status(200).json({
+      ok: true,
+      token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 500;
+    return res.status(status).json({
+      error: err?.code || 'session_keepalive_failed',
+      message: err?.message || 'Unable to refresh active session.',
+    });
   }
-
-  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
-    {
-      id: verifiedUser.id,
-      email: verifiedUser.email,
-      role: verifiedUser.role,
-      name: verifiedUser.name,
-      organization_id: orgId,
-      tenant_id: orgId,
-      campus_id: verifiedUser.campus_id,
-      is_creator: isCreatorClaim(verifiedUser),
-      auth_provider: 'session_jwt',
-    },
-    effectiveTimeout
-  );
-
-  return res.status(200).json({
-    ok: true,
-    token,
-    idleTimeoutMinutes,
-    sessionExpiresAt: expiresAt,
-  });
 });
 
 // Dedicated Creator Console session exchange/refresh endpoint (Strictly authenticated, no bypass)
 app.post('/api/auth/creator-session', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
-  const verifiedUser = req.user!;
-  if (!isCreatorClaim(verifiedUser)) {
-    return res.status(403).json({
-      error: 'creator_required',
-      message: 'Access denied. Verified platform creator privilege is required.',
+  try {
+    const verifiedUser = req.user!;
+    if (!isCreatorClaim(verifiedUser)) {
+      return res.status(403).json({
+        error: 'creator_required',
+        message: 'Access denied. Verified platform creator privilege is required.',
+      });
+    }
+
+    const orgs = await platformStore.listOrganisations();
+    const activeOrgId = verifiedUser.organization_id || orgs[0]?.id || '';
+    const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(activeOrgId);
+
+    const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
+      {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
+        name: verifiedUser.name || 'Platform Creator',
+        organization_id: activeOrgId,
+        tenant_id: activeOrgId,
+        campus_id: verifiedUser.campus_id,
+        is_creator: true,
+        auth_provider: 'session_jwt',
+      },
+      orgTimeout
+    );
+
+    return res.status(200).json({
+      token,
+      idleTimeoutMinutes,
+      sessionExpiresAt: expiresAt,
+      role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
+      organizationId: activeOrgId,
+      isCreator: true,
+      user: {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        name: verifiedUser.name || 'Platform Creator',
+        role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
+        organization_id: activeOrgId,
+        tenant_id: activeOrgId,
+        is_creator: true,
+      },
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 500;
+    return res.status(status).json({
+      error: err?.code || 'creator_session_failed',
+      message: err?.message || 'Unable to refresh creator session.',
     });
   }
-
-  const orgs = await platformStore.listOrganisations();
-  const activeOrgId = verifiedUser.organization_id || orgs[0]?.id || '';
-  const orgTimeout = await platformStore.getOrganizationSessionTimeoutMinutes(activeOrgId);
-
-  const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
-    {
-      id: verifiedUser.id,
-      email: verifiedUser.email,
-      role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
-      name: verifiedUser.name || 'Platform Creator',
-      organization_id: activeOrgId,
-      tenant_id: activeOrgId,
-      campus_id: verifiedUser.campus_id,
-      is_creator: true,
-      auth_provider: 'session_jwt',
-    },
-    orgTimeout
-  );
-
-  return res.status(200).json({
-    token,
-    idleTimeoutMinutes,
-    sessionExpiresAt: expiresAt,
-    role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
-    organizationId: activeOrgId,
-    isCreator: true,
-    user: {
-      id: verifiedUser.id,
-      email: verifiedUser.email,
-      name: verifiedUser.name || 'Platform Creator',
-      role: verifiedUser.role === 'super_admin' ? 'super_admin' : 'creator',
-      organization_id: activeOrgId,
-      tenant_id: activeOrgId,
-      is_creator: true,
-    },
-  });
 });
 
 // Secret-gated Creator bootstrap/rotation endpoint (fail-closed unless CREATOR_BOOTSTRAP_SECRET is configured and matches)
@@ -808,7 +847,13 @@ app.get(['/api/landing-config', '/api/public/landing-overview'], async (_req: Re
     const overview = await platformStore.getPublicLandingOverview();
     return res.status(200).json(overview);
   } catch (err: any) {
-    const landingConfig = await platformStore.getLandingConfig();
+    console.warn('[Ekklesphere] Landing overview fallback triggered:', err?.message || err);
+    let landingConfig = { ...DEFAULT_LANDING_CMS };
+    try {
+      landingConfig = await platformStore.getLandingConfig();
+    } catch {
+      // Safe fallback to DEFAULT_LANDING_CMS if database is unconfigured or unavailable
+    }
     return res.status(200).json({
       landingConfig,
       plans: [],
@@ -5099,8 +5144,9 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   const httpServer = createServer(app);
 
-  if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
+  if (!isProduction && !process.env.VERCEL) {
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
     const hmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {

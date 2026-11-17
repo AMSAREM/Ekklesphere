@@ -314,15 +314,24 @@ export function signToken(
 ): string {
   const secret = getJwtSecret();
   const orgId = payload.organization_id || payload.tenant_id;
+  const isTrustedSessionOrigin =
+    Boolean(payload.sid) || payload.auth_provider === 'supabase';
+  const isAuthorizedCreator =
+    (payload.is_creator === true ||
+      payload.role === 'creator' ||
+      payload.role === 'super_admin') &&
+    (isTrustedSessionOrigin || isAuthorizedCreatorEmail(payload.email));
+
   const normalizedPayload: Omit<AuthUserPayload, 'iat' | 'exp'> = {
     ...payload,
     organization_id: orgId,
     tenant_id: orgId,
     campus_id: payload.campus_id,
-    is_creator:
-      payload.is_creator === true ||
-      payload.role === 'creator' ||
-      payload.role === 'super_admin',
+    role:
+      (payload.role === 'creator' || payload.role === 'super_admin') && !isAuthorizedCreator
+        ? 'member'
+        : payload.role,
+    is_creator: isAuthorizedCreator,
     auth_provider: payload.auth_provider || 'session_jwt',
   };
   return jwt.sign(normalizedPayload, secret, { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] });
@@ -364,15 +373,24 @@ export function verifyToken(token: string): AuthUserPayload {
   const secret = getJwtSecret();
   const decoded = jwt.verify(token, secret) as AuthUserPayload;
   const orgId = decoded.organization_id || decoded.tenant_id;
+  const isTrustedSessionOrigin =
+    Boolean(decoded.sid) || decoded.auth_provider === 'supabase';
+  const isAuthorizedCreator =
+    (decoded.is_creator === true ||
+      decoded.role === 'creator' ||
+      decoded.role === 'super_admin') &&
+    (isTrustedSessionOrigin || isAuthorizedCreatorEmail(decoded.email));
+
   return {
     ...decoded,
     organization_id: orgId,
     tenant_id: orgId,
     campus_id: decoded.campus_id,
-    is_creator:
-      decoded.is_creator === true ||
-      decoded.role === 'creator' ||
-      decoded.role === 'super_admin',
+    role:
+      (decoded.role === 'creator' || decoded.role === 'super_admin') && !isAuthorizedCreator
+        ? 'member'
+        : decoded.role,
+    is_creator: isAuthorizedCreator,
   };
 }
 
@@ -410,16 +428,40 @@ export function extractBearerToken(req: Request): string | null {
   return null;
 }
 
+export const AUTHORIZED_CREATOR_EMAILS: readonly string[] = [
+  'akokosolutions24@gmail.com',
+  'amoakoemmanuel2020@gmail.com',
+  'creator@ekklesphere.platform',
+  'creator@ekklesphere.church',
+  'admin@ekklesphere.church',
+];
+
+export function isAuthorizedCreatorEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const normalized = email.trim().toLowerCase();
+  const envEmail = (process.env.CREATOR_EMAIL || process.env.VITE_CREATOR_EMAIL || '')?.trim().toLowerCase();
+  return (
+    AUTHORIZED_CREATOR_EMAILS.includes(normalized) ||
+    Boolean(envEmail && normalized === envEmail)
+  );
+}
+
 /**
  * Checks if an authenticated user holds verified Platform Creator privileges.
- * Sourced strictly from verified token/app_metadata claims, never user_metadata or emails.
+ * Sourced strictly from verified token claims (session-verified DB login / Supabase Auth)
+ * or explicit platform creator email allowlist.
  */
 export function isCreatorClaim(user?: AuthUserPayload | null): boolean {
   if (!user) return false;
-  return (
+  const isCreatorRole =
     user.is_creator === true ||
     user.role === 'creator' ||
-    user.role === 'super_admin'
+    user.role === 'super_admin';
+  if (!isCreatorRole) return false;
+  return (
+    Boolean(user.sid) ||
+    user.auth_provider === 'supabase' ||
+    isAuthorizedCreatorEmail(user.email)
   );
 }
 

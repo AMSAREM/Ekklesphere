@@ -10,6 +10,24 @@ export type UserRole =
   | 'group_leader'
   | 'finance';
 
+export const AUTHORIZED_CREATOR_EMAILS: readonly string[] = [
+  'akokosolutions24@gmail.com',
+  'amoakoemmanuel2020@gmail.com',
+  'creator@ekklesphere.platform',
+  'creator@ekklesphere.church',
+  'admin@ekklesphere.church',
+];
+
+export function isAuthorizedCreatorEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const normalized = email.trim().toLowerCase();
+  const envEmail = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_CREATOR_EMAIL : '')?.trim().toLowerCase();
+  return (
+    AUTHORIZED_CREATOR_EMAILS.includes(normalized) ||
+    Boolean(envEmail && normalized === envEmail)
+  );
+}
+
 export interface AuthUser {
   id: string;
   name: string;
