@@ -108,6 +108,7 @@ export const UserManagement: React.FC = () => {
 
   // Form state for issuing, editing, or resetting credentials
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<ChurchRole>('member');
@@ -117,6 +118,7 @@ export const UserManagement: React.FC = () => {
   const [newPhone, setNewPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [requirePasswordChange, setRequirePasswordChange] = useState(true);
+  const lastAppliedTargetNonceRef = useRef<number | null>(null);
 
   const [provisionedCred, setProvisionedCred] = useState<{
     fullName: string;
@@ -190,13 +192,16 @@ export const UserManagement: React.FC = () => {
       },
       mode: 'credentials' | 'edit' = 'credentials'
     ) => {
-      const targetMemberId = memberOrUser.memberId || memberOrUser.id || '';
+      const resolvedMemberId =
+        memberOrUser.memberId ||
+        (memberOrUser.id && members.some((m) => m.id === memberOrUser.id) ? memberOrUser.id : '');
       const computedName =
         memberOrUser.fullName ||
         `${memberOrUser.firstName || ''} ${memberOrUser.lastName || ''}`.trim();
 
       setEditingUserId(mode === 'edit' ? (memberOrUser.id || memberOrUser.memberId || null) : null);
-      setSelectedMemberId(targetMemberId);
+      setSelectedAccountId(memberOrUser.id || memberOrUser.memberId || null);
+      setSelectedMemberId(resolvedMemberId);
       setNewName(computedName);
       setNewEmail(memberOrUser.email || '');
       setNewPhone(memberOrUser.phoneE164 || '');
@@ -214,25 +219,24 @@ export const UserManagement: React.FC = () => {
         });
       }
     },
-    []
+    [members]
   );
 
   // Respond cleanly when opened from Member Directory ("Manage Login & Credentials")
   useEffect(() => {
     if (!requestedUserTarget) return;
-    if (requestedUserTarget.filter) {
-      setFilterMode(requestedUserTarget.filter);
-    } else {
-      setFilterMode('all');
-    }
-    if (requestedUserTarget.searchQuery !== undefined) {
-      setSearchQuery(requestedUserTarget.searchQuery);
-    }
+    if (lastAppliedTargetNonceRef.current === requestedUserTarget.nonce) return;
+
     if (requestedUserTarget.memberId) {
       const matchedUser = usersList.find(
         (u) => u.memberId === requestedUserTarget.memberId || u.id === requestedUserTarget.memberId
       );
       if (matchedUser) {
+        lastAppliedTargetNonceRef.current = requestedUserTarget.nonce;
+        setFilterMode(requestedUserTarget.filter || 'all');
+        if (requestedUserTarget.searchQuery !== undefined) {
+          setSearchQuery(requestedUserTarget.searchQuery);
+        }
         populateCredentialFormFromMember(matchedUser);
         return;
       }
@@ -240,6 +244,11 @@ export const UserManagement: React.FC = () => {
         (m) => m.id === requestedUserTarget.memberId || m.memberId === requestedUserTarget.memberId
       );
       if (matchedMember) {
+        lastAppliedTargetNonceRef.current = requestedUserTarget.nonce;
+        setFilterMode(requestedUserTarget.filter || 'all');
+        if (requestedUserTarget.searchQuery !== undefined) {
+          setSearchQuery(requestedUserTarget.searchQuery);
+        }
         populateCredentialFormFromMember({
           memberId: matchedMember.id,
           firstName: matchedMember.firstName,
@@ -250,11 +259,19 @@ export const UserManagement: React.FC = () => {
           designation: matchedMember.designation || matchedMember.officerName || 'Member',
         });
       }
+      return;
+    }
+
+    lastAppliedTargetNonceRef.current = requestedUserTarget.nonce;
+    setFilterMode(requestedUserTarget.filter || 'all');
+    if (requestedUserTarget.searchQuery !== undefined) {
+      setSearchQuery(requestedUserTarget.searchQuery);
     }
   }, [requestedUserTarget, usersList, members, populateCredentialFormFromMember]);
 
   const clearFormSelection = () => {
     setEditingUserId(null);
+    setSelectedAccountId(null);
     setSelectedMemberId('');
     setNewName('');
     setNewEmail('');
@@ -376,19 +393,47 @@ export const UserManagement: React.FC = () => {
     setErrorMsg(null);
     setProvisionedCred(null);
 
-    if (!newName.trim()) {
-      setErrorMsg('Full name is required.');
+    const trimmedName = newName.trim();
+    const trimmedEmail = newEmail.trim().toLowerCase();
+    const trimmedPhone = newPhone.trim();
+    const trimmedPassword = newPassword.trim();
+
+    if (!trimmedName) {
+      const msg = 'Full name is required.';
+      setErrorMsg(msg);
+      showToast(msg);
+      return;
+    }
+
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      const msg = 'Please enter a valid email address.';
+      setErrorMsg(msg);
+      showToast(msg);
+      return;
+    }
+
+    if (trimmedPassword && trimmedPassword.length < 8) {
+      const msg = 'Custom password must be at least 8 characters long.';
+      setErrorMsg(msg);
+      showToast(msg);
       return;
     }
 
     // If editing an existing user profile without typing a new password, save profile via PATCH /api/users/:id
-    if (editingUserId && !newPassword.trim()) {
+    if (editingUserId && !trimmedPassword) {
+      if (!trimmedEmail && !trimmedPhone) {
+        const msg = 'Please keep at least an email address or phone number.';
+        setErrorMsg(msg);
+        showToast(msg);
+        return;
+      }
+
       setSubmitting(true);
       try {
         const patchPayload = {
-          fullName: newName.trim(),
-          email: newEmail.trim().toLowerCase(),
-          phone: newPhone.trim(),
+          fullName: trimmedName,
+          email: trimmedEmail,
+          phone: trimmedPhone,
           role: selectedRole,
           designation: selectedDesignation || 'Member',
         };
@@ -400,17 +445,17 @@ export const UserManagement: React.FC = () => {
         if (handleUnauthorizedSession(res.status)) return;
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data?.user) {
-          const msg = data?.message || 'Could not update user account.';
+          const msg = data?.message || 'Could not update user account in Supabase.';
           setErrorMsg(msg);
           showToast(msg);
           return;
         }
         setUsersList((prev) => prev.map((row) => (row.id === editingUserId ? data.user : row)));
-        showToast(`Updated profile for ${data.user.fullName}.`);
+        showToast(`Updated ${data.user.fullName} in Supabase.`);
         clearFormSelection();
-        await refreshMembers?.();
+        await Promise.all([fetchUsers(), refreshMembers?.()]);
       } catch {
-        const msg = 'Network error updating user profile.';
+        const msg = 'Network error updating user profile in Supabase.';
         setErrorMsg(msg);
         showToast(msg);
       } finally {
@@ -419,25 +464,31 @@ export const UserManagement: React.FC = () => {
       return;
     }
 
-    if (!selectedMemberId && !newEmail.trim() && !newPhone.trim()) {
-      setErrorMsg('Select a member or enter an email address or phone number.');
+    if (!selectedMemberId && !selectedAccountId && !trimmedEmail && !trimmedPhone) {
+      const msg = 'Select a member or enter an email address or phone number.';
+      setErrorMsg(msg);
+      showToast(msg);
       return;
     }
-    if (newEmail.trim() === '' && newPhone.trim() === '') {
-      setErrorMsg('Please provide at least an email address or phone number for sign-in.');
+    if (!trimmedEmail && !trimmedPhone) {
+      const msg = 'Please provide at least an email address or phone number for sign-in.';
+      setErrorMsg(msg);
+      showToast(msg);
       return;
     }
 
     setSubmitting(true);
     try {
+      const credentialTargetId = editingUserId || selectedAccountId;
       const payload = {
+        ...(credentialTargetId ? { credentialId: credentialTargetId } : {}),
         ...(selectedMemberId ? { memberId: selectedMemberId } : {}),
-        fullName: newName.trim(),
-        ...(newEmail.trim() ? { email: newEmail.trim().toLowerCase() } : {}),
-        ...(newPhone.trim() ? { phone: newPhone.trim() } : {}),
+        fullName: trimmedName,
+        ...(trimmedEmail ? { email: trimmedEmail } : {}),
+        ...(trimmedPhone ? { phone: trimmedPhone } : {}),
         role: selectedRole,
         designation: selectedDesignation || 'Member',
-        ...(newPassword.trim() ? { password: newPassword.trim() } : {}),
+        ...(trimmedPassword ? { password: trimmedPassword } : {}),
         requirePasswordChange,
       };
 
@@ -450,7 +501,7 @@ export const UserManagement: React.FC = () => {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.user) {
-        const msg = data?.message || 'Could not save user login credentials.';
+        const msg = data?.message || 'Could not save user login credentials to Supabase.';
         setErrorMsg(msg);
         showToast(msg);
         return;
@@ -471,14 +522,14 @@ export const UserManagement: React.FC = () => {
 
       showToast(
         data.resetExisting
-          ? `Credentials reset & saved for ${savedUser.fullName} (${ROLE_LABELS[savedUser.role] || savedUser.role}).`
-          : `Login credentials issued for ${savedUser.fullName} (${ROLE_LABELS[savedUser.role] || savedUser.role}).`
+          ? `Credentials & data updated in Supabase for ${savedUser.fullName} (${ROLE_LABELS[savedUser.role] || savedUser.role}).`
+          : `Saved & issued login in Supabase for ${savedUser.fullName} (${ROLE_LABELS[savedUser.role] || savedUser.role}).`
       );
 
       clearFormSelection();
       await Promise.all([fetchUsers(), refreshMembers?.()]);
     } catch {
-      const msg = 'Network error saving user credentials.';
+      const msg = 'Network error saving user credentials to Supabase.';
       setErrorMsg(msg);
       showToast(msg);
     } finally {
@@ -637,11 +688,14 @@ export const UserManagement: React.FC = () => {
   };
 
   const selectedTargetHasLogin = useMemo(() => {
-    if (!selectedMemberId) return false;
+    if (!selectedMemberId && !selectedAccountId) return false;
     return usersList.some(
-      (u) => (u.memberId === selectedMemberId || u.id === selectedMemberId) && u.hasCredentials
+      (u) =>
+        (u.id === selectedAccountId ||
+          (selectedMemberId && (u.memberId === selectedMemberId || u.id === selectedMemberId))) &&
+        u.hasCredentials
     );
-  }, [selectedMemberId, usersList]);
+  }, [selectedMemberId, selectedAccountId, usersList]);
 
   return (
     <div className="space-y-5">
@@ -781,6 +835,7 @@ export const UserManagement: React.FC = () => {
       {canCreateUsers && (
         <form
           ref={formRef}
+          noValidate
           onSubmit={handleSaveCredentials}
           className="bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-2xl sm:rounded-3xl p-5 space-y-4 shadow-xs"
         >
@@ -925,7 +980,7 @@ export const UserManagement: React.FC = () => {
               </label>
               <select
                 aria-label="Select enrolled member or create new user"
-                value={selectedMemberId}
+                value={selectedMemberId || selectedAccountId || ''}
                 onChange={(e) => handleMemberPickerChange(e.target.value)}
                 className="w-full min-h-[42px] px-3 py-2 bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] rounded-xl text-xs text-[#1D1B3A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#6D5CF2]"
               >
@@ -1047,19 +1102,19 @@ export const UserManagement: React.FC = () => {
             >
               {editingUserId && !newPassword.trim() ? (
                 <Edit3 className="w-4 h-4" />
-              ) : selectedMemberId && selectedTargetHasLogin ? (
+              ) : (selectedMemberId || selectedAccountId) && selectedTargetHasLogin ? (
                 <RotateCcw className="w-4 h-4" />
               ) : (
                 <KeyRound className="w-4 h-4" />
               )}
               <span>
                 {submitting
-                  ? 'Saving Changes...'
+                  ? 'Updating Supabase...'
                   : editingUserId && !newPassword.trim()
-                  ? 'Save User Changes'
-                  : selectedMemberId && selectedTargetHasLogin
-                  ? 'Reset Credentials & Save'
-                  : 'Issue Login Credentials'}
+                  ? 'Save Changes to Supabase'
+                  : (selectedMemberId || selectedAccountId) && selectedTargetHasLogin
+                  ? 'Reset Credentials & Update Supabase'
+                  : 'Issue Credentials & Save to Supabase'}
               </span>
             </button>
           </div>

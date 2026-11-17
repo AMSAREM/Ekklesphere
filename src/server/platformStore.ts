@@ -12091,6 +12091,7 @@ class PlatformStore {
 
   public async provisionOrganizationMemberCredentials(params: {
     organizationId: string;
+    credentialId?: string;
     memberId?: string;
     fullName?: string;
     email?: string;
@@ -12119,24 +12120,60 @@ class PlatformStore {
 
     const orgMembers = await this.getMembers(cleanOrgId);
     let targetMember: Record<string, any> | undefined;
+    let resolvedCredFromLookup: Record<string, any> | null = null;
     const requestedMemberId = params.memberId?.trim() || '';
+    const requestedCredId = params.credentialId?.trim() || '';
+
     if (requestedMemberId) {
       targetMember = orgMembers.find(
         (m) => String(m.id) === requestedMemberId || String(m.memberId || '') === requestedMemberId
       );
-      if (!targetMember) {
-        const err: any = new Error('Selected member was not found in this organisation.');
-        err.code = 'MEMBER_NOT_FOUND';
-        err.status = 404;
-        throw err;
+    }
+
+    const sbLookup = this.activeSupabase;
+    const candidateCredId = requestedCredId || (!targetMember ? requestedMemberId : '');
+    if (candidateCredId && sbLookup && UUID_REGEX.test(candidateCredId) && UUID_REGEX.test(cleanOrgId)) {
+      const { data: credRow } = await sbLookup
+        .from('account_credentials')
+        .select('*')
+        .eq('organization_id', cleanOrgId)
+        .or(`id.eq.${candidateCredId},member_id.eq.${candidateCredId}`)
+        .limit(1)
+        .maybeSingle();
+      if (credRow) {
+        resolvedCredFromLookup = credRow;
+        if (!targetMember && credRow.member_id) {
+          targetMember = orgMembers.find((m) => String(m.id) === String(credRow.member_id));
+        }
       }
     }
 
-    const email = (params.email ?? targetMember?.email ?? '').trim().toLowerCase();
-    const rawPhone = (params.phone ?? targetMember?.phoneE164 ?? '').trim();
+    if (requestedMemberId && !targetMember && !resolvedCredFromLookup) {
+      const err: any = new Error('Selected member was not found in this organisation.');
+      err.code = 'MEMBER_NOT_FOUND';
+      err.status = 404;
+      throw err;
+    }
+
+    const email = (
+      params.email ??
+      targetMember?.email ??
+      resolvedCredFromLookup?.email ??
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const rawPhone = (
+      params.phone ??
+      targetMember?.phoneE164 ??
+      resolvedCredFromLookup?.phone_e164 ??
+      ''
+    ).trim();
     const phoneE164 = rawPhone ? normalizePhone(rawPhone) : '';
     const memberFullName = targetMember
       ? `${String(targetMember.firstName || '').trim()} ${String(targetMember.lastName || '').trim()}`.trim()
+      : resolvedCredFromLookup?.full_name
+      ? String(resolvedCredFromLookup.full_name).trim()
       : '';
     const fullName = (params.fullName || memberFullName || '').trim();
 
@@ -12258,22 +12295,23 @@ class PlatformStore {
 
     const mappedMemberRole = params.role === 'super_admin' ? 'admin' : params.role;
     const cleanDesignation = params.designation?.trim();
+    const nameParts = fullName.split(/\s+/).filter(Boolean);
+    const parsedFirstName = nameParts[0] || 'Church';
+    const parsedLastName = nameParts.slice(1).join(' ') || parsedFirstName;
     if (targetMemberId) {
       await this.updateMember(cleanOrgId, targetMemberId, {
+        ...(params.fullName?.trim() ? { firstName: parsedFirstName, lastName: parsedLastName } : {}),
         role: mappedMemberRole,
         ...(email ? { email } : {}),
-        ...(phoneE164 ? { phoneE164 } : {}),
+        ...(phoneE164 ? { phoneE164, phoneNumber: phoneE164 } : {}),
         ...(cleanDesignation ? { officerName: cleanDesignation, designation: cleanDesignation } : {}),
       });
     } else {
-      const nameParts = fullName.split(/\s+/).filter(Boolean);
-      const firstName = nameParts[0] || 'Church';
-      const lastName = nameParts.slice(1).join(' ') || 'Member';
       const createdMember = await this.createMember(
         cleanOrgId,
         {
-          firstName,
-          lastName,
+          firstName: parsedFirstName,
+          lastName: parsedLastName,
           email: email || undefined,
           phoneE164: phoneE164 || undefined,
           groupName: params.role === 'member' ? 'General Congregation' : 'Church Leadership',
@@ -12290,6 +12328,7 @@ class PlatformStore {
 
     const credId =
       existingSameOrg?.id ||
+      (resolvedCredFromLookup?.id ? String(resolvedCredFromLookup.id) : undefined) ||
       (targetMemberId && UUID_REGEX.test(targetMemberId) ? targetMemberId : randomUUID());
     const nowIso = new Date().toISOString();
 
@@ -12457,11 +12496,35 @@ class PlatformStore {
           throw err;
         }
 
+        const orgMembers = await this.getMembers(cleanOrgId);
+        let linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
+        if (!linkedMemberId) {
+          const prevEmail = credRow.email ? String(credRow.email).trim().toLowerCase() : '';
+          const prevPhone = credRow.phone_e164 ? normalizePhone(String(credRow.phone_e164)) : '';
+          const matchedMember = orgMembers.find((m) => {
+            const mEmail = String(m.email || '').trim().toLowerCase();
+            const mPhone = m.phoneE164 || m.phone ? normalizePhone(String(m.phoneE164 || m.phone)) : '';
+            return (
+              String(m.id) === String(credRow.id) ||
+              (prevEmail && mEmail === prevEmail) ||
+              (prevPhone && mPhone === prevPhone) ||
+              (cleanEmail && mEmail === cleanEmail) ||
+              (cleanPhoneE164 && mPhone === cleanPhoneE164)
+            );
+          });
+          if (matchedMember?.id) {
+            linkedMemberId = String(matchedMember.id);
+          }
+        }
+
         const patch: Record<string, unknown> = { updated_at: nowIso };
         if (cleanName) patch.full_name = cleanName;
         if (cleanEmail !== undefined) patch.email = cleanEmail || null;
         if (cleanPhoneE164 !== undefined) patch.phone_e164 = cleanPhoneE164 || null;
         if (params.role) patch.role = params.role;
+        if (linkedMemberId && !credRow.member_id && UUID_REGEX.test(linkedMemberId)) {
+          patch.member_id = linkedMemberId;
+        }
         if (params.status) {
           patch.status = params.status;
           if (params.status === 'active') {
@@ -12479,10 +12542,40 @@ class PlatformStore {
           throw new Error(`Failed updating user account in Supabase: ${updErr.message}`);
         }
 
-        const linkedMemberId = credRow.member_id ? String(credRow.member_id) : undefined;
+        if (credRow.auth_user_id && sb.auth?.admin?.updateUserById) {
+          const authEmail =
+            cleanEmail ||
+            (credRow.email ? String(credRow.email).trim().toLowerCase() : '') ||
+            (cleanPhoneE164
+              ? `phone-${cleanPhoneE164.replace(/\D/g, '')}@members.ekklesphere.local`
+              : '');
+          await sb.auth.admin
+            .updateUserById(String(credRow.auth_user_id), {
+              ...(authEmail ? { email: authEmail, email_confirm: true } : {}),
+              user_metadata: {
+                full_name: cleanName || credRow.full_name || 'Ekklesphere User',
+                role: params.role || credRow.role,
+                organization_id: cleanOrgId,
+                ...(linkedMemberId ? { member_id: linkedMemberId } : {}),
+              },
+              app_metadata: {
+                role: params.role || credRow.role,
+                organization_id: cleanOrgId,
+                is_creator: Boolean(credRow.is_creator),
+              },
+            })
+            .catch((authSyncErr) => {
+              console.warn('[Ekklesphere Auth Sync] updateOrganizationUserAccount warning:', authSyncErr?.message || authSyncErr);
+            });
+        }
+
         if (
           linkedMemberId &&
-          (params.role || params.designation !== undefined || cleanName || cleanEmail !== undefined || cleanPhoneE164 !== undefined)
+          (params.role ||
+            params.designation !== undefined ||
+            cleanName ||
+            cleanEmail !== undefined ||
+            cleanPhoneE164 !== undefined)
         ) {
           await this.updateMember(cleanOrgId, linkedMemberId, {
             ...(splitName ? { firstName: splitName.firstName, lastName: splitName.lastName } : {}),
@@ -12494,7 +12587,7 @@ class PlatformStore {
             ...(params.designation !== undefined
               ? { officerName: params.designation, designation: params.designation }
               : {}),
-          }).catch(() => {});
+          });
         }
         if (params.status === 'active') {
           await this.resetDistributedAuthRateLimit(`login:${credRow.id}`);

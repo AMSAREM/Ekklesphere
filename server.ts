@@ -4825,8 +4825,14 @@ const USER_ROLES_ENUM = [
   'super_admin',
 ] as const;
 
+const optionalClearableEmailField = z.preprocess(
+  (val) => (typeof val === 'string' ? val.trim() : val),
+  z.union([z.literal(''), z.string().email('Valid email address is required')]).optional()
+);
+
 const manageUserCredentialsSchema = z
   .object({
+    credentialId: optionalTrimmedText(120),
     memberId: optionalTrimmedText(120),
     fullName: optionalTrimmedText(150),
     email: optionalEmailField,
@@ -4836,15 +4842,15 @@ const manageUserCredentialsSchema = z
     password: optionalPasswordField,
     requirePasswordChange: z.boolean().optional(),
   })
-  .refine((data) => Boolean(data.memberId || data.email || data.phone), {
-    message: 'Select an enrolled member or provide an email address or phone number.',
+  .refine((data) => Boolean(data.credentialId || data.memberId || data.email || data.phone), {
+    message: 'Select an enrolled member/user or provide an email address or phone number.',
   });
 
 const updateUserAccountSchema = z
   .object({
     fullName: optionalTrimmedText(150),
-    email: optionalEmailField,
-    phone: optionalTrimmedText(40),
+    email: optionalClearableEmailField,
+    phone: z.string().trim().max(40).optional(),
     role: z.enum(USER_ROLES_ENUM).optional(),
     status: z.enum(['active', 'suspended']).optional(),
     designation: optionalTrimmedText(120),
@@ -4907,6 +4913,7 @@ app.post(
     try {
       const result = await platformStore.provisionOrganizationMemberCredentials({
         organizationId: req.organizationId!,
+        credentialId: parsed.data.credentialId,
         memberId: parsed.data.memberId,
         fullName: parsed.data.fullName,
         email: parsed.data.email,
