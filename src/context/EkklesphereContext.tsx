@@ -58,6 +58,7 @@ import {
   parseServiceQrPayload,
   type ParsedServiceQrPayload,
 } from '../utils/serviceQr';
+import { resolveMemberBirthFields } from '../utils/birthMonth';
 
 export interface ServiceQrCheckInResult {
   ok: boolean;
@@ -126,6 +127,28 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
   ].find((val) => typeof val === 'string' && val.trim().length > 0);
   const imageUrl = typeof rawImg === 'string' ? rawImg.trim() : undefined;
 
+  const rawDob =
+    typeof raw.dateOfBirth === 'string'
+      ? raw.dateOfBirth
+      : typeof raw.date_of_birth === 'string'
+      ? raw.date_of_birth
+      : undefined;
+  const birthFields = resolveMemberBirthFields({
+    dateOfBirth: rawDob,
+    monthOfBirth:
+      typeof raw.monthOfBirth === 'string'
+        ? raw.monthOfBirth
+        : typeof raw.month_of_birth === 'string'
+        ? raw.month_of_birth
+        : undefined,
+    birthMonthGroup:
+      typeof raw.birthMonthGroup === 'string'
+        ? raw.birthMonthGroup
+        : typeof raw.birth_month_group === 'string'
+        ? raw.birth_month_group
+        : undefined,
+  });
+
   return {
     ...(raw as Person),
     id: String(raw.id || `mem-${Date.now()}`),
@@ -135,6 +158,9 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
     phoneE164,
     groupName,
     homeCellGroup: String(raw.homeCellGroup ?? raw.home_cell_group ?? groupName),
+    dateOfBirth: rawDob || (raw as Person).dateOfBirth,
+    monthOfBirth: birthFields.monthOfBirth ?? (raw as Person).monthOfBirth,
+    birthMonthGroup: birthFields.birthMonthGroup ?? (raw as Person).birthMonthGroup,
     avatarInitials,
     imageUrl,
     officerName: raw.officerName ?? raw.designation ? String(raw.officerName ?? raw.designation) : undefined,
@@ -265,7 +291,7 @@ interface EkklesphereContextType {
     endsAt?: string;
     expectedAttendance?: number;
     dwellMinutes?: number;
-  }) => Promise<void>;
+  }) => Promise<ServiceInstance>;
   updateService: (
     serviceId: string,
     updates: {
@@ -3277,6 +3303,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       'gender',
       'dateOfBirth',
       'monthOfBirth',
+      'birthMonthGroup',
       'placeOfResidence',
       'specificLocation',
       'residentialDigitalAddress',
@@ -3963,7 +3990,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     endsAt?: string;
     expectedAttendance?: number;
     dwellMinutes?: number;
-  }): Promise<void> => {
+  }): Promise<ServiceInstance> => {
     const serviceDate =
       params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date.trim())
         ? params.date.trim()
@@ -4080,6 +4107,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     showToast(
       `Scheduled "${created.name}" for ${formatDisplayDateLabel(created.date)} (${created.startsAt}${created.endsAt ? ` – ${created.endsAt}` : ''})`
     );
+    return created;
   };
 
   const updateService = async (

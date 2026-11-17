@@ -44,7 +44,6 @@ export const UsherTool: React.FC = () => {
     serviceVisitorsCount,
     addVisitor,
     checkInPerson,
-    checkInWithServiceQr,
     isUsherOnline,
     setIsUsherOnline,
     pendingSyncCount,
@@ -104,7 +103,7 @@ export const UsherTool: React.FC = () => {
     if (!q) return true;
     const nameMatch = `${m.firstName || ''}${m.lastName || ''}`.toLowerCase().includes(q);
     const phoneMatch = (m.phoneE164 || m.phoneNumber || '').replace(/\D/g, '').includes(q);
-    const groupMatch = `${m.groupName || ''} ${m.homeCellGroup || ''} ${m.department || ''}`.toLowerCase().includes(q);
+    const groupMatch = `${m.groupName || ''} ${m.homeCellGroup || ''} ${m.department || ''} ${m.birthMonthGroup || ''} ${m.monthOfBirth || ''}`.toLowerCase().includes(q);
     const memberIdMatch = getCanonicalMemberId(m).toLowerCase().replace(/\s/g, '').includes(q);
     return nameMatch || phoneMatch || groupMatch || memberIdMatch;
   });
@@ -549,7 +548,11 @@ export const UsherTool: React.FC = () => {
                     }
                     const svcQr = parseServiceQrPayload(code, services);
                     if (svcQr) {
-                      void checkInWithServiceQr(svcQr);
+                      setActiveServiceId(svcQr.serviceId);
+                      const targetSvc = services.find((s) => s.id === svcQr.serviceId);
+                      showToast(
+                        `Usher station switched to ${targetSvc?.name || 'scheduled service'} — scan member passes now.`
+                      );
                       return;
                     }
                     showToast(`Scanned Code: "${code}" (No matching member pass or service QR found)`);
@@ -599,7 +602,11 @@ export const UsherTool: React.FC = () => {
                 } else {
                   const svcQr = parseServiceQrPayload(scannedIdInput, services);
                   if (svcQr) {
-                    void checkInWithServiceQr(svcQr);
+                    setActiveServiceId(svcQr.serviceId);
+                    const targetSvc = services.find((s) => s.id === svcQr.serviceId);
+                    showToast(
+                      `Usher station switched to ${targetSvc?.name || 'scheduled service'} — scan member passes now.`
+                    );
                     setScannedIdInput('');
                   } else {
                     showToast(`No member or service found matching "${scannedIdInput.trim()}"`);
@@ -612,8 +619,8 @@ export const UsherTool: React.FC = () => {
                 type="text"
                 value={scannedIdInput}
                 onChange={(e) => setScannedIdInput(e.target.value)}
-                placeholder="Scan or enter Member ID (e.g. MEM-...)"
-                aria-label="Scan or enter Member ID"
+                placeholder="Scan Member ID (MEM-...) or Service QR..."
+                aria-label="Scan or enter Member ID or Service QR"
                 className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-white/10 border border-slate-200 dark:border-white/15 text-xs text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-white/50 font-mono outline-none focus:border-[#6D5CF2] dark:focus:border-[#8C7DFF] focus:bg-white"
               />
               <button

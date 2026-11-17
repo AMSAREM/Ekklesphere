@@ -26,6 +26,12 @@ import {
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
 } from '../../utils/settingsConnections';
+import {
+  BIRTH_MONTH_NAMES,
+  deriveMonthOfBirth,
+  formatBirthMonthGroupName,
+  resolveMemberBirthFields,
+} from '../../utils/birthMonth';
 
 interface AddMemberModalProps {
   isOpen: boolean;
@@ -95,7 +101,14 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [memberId, setMemberId] = useState(initialData?.memberId || '');
   const [gender, setGender] = useState(initialData?.gender || 'male');
   const [dateOfBirth, setDateOfBirth] = useState(initialData?.dateOfBirth || '');
-  const [monthOfBirth, setMonthOfBirth] = useState(initialData?.monthOfBirth || '');
+  const [monthOfBirth, setMonthOfBirth] = useState(
+    () =>
+      resolveMemberBirthFields({
+        dateOfBirth: initialData?.dateOfBirth,
+        monthOfBirth: initialData?.monthOfBirth,
+        birthMonthGroup: initialData?.birthMonthGroup,
+      }).monthOfBirth || ''
+  );
   const [phone, setPhone] = useState(initialData?.phoneE164 || '');
   const [email, setEmail] = useState(initialData?.email || '');
 
@@ -201,7 +214,13 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     setMemberId(source?.memberId || '');
     setGender(source?.gender || 'male');
     setDateOfBirth(source?.dateOfBirth || '');
-    setMonthOfBirth(source?.monthOfBirth || '');
+    setMonthOfBirth(
+      resolveMemberBirthFields({
+        dateOfBirth: source?.dateOfBirth,
+        monthOfBirth: source?.monthOfBirth,
+        birthMonthGroup: source?.birthMonthGroup,
+      }).monthOfBirth || ''
+    );
     setPhone(source?.phoneE164 || '');
     setEmail(source?.email || '');
 
@@ -319,6 +338,11 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     const generatedId = memberId.trim() || generateDefaultMemberCode();
     const finalOfficer = officerName === 'Other' ? customOfficerName.trim() : officerName.trim();
 
+    const resolvedBirth = resolveMemberBirthFields({
+      dateOfBirth: dateOfBirth || undefined,
+      monthOfBirth: monthOfBirth || undefined,
+    });
+
     const memberPayload: Partial<Person> = {
       firstName: firstName.trim(),
       middleName: middleName.trim() || undefined,
@@ -340,11 +364,8 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       occupation: occupation.trim() || undefined,
       homeCellGroup: homeCellGroup.trim(),
       groupName: homeCellGroup.trim(),
-      monthOfBirth:
-        monthOfBirth ||
-        (dateOfBirth
-          ? new Date(`${dateOfBirth}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
-          : undefined),
+      monthOfBirth: resolvedBirth.monthOfBirth,
+      birthMonthGroup: resolvedBirth.birthMonthGroup,
       maritalStatus,
       spouseName: maritalStatus === 'Married' ? spouseName.trim() || undefined : undefined,
       numberOfChildren: Number(numberOfChildren) || 0,
@@ -580,7 +601,16 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   <input
                     type="date"
                     value={dateOfBirth}
-                    onChange={(e) => setDateOfBirth(e.target.value)}
+                    onChange={(e) => {
+                      const nextDob = e.target.value;
+                      setDateOfBirth(nextDob);
+                      const derived = deriveMonthOfBirth(nextDob, undefined);
+                      if (derived) {
+                        setMonthOfBirth(derived);
+                      } else if (!nextDob) {
+                        setMonthOfBirth('');
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                   />
                 </div>
@@ -589,13 +619,31 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                   <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
                     MONTH OF BIRTH
                   </label>
-                  <input
-                    type="text"
-                    value={monthOfBirth}
+                  <select
+                    aria-label="Month of birth"
+                    value={deriveMonthOfBirth(dateOfBirth, monthOfBirth) || ''}
+                    disabled={Boolean(deriveMonthOfBirth(dateOfBirth, undefined))}
                     onChange={(e) => setMonthOfBirth(e.target.value)}
-                    placeholder="e.g. May"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
-                  />
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] disabled:opacity-80"
+                  >
+                    <option value="">Select month...</option>
+                    {BIRTH_MONTH_NAMES.map((mName) => (
+                      <option key={mName} value={mName}>
+                        {mName}
+                      </option>
+                    ))}
+                  </select>
+                  {(() => {
+                    const resolved = resolveMemberBirthFields({ dateOfBirth, monthOfBirth });
+                    const groupLabel = formatBirthMonthGroupName(resolved.monthOfBirth);
+                    return (
+                      <span className="block text-[10px] text-[#6D5CF2] dark:text-[#9D90FF] font-semibold mt-1 truncate">
+                        {groupLabel
+                          ? `Auto Group: ${groupLabel}`
+                          : 'Set Date of Birth or Month to auto-assign group'}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div>

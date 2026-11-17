@@ -50,6 +50,10 @@ import {
   mergeSelectableCellGroups,
   mergeSelectableDepartments,
 } from '../../utils/settingsConnections';
+import {
+  formatBirthMonthGroupName,
+  resolveMemberBirthFields,
+} from '../../utils/birthMonth';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -102,6 +106,7 @@ export const MemberApp: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
   const [isQrSheetOpen, setIsQrSheetOpen] = useState(false);
+  const [qrInitialContext, setQrInitialContext] = useState<string | undefined>(undefined);
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
 
   // Live Hardware GPS Proximity & Verification State
@@ -256,7 +261,14 @@ export const MemberApp: React.FC = () => {
 
   const memberDateOfBirth = matchedMember?.dateOfBirth || localDobOverride || undefined;
 
+  const memberBirthFields = resolveMemberBirthFields({
+    dateOfBirth: memberDateOfBirth,
+    monthOfBirth: matchedMember?.monthOfBirth,
+    birthMonthGroup: matchedMember?.birthMonthGroup,
+  });
+
   const handleSaveMemberBirthday = async (dateOfBirth: string) => {
+    const resolvedBirth = resolveMemberBirthFields({ dateOfBirth });
     try {
       localStorage.setItem(`ekklesphere_member_dob_${targetPersonId}`, dateOfBirth);
     } catch {
@@ -264,16 +276,28 @@ export const MemberApp: React.FC = () => {
     }
     setLocalDobOverride(dateOfBirth);
     if (matchedMember) {
-      await updateMember(matchedMember.id, { dateOfBirth });
+      await updateMember(matchedMember.id, {
+        dateOfBirth,
+        monthOfBirth: resolvedBirth.monthOfBirth,
+        birthMonthGroup: resolvedBirth.birthMonthGroup,
+      });
     } else {
       try {
         const res = await fetch('/api/members/me/profile', {
           method: 'PATCH',
           headers: getMemberAuthHeaders(),
-          body: JSON.stringify({ dateOfBirth }),
+          body: JSON.stringify({
+            dateOfBirth,
+            monthOfBirth: resolvedBirth.monthOfBirth,
+            birthMonthGroup: resolvedBirth.birthMonthGroup,
+          }),
         });
         if (res.ok) {
-          showToast('Birthday saved to your member profile in database!');
+          showToast(
+            resolvedBirth.birthMonthGroup
+              ? `Birthday saved — assigned to ${resolvedBirth.birthMonthGroup}!`
+              : 'Birthday saved to your member profile in database!'
+          );
         } else {
           const errBody = await res.json().catch(() => ({}));
           showToast(errBody?.message || 'Could not save birthday to database.');
@@ -1261,7 +1285,7 @@ export const MemberApp: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* Cell / Fellowship Group */}
             <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-1.5">
               <div className="text-[11px] font-bold uppercase tracking-wider text-[#6C5CE7] dark:text-[#8C7DFF]">
@@ -1323,6 +1347,40 @@ export const MemberApp: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* Automatic Birth Month Fellowship Group */}
+            <div className="rounded-2xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-slate-50/70 dark:bg-black/20 p-3.5 space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <Cake className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Birth Month Group</span>
+              </div>
+              <div className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                {memberBirthFields.birthMonthGroup || 'Unassigned'}
+              </div>
+              {memberBirthFields.monthOfBirth ? (
+                <div className="text-[11px] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                  {(() => {
+                    const peerCount = members.filter((m) => {
+                      const resolved = resolveMemberBirthFields({
+                        dateOfBirth: m.dateOfBirth,
+                        monthOfBirth: m.monthOfBirth,
+                        birthMonthGroup: m.birthMonthGroup,
+                      });
+                      return resolved.monthOfBirth === memberBirthFields.monthOfBirth;
+                    }).length;
+                    return `Connected to your ${memberBirthFields.monthOfBirth} Date of Birth · ${peerCount} congregation member${peerCount === 1 ? '' : 's'} in this group.`;
+                  })()}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsProfileEditorOpen(true)}
+                  className="text-[11px] font-bold text-[#6C5CE7] dark:text-[#8C7DFF] hover:underline cursor-pointer"
+                >
+                  Add your Date of Birth to auto-join →
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1363,16 +1421,30 @@ export const MemberApp: React.FC = () => {
                     <span className="truncate">{ev.timeVenue}</span>
                   </span>
                 </div>
-                <button
-                  onClick={() => toggleRsvp(ev.title, ev.id)}
-                  className={`text-xs font-bold px-3.5 py-2 rounded-xl transition-all shrink-0 ${
-                    memberRsvps[ev.title]
-                      ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'
-                      : 'bg-[#EEEBFF] text-[#6C5CE7] dark:bg-[#2A2A55] dark:text-[#8C7DFF] hover:bg-[#6C5CE7] hover:text-white'
-                  }`}
-                >
-                  {memberRsvps[ev.title] ? 'Going ✓' : 'RSVP'}
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQrInitialContext(ev.title);
+                      setIsQrSheetOpen(true);
+                    }}
+                    title={`Scan QR check-in for ${ev.title}`}
+                    aria-label={`Scan QR for ${ev.title}`}
+                    className="p-2 rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-[#F6F7FC] dark:bg-white/5 text-[#6C5CE7] dark:text-[#8C7DFF] hover:border-[#6C5CE7]/60 transition-colors cursor-pointer"
+                  >
+                    <QrCode className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => toggleRsvp(ev.title, ev.id)}
+                    className={`text-xs font-bold px-3.5 py-2 rounded-xl transition-all shrink-0 ${
+                      memberRsvps[ev.title]
+                        ? 'bg-[#DDF5EC] text-[#1E7A5F] dark:bg-[#16382F] dark:text-[#5FD3AB]'
+                        : 'bg-[#EEEBFF] text-[#6C5CE7] dark:bg-[#2A2A55] dark:text-[#8C7DFF] hover:bg-[#6C5CE7] hover:text-white'
+                    }`}
+                  >
+                    {memberRsvps[ev.title] ? 'Going ✓' : 'RSVP'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -1436,7 +1508,10 @@ export const MemberApp: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsQrSheetOpen(true)}
+                  onClick={() => {
+                    setQrInitialContext(ev.title);
+                    setIsQrSheetOpen(true);
+                  }}
                   className="text-xs font-bold px-3 py-2 rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] bg-[#F6F7FC] dark:bg-white/5 text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6C5CE7]/60 flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <QrCode className="w-3.5 h-3.5 text-[#6C5CE7] dark:text-[#8C7DFF]" />
@@ -1864,7 +1939,17 @@ export const MemberApp: React.FC = () => {
                   <span>Birthday</span>
                 </span>
                 <b className="text-[#1D1B3A] dark:text-[#F2F2FA] text-right min-w-0">
-                  {memberDateOfBirth ? formatBirthdayMonthDay(memberDateOfBirth) : 'Not set'}
+                  {memberDateOfBirth
+                    ? formatBirthdayMonthDay(memberDateOfBirth)
+                    : memberBirthFields.monthOfBirth || 'Not set'}
+                </b>
+              </div>
+              <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
+                <span className="text-[#5B5F7A] dark:text-[#A9ACC8] shrink-0">Birth Month Group</span>
+                <b className="text-[#6C5CE7] dark:text-[#9D90FF] text-right break-words min-w-0">
+                  {memberBirthFields.birthMonthGroup ||
+                    formatBirthMonthGroupName(memberBirthFields.monthOfBirth) ||
+                    'Not assigned'}
                 </b>
               </div>
               <div className="flex items-start justify-between gap-3 py-1.5 border-b border-[#E3E5F2] dark:border-[#2D2D55]">
@@ -2180,8 +2265,12 @@ export const MemberApp: React.FC = () => {
 
       <MemberQrScannerModal
         isOpen={isQrSheetOpen}
-        onClose={() => setIsQrSheetOpen(false)}
+        onClose={() => {
+          setIsQrSheetOpen(false);
+          setQrInitialContext(undefined);
+        }}
         currentUserMember={matchedMember}
+        initialFellowshipContext={qrInitialContext}
       />
 
       <MemberProfileEditorModal

@@ -33,10 +33,12 @@ import {
   Smartphone,
   Activity,
   QrCode,
+  Scan,
 } from 'lucide-react';
 import { ProximitySimulator } from '../simulator/ProximitySimulator';
 import { UserManagement } from '../UserManagement';
 import { AddMemberModal } from './AddMemberModal';
+import { MemberQrScannerModal } from '../member/MemberQrScannerModal';
 import { SystemSettingsPanel } from './SystemSettingsPanel';
 import { MemberDirectoryTable } from './MemberDirectoryTable';
 import { ImportMembersModal } from './ImportMembersModal';
@@ -167,6 +169,7 @@ export const AdminDashboard: React.FC = () => {
 
   const [directoryDeptFilter, setDirectoryDeptFilter] = useState<string | null>(null);
   const [directoryGroupFilter, setDirectoryGroupFilter] = useState<string | null>(null);
+  const [directoryBirthMonthFilter, setDirectoryBirthMonthFilter] = useState<string | null>(null);
   const [directoryStatusFilter, setDirectoryStatusFilter] = useState<
     'all' | 'member' | 'visitor' | 'officers'
   >('all');
@@ -176,6 +179,7 @@ export const AdminDashboard: React.FC = () => {
   const [photoPreviewMember, setPhotoPreviewMember] = useState<Person | null>(null);
   const [editingServiceTarget, setEditingServiceTarget] = useState<EditableServiceTarget | null>(null);
   const [qrServiceTarget, setQrServiceTarget] = useState<ServiceQrTarget | null>(null);
+  const [isAdminQrScannerOpen, setIsAdminQrScannerOpen] = useState(false);
   const [confirmDeleteCalendarSvcId, setConfirmDeleteCalendarSvcId] = useState<string | null>(null);
   const [tickNowMs, setTickNowMs] = useState<number>(() => Date.now());
 
@@ -401,11 +405,13 @@ export const AdminDashboard: React.FC = () => {
     (opts: {
       department?: string | null;
       group?: string | null;
+      birthMonthGroup?: string | null;
       status?: 'all' | 'member' | 'visitor' | 'officers';
       displayMode?: 'table' | 'photos';
     }) => {
       setDirectoryDeptFilter(opts.department ?? 'all');
       setDirectoryGroupFilter(opts.group ?? 'all');
+      setDirectoryBirthMonthFilter(opts.birthMonthGroup ?? 'all');
       setDirectoryStatusFilter(opts.status ?? 'all');
       setDirectoryDisplayMode(opts.displayMode ?? 'table');
       navigateTab('workflows');
@@ -471,8 +477,9 @@ export const AdminDashboard: React.FC = () => {
       expectedAttendance: number;
       dwellMinutes: number;
     }) => {
-      await addService(params);
+      const created = await addService(params);
       setSelectedDateIso(params.date);
+      return created;
     },
     [addService]
   );
@@ -716,6 +723,16 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <QrCode className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
                     <span>Service QR</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsAdminQrScannerOpen(true)}
+                    title="Scan Member Pass or Service Check-In QR"
+                    className="h-8 inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white rounded-lg px-3 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Scan className="w-3.5 h-3.5 text-[#8C7DFF]" aria-hidden="true" />
+                    <span>Scan QR</span>
                   </button>
 
                   <button
@@ -1476,6 +1493,14 @@ export const AdminDashboard: React.FC = () => {
                     onInspectGroup={(grp) =>
                       openFilteredDirectory({ group: grp, department: 'all', displayMode: 'table' })
                     }
+                    onInspectBirthMonthGroup={(birthMonthGroup) =>
+                      openFilteredDirectory({
+                        birthMonthGroup,
+                        department: 'all',
+                        group: 'all',
+                        displayMode: 'table',
+                      })
+                    }
                     onSelectService={handleSelectServiceFromChild}
                     onOpenSettings={(groupIntent) => requestOpenSettings('groups', groupIntent)}
                     externalFilterQuery={externalAnalyticsQuery}
@@ -2183,6 +2208,7 @@ export const AdminDashboard: React.FC = () => {
               checkInDisabledReason={checkInEligibility.message}
               initialDepartmentFilter={directoryDeptFilter}
               initialGroupFilter={directoryGroupFilter}
+              initialBirthMonthGroupFilter={directoryBirthMonthFilter}
               initialStatusFilter={directoryStatusFilter}
               initialDisplayMode={directoryDisplayMode}
             />
@@ -2422,6 +2448,7 @@ export const AdminDashboard: React.FC = () => {
         defaultDate={selectedDateIso || getLocalIsoDate()}
         systemSettings={systemSettings}
         onSubmitService={handleCreateServiceSubmit}
+        onOpenServiceQr={setQrServiceTarget}
         onNotify={showToast}
         formatDateLabel={formatServiceDate}
       />
@@ -2434,6 +2461,7 @@ export const AdminDashboard: React.FC = () => {
         onSaveService={async (svcId, updates) => {
           await updateService(svcId, updates);
         }}
+        onOpenServiceQr={setQrServiceTarget}
         onNotify={showToast}
         formatDateLabel={formatServiceDate}
       />
@@ -2442,6 +2470,11 @@ export const AdminDashboard: React.FC = () => {
         isOpen={Boolean(qrServiceTarget)}
         service={qrServiceTarget}
         onClose={() => setQrServiceTarget(null)}
+      />
+
+      <MemberQrScannerModal
+        isOpen={isAdminQrScannerOpen}
+        onClose={() => setIsAdminQrScannerOpen(false)}
       />
 
       <BroadcastModal

@@ -20,6 +20,10 @@ import {
   findMatchingChurchGroup,
   isAssignedLeaderName,
 } from './settingsConnections';
+import {
+  ALL_BIRTH_MONTH_GROUPS,
+  resolveMemberBirthFields,
+} from './birthMonth';
 
 export interface DepartmentAnalyticRow {
   name: string;
@@ -141,6 +145,15 @@ export interface ServiceComparisonRow {
   autoPct: number;
 }
 
+export interface BirthMonthGroupRow {
+  monthIndex: number;
+  monthName: string;
+  groupName: string;
+  totalMembers: number;
+  presentCount: number;
+  pctOfRoster: number;
+}
+
 export interface DashboardAnalyticsResult {
   activeService: {
     id: string;
@@ -206,6 +219,7 @@ export interface DashboardAnalyticsResult {
     byCategory: Record<string, number>;
   };
   leadership: LeadershipAnalyticsSummary;
+  birthMonthGroups: BirthMonthGroupRow[];
   serviceComparisons: ServiceComparisonRow[];
   giving: {
     totalPaidGhs: number;
@@ -434,18 +448,16 @@ export function computeDashboardAnalytics(
     if (normalizeLabel(m.imageUrl)) photoCount++;
     if (normalizeLabel(m.residentialDigitalAddress)) digitalAddressCount++;
 
-    const dob = normalizeLabel(m.dateOfBirth);
-    const mob = normalizeLabel(m.monthOfBirth).toLowerCase();
-    if (dob || mob) {
+    const resolvedBirth = resolveMemberBirthFields({
+      dateOfBirth: m.dateOfBirth,
+      monthOfBirth: m.monthOfBirth,
+      birthMonthGroup: m.birthMonthGroup,
+    });
+    if (resolvedBirth.monthOfBirth) {
       birthdayCount++;
-      let isSameMonth = false;
-      if (dob && /^\d{4}-\d{2}-\d{2}/.test(dob)) {
-        const monthPart = Number(dob.slice(5, 7));
-        if (monthPart - 1 === currentMonthIndex) isSameMonth = true;
-      } else if (mob && (mob.startsWith(currentMonthShort) || mob === currentMonthLong)) {
-        isSameMonth = true;
+      if (resolvedBirth.monthOfBirth.toLowerCase() === currentMonthLong) {
+        birthdaysThisMonthCount++;
       }
-      if (isSameMonth) birthdaysThisMonthCount++;
     }
 
     const deptLabel = normalizeLabel(m.department) || 'General Congregation';
@@ -798,6 +810,37 @@ export function computeDashboardAnalytics(
     leaders,
   };
 
+  // 3c. Automatic Birth Month Fellowship Groups
+  const birthMonthBuckets = new Map<string, { totalMembers: number; presentCount: number }>();
+  for (const bg of ALL_BIRTH_MONTH_GROUPS) {
+    birthMonthBuckets.set(bg.monthName, { totalMembers: 0, presentCount: 0 });
+  }
+  for (const m of members) {
+    const resolvedBirth = resolveMemberBirthFields({
+      dateOfBirth: m.dateOfBirth,
+      monthOfBirth: m.monthOfBirth,
+      birthMonthGroup: m.birthMonthGroup,
+    });
+    if (!resolvedBirth.monthOfBirth) continue;
+    const bucket = birthMonthBuckets.get(resolvedBirth.monthOfBirth);
+    if (!bucket) continue;
+    bucket.totalMembers++;
+    if (checkedInPersonIds.has(m.id)) {
+      bucket.presentCount++;
+    }
+  }
+  const birthMonthGroups: BirthMonthGroupRow[] = ALL_BIRTH_MONTH_GROUPS.map((bg) => {
+    const bucket = birthMonthBuckets.get(bg.monthName) || { totalMembers: 0, presentCount: 0 };
+    return {
+      monthIndex: bg.monthIndex,
+      monthName: bg.monthName,
+      groupName: bg.groupName,
+      totalMembers: bucket.totalMembers,
+      presentCount: bucket.presentCount,
+      pctOfRoster: pct(bucket.totalMembers, totalMembers),
+    };
+  });
+
   // 4. Multi-Service Comparison
   const serviceComparisons: ServiceComparisonRow[] = services.map((svc) => {
     const records = attendanceRecords.filter(
@@ -949,6 +992,7 @@ export function computeDashboardAnalytics(
     groups,
     groupCounts,
     leadership,
+    birthMonthGroups,
     serviceComparisons,
     giving: {
       totalPaidGhs: Math.round((totalPaidMinor / 100) * 100) / 100,

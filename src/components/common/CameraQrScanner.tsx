@@ -245,7 +245,7 @@ export const CameraQrScanner: React.FC<CameraQrScannerProps> = ({
               ctx.drawImage(video, 0, 0, width, height);
               const imageData = ctx.getImageData(0, 0, width, height);
               const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'dontInvert',
+                inversionAttempts: 'attemptBoth',
               });
 
               if (code && code.data) {
@@ -305,7 +305,9 @@ export const CameraQrScanner: React.FC<CameraQrScannerProps> = ({
         if (!ctx) return;
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, img.width, img.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
         if (code && code.data) {
           playBeep();
           setLastScannedCode(code.data);

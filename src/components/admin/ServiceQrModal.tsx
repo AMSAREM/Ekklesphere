@@ -68,6 +68,7 @@ export const ServiceQrModal: React.FC<ServiceQrModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedPayload, setCopiedPayload] = useState(false);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
 
   const fetchServiceQr = async (serviceId: string) => {
@@ -105,6 +106,7 @@ export const ServiceQrModal: React.FC<ServiceQrModalProps> = ({
       setQrMeta(null);
       setErrorMsg(null);
       setCopiedLink(false);
+      setCopiedPayload(false);
       return;
     }
     void fetchServiceQr(service.id);
@@ -144,6 +146,19 @@ export const ServiceQrModal: React.FC<ServiceQrModalProps> = ({
       window.setTimeout(() => setCopiedLink(false), 2500);
     } catch {
       showToast('Clipboard access unavailable — use Download Poster or scan directly.');
+    }
+  };
+
+  const handleCopyPayload = async () => {
+    const payloadValue = qrMeta?.qrPayload || effectiveUrl;
+    if (!payloadValue) return;
+    try {
+      await navigator.clipboard.writeText(payloadValue);
+      setCopiedPayload(true);
+      showToast(`Signed QR code copied for ${service.name}`);
+      window.setTimeout(() => setCopiedPayload(false), 2500);
+    } catch {
+      showToast('Clipboard access unavailable — copy the check-in link instead.');
     }
   };
 
@@ -335,7 +350,7 @@ export const ServiceQrModal: React.FC<ServiceQrModalProps> = ({
                   title={`Service check-in QR code for ${service.name}`}
                 />
                 <div className="mt-3 pt-3 border-t border-slate-100 w-full flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-medium">Service Code</span>
+                  <span className="text-slate-500 font-medium">Staff Ref Code</span>
                   <span className="font-mono font-bold text-[#1D1B3A] tabular-nums">
                     {shortCode}
                   </span>
@@ -355,35 +370,54 @@ export const ServiceQrModal: React.FC<ServiceQrModalProps> = ({
               </div>
 
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] text-center leading-relaxed">
-                Members can scan this QR code with their phone camera or inside the Ekklesphere Check-in Scanner to mark attendance for{' '}
+                Members can scan this QR code with their phone camera or inside any Ekklesphere Check-In Scanner to mark attendance for{' '}
                 <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA]">
                   {service.name}
                 </span>
                 .
               </p>
 
-              {/* Check-in Link Preview */}
-              <div className="p-2.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] truncate">
+              {/* Check-in Link & Signed Code Copy Controls */}
+              <div className="p-2.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8] truncate flex-1 min-w-[140px]">
                   {effectiveUrl}
                 </span>
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  {copiedLink ? (
-                    <>
-                      <Check className="w-3 h-3 text-emerald-500" />
-                      <span>Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3 text-[#6D5CF2]" />
-                      <span>Copy Link</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleCopyPayload}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {copiedPayload ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-500" />
+                        <span>Code Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <QrCode className="w-3 h-3 text-[#6D5CF2]" />
+                        <span>Copy Code</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] hover:border-[#6D5CF2] cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {copiedLink ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-500" />
+                        <span>Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3 text-[#6D5CF2]" />
+                        <span>Copy Link</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </>
           ) : null}

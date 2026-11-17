@@ -26,6 +26,7 @@ import {
   normalizeIncomingGroupCategory,
   sanitizeCustomGroupCategories,
 } from '../shared/groupCategories.ts';
+import { resolveMemberBirthFields } from '../utils/birthMonth.ts';
 import type {
   BillingCycle,
   ChurchGroup,
@@ -5911,6 +5912,7 @@ class PlatformStore {
       'homeCellGroup',
       'groupName',
       'monthOfBirth',
+      'birthMonthGroup',
       'maritalStatus',
       'spouseName',
       'numberOfChildren',
@@ -5977,6 +5979,12 @@ class PlatformStore {
       custom.groupName ||
       'General Congregation';
     const phoneE164 = row.phone || row.phone_e164 || row.phoneE164 || '';
+    const rawDob = row.date_of_birth ?? custom.dateOfBirth;
+    const birthFields = resolveMemberBirthFields({
+      dateOfBirth: rawDob,
+      monthOfBirth: row.month_of_birth ?? custom.monthOfBirth,
+      birthMonthGroup: custom.birthMonthGroup,
+    });
 
     return {
       ...custom,
@@ -5999,7 +6007,7 @@ class PlatformStore {
       remarks: row.remarks ?? custom.remarks,
       notes: row.notes ?? custom.notes,
       gender: row.gender ?? custom.gender ?? 'other',
-      dateOfBirth: row.date_of_birth ?? custom.dateOfBirth,
+      dateOfBirth: rawDob,
       placeOfResidence: row.place_of_residence ?? custom.placeOfResidence,
       residentialDigitalAddress:
         row.residential_digital_address ?? custom.residentialDigitalAddress,
@@ -6007,7 +6015,8 @@ class PlatformStore {
       occupation: row.occupation ?? custom.occupation,
       homeCellGroup: groupName,
       groupName,
-      monthOfBirth: row.month_of_birth ?? custom.monthOfBirth,
+      monthOfBirth: birthFields.monthOfBirth,
+      birthMonthGroup: birthFields.birthMonthGroup,
       maritalStatus: row.marital_status ?? custom.maritalStatus ?? 'Single',
       spouseName: row.spouse_name ?? custom.spouseName,
       numberOfChildren:
@@ -6052,7 +6061,18 @@ class PlatformStore {
       }
       return (data || []).map((row) => this.mapSupabaseMemberRow(orgId, row));
     }
-    return [...(this.membersByOrg.get(orgId) || [])];
+    return (this.membersByOrg.get(orgId) || []).map((m) => {
+      const birthFields = resolveMemberBirthFields({
+        dateOfBirth: m.dateOfBirth,
+        monthOfBirth: m.monthOfBirth,
+        birthMonthGroup: m.birthMonthGroup,
+      });
+      return {
+        ...m,
+        monthOfBirth: birthFields.monthOfBirth ?? m.monthOfBirth,
+        birthMonthGroup: birthFields.birthMonthGroup ?? m.birthMonthGroup,
+      };
+    });
   }
 
   public async getMemberCountForOrg(organizationId: string): Promise<number> {
@@ -6110,7 +6130,18 @@ class PlatformStore {
       payload.dateOfBirth && /^\d{4}-\d{2}-\d{2}$/.test(String(payload.dateOfBirth))
         ? String(payload.dateOfBirth)
         : null;
-    const customAttributes = this.extractMemberCustomAttributes(payload);
+    const birthFields = resolveMemberBirthFields({
+      dateOfBirth: dobVal,
+      monthOfBirth: payload.monthOfBirth,
+      birthMonthGroup: payload.birthMonthGroup,
+    });
+    const normalizedCreatePayload = {
+      ...payload,
+      dateOfBirth: dobVal || undefined,
+      monthOfBirth: birthFields.monthOfBirth,
+      birthMonthGroup: birthFields.birthMonthGroup,
+    };
+    const customAttributes = this.extractMemberCustomAttributes(normalizedCreatePayload);
 
     const resolvedCreateImage = [
       payload.imageUrl,
@@ -6157,7 +6188,7 @@ class PlatformStore {
         residential_digital_address: payload.residentialDigitalAddress || null,
         hometown: payload.hometown || null,
         occupation: payload.occupation || null,
-        month_of_birth: payload.monthOfBirth || null,
+        month_of_birth: birthFields.monthOfBirth || null,
         marital_status: payload.maritalStatus || null,
         spouse_name: payload.spouseName || null,
         number_of_children:
@@ -6221,7 +6252,7 @@ class PlatformStore {
       };
     } else {
       const newMember = {
-        ...payload,
+        ...normalizedCreatePayload,
         id: payload.id || randomUUID(),
         tenantId: orgId,
         firstName,
@@ -6522,9 +6553,32 @@ class PlatformStore {
           ? (existingRow.custom_attributes as Record<string, unknown>)
           : {};
 
+      const nextDobForBirth =
+        updates.dateOfBirth !== undefined
+          ? updates.dateOfBirth
+            ? String(updates.dateOfBirth)
+            : null
+          : existingRow?.date_of_birth ?? (existingCustom.dateOfBirth as string | undefined);
+      const nextMonthInput =
+        updates.dateOfBirth !== undefined && updates.dateOfBirth
+          ? undefined
+          : updates.monthOfBirth !== undefined
+          ? updates.monthOfBirth
+          : existingRow?.month_of_birth ?? (existingCustom.monthOfBirth as string | undefined);
+      const syncedBirth = resolveMemberBirthFields({
+        dateOfBirth: nextDobForBirth,
+        monthOfBirth: nextMonthInput,
+        birthMonthGroup: updates.birthMonthGroup ?? (existingCustom.birthMonthGroup as string | undefined),
+      });
+      const syncedUpdates = {
+        ...updates,
+        monthOfBirth: syncedBirth.monthOfBirth ?? (updates.dateOfBirth === '' ? '' : updates.monthOfBirth),
+        birthMonthGroup: syncedBirth.birthMonthGroup ?? (updates.dateOfBirth === '' && !syncedBirth.monthOfBirth ? '' : updates.birthMonthGroup),
+      };
+
       const patch: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
-        custom_attributes: this.extractMemberCustomAttributes(updates, existingCustom),
+        custom_attributes: this.extractMemberCustomAttributes(syncedUpdates, existingCustom),
       };
       const firstName = updates.firstName ?? existingRow?.first_name;
       const lastName = updates.lastName ?? existingRow?.last_name;
@@ -6649,9 +6703,25 @@ class PlatformStore {
             : undefined
           : list[idx].email;
 
+      const nextDobForBirth =
+        updates.dateOfBirth !== undefined ? updates.dateOfBirth : list[idx].dateOfBirth;
+      const nextMonthInput =
+        updates.dateOfBirth !== undefined && updates.dateOfBirth
+          ? undefined
+          : updates.monthOfBirth !== undefined
+          ? updates.monthOfBirth
+          : list[idx].monthOfBirth;
+      const syncedBirth = resolveMemberBirthFields({
+        dateOfBirth: nextDobForBirth,
+        monthOfBirth: nextMonthInput,
+        birthMonthGroup: updates.birthMonthGroup ?? list[idx].birthMonthGroup,
+      });
+
       const merged = {
         ...list[idx],
         ...updates,
+        monthOfBirth: syncedBirth.monthOfBirth,
+        birthMonthGroup: syncedBirth.birthMonthGroup,
         email: nextEmail,
         phoneE164: nextPhone,
         phoneNumber: nextPhone,
@@ -6819,9 +6889,22 @@ class PlatformStore {
       safeUpdates.phoneE164 = nextPhone;
       safeUpdates.phoneNumber = nextPhone;
     }
-    if (safeUpdates.dateOfBirth && !safeUpdates.monthOfBirth) {
-      const derivedMonth = deriveMonthName(safeUpdates.dateOfBirth);
-      if (derivedMonth) safeUpdates.monthOfBirth = derivedMonth;
+    const effectiveDob =
+      safeUpdates.dateOfBirth !== undefined ? safeUpdates.dateOfBirth : matched?.dateOfBirth;
+    const effectiveMonthInput =
+      safeUpdates.dateOfBirth !== undefined && safeUpdates.dateOfBirth
+        ? undefined
+        : safeUpdates.monthOfBirth !== undefined
+        ? safeUpdates.monthOfBirth
+        : matched?.monthOfBirth;
+    const syncedBirth = resolveMemberBirthFields({
+      dateOfBirth: effectiveDob,
+      monthOfBirth: effectiveMonthInput,
+      birthMonthGroup: updates.birthMonthGroup ?? matched?.birthMonthGroup,
+    });
+    if (syncedBirth.monthOfBirth) {
+      safeUpdates.monthOfBirth = syncedBirth.monthOfBirth;
+      safeUpdates.birthMonthGroup = syncedBirth.birthMonthGroup;
     }
     if (safeUpdates.homeCellGroup && !safeUpdates.groupName) {
       safeUpdates.groupName = safeUpdates.homeCellGroup;

@@ -343,6 +343,14 @@ describe('computeDashboardAnalytics', () => {
     expect(result.membership.completeness.photoCount).toBe(1);
     expect(result.membership.completeness.digitalAddressCount).toBe(1);
 
+    // Automatic Birth Month Groups rollup (connected to DOB / monthOfBirth)
+    expect(result.birthMonthGroups).toHaveLength(12);
+    const novGroup = result.birthMonthGroups.find((g) => g.monthName === 'November');
+    expect(novGroup?.groupName).toBe('November Birthday Group');
+    expect(novGroup?.totalMembers).toBe(3);
+    expect(novGroup?.presentCount).toBe(2);
+    expect(novGroup?.pctOfRoster).toBe(75);
+
     // Giving
     expect(result.giving.totalPaidGhs).toBe(250);
     expect(result.giving.donationsCount).toBe(1);
@@ -530,5 +538,7 @@ describe('computeDashboardAnalytics', () => {
     expect(result.leadership.distinctLeadersCount).toBe(0);
     expect(result.leadership.leadershipCoveragePct).toBe(0);
     expect(result.giving.totalPaidGhs).toBe(0);
+    expect(result.birthMonthGroups).toHaveLength(12);
+    expect(result.birthMonthGroups.every((g) => g.totalMembers === 0 && g.presentCount === 0)).toBe(true);
   });
 });

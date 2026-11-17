@@ -49,6 +49,10 @@ import {
   probeImageProxyDiagnostic,
   rememberWorkingImageUrl,
 } from '../../utils/imageUrl';
+import {
+  ALL_BIRTH_MONTH_GROUPS,
+  resolveMemberBirthFields,
+} from '../../utils/birthMonth';
 
 interface MemberDirectoryTableProps {
   members: Person[];
@@ -62,6 +66,7 @@ interface MemberDirectoryTableProps {
   checkInDisabledReason?: string;
   initialDepartmentFilter?: string | null;
   initialGroupFilter?: string | null;
+  initialBirthMonthGroupFilter?: string | null;
   initialStatusFilter?: 'all' | 'member' | 'visitor' | 'officers' | null;
   initialPortfolioFilter?: string | null;
   initialDisplayMode?: 'table' | 'photos';
@@ -79,6 +84,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   checkInDisabledReason,
   initialDepartmentFilter,
   initialGroupFilter,
+  initialBirthMonthGroupFilter,
   initialStatusFilter,
   initialPortfolioFilter,
   initialDisplayMode,
@@ -86,6 +92,9 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
   const { churchGroups, requestOpenSettings, requestOpenUserManagement } = useEkklesphere();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>(initialGroupFilter || 'all');
+  const [selectedBirthMonthGroupFilter, setSelectedBirthMonthGroupFilter] = useState<string>(
+    initialBirthMonthGroupFilter || 'all'
+  );
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>(
     initialDepartmentFilter || 'all'
   );
@@ -108,6 +117,12 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
       setSelectedGroupFilter(initialGroupFilter || 'all');
     }
   }, [initialGroupFilter]);
+
+  useEffect(() => {
+    if (initialBirthMonthGroupFilter !== undefined) {
+      setSelectedBirthMonthGroupFilter(initialBirthMonthGroupFilter || 'all');
+    }
+  }, [initialBirthMonthGroupFilter]);
 
   useEffect(() => {
     if (initialStatusFilter !== undefined) {
@@ -301,9 +316,26 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         }
       }
 
+      // Birth Month Group filter
+      if (selectedBirthMonthGroupFilter !== 'all') {
+        const resolvedBirth = resolveMemberBirthFields({
+          dateOfBirth: m.dateOfBirth,
+          monthOfBirth: m.monthOfBirth,
+          birthMonthGroup: m.birthMonthGroup,
+        });
+        if ((resolvedBirth.birthMonthGroup || '').toLowerCase() !== selectedBirthMonthGroupFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
       // Search Query
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
+      const resolvedBirth = resolveMemberBirthFields({
+        dateOfBirth: m.dateOfBirth,
+        monthOfBirth: m.monthOfBirth,
+        birthMonthGroup: m.birthMonthGroup,
+      });
 
       return (
         (m.firstName && m.firstName.toLowerCase().includes(q)) ||
@@ -318,6 +350,8 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
         (m.department && m.department.toLowerCase().includes(q)) ||
         (m.homeCellGroup && m.homeCellGroup.toLowerCase().includes(q)) ||
         (m.squads && m.squads.toLowerCase().includes(q)) ||
+        (resolvedBirth.monthOfBirth && resolvedBirth.monthOfBirth.toLowerCase().includes(q)) ||
+        (resolvedBirth.birthMonthGroup && resolvedBirth.birthMonthGroup.toLowerCase().includes(q)) ||
         getMemberPortfolio(m).toLowerCase().includes(q)
       );
     });
@@ -328,6 +362,7 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
     selectedPortfolioFilter,
     selectedGroupFilter,
     selectedDepartmentFilter,
+    selectedBirthMonthGroupFilter,
     photosOnlyFilter,
     displayMode,
   ]);
@@ -588,6 +623,21 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
             {cellGroups.map((g) => (
               <option key={g} value={g}>
                 {g}
+              </option>
+            ))}
+          </select>
+
+          {/* Birth Month Group Filter */}
+          <select
+            aria-label="Filter by birth month group"
+            value={selectedBirthMonthGroupFilter}
+            onChange={(e) => setSelectedBirthMonthGroupFilter(e.target.value)}
+            className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none"
+          >
+            <option value="all">All Birth Month Groups</option>
+            {ALL_BIRTH_MONTH_GROUPS.map((bg) => (
+              <option key={bg.groupName} value={bg.groupName}>
+                {bg.groupName}
               </option>
             ))}
           </select>
@@ -1047,7 +1097,26 @@ export const MemberDirectoryTable: React.FC<MemberDirectoryTableProps> = ({
                       {/* 18. MONTH OF BIRTH */}
                       {visibleColumns['MONTH OF BIRTH'] && (
                         <td className="py-3 px-3.5 text-[#666A86] dark:text-[#A9ACC8]">
-                          {member.monthOfBirth || (member.dateOfBirth ? new Date(member.dateOfBirth).toLocaleString('default', { month: 'long' }) : '—')}
+                          {(() => {
+                            const resolved = resolveMemberBirthFields({
+                              dateOfBirth: member.dateOfBirth,
+                              monthOfBirth: member.monthOfBirth,
+                              birthMonthGroup: member.birthMonthGroup,
+                            });
+                            if (!resolved.monthOfBirth) return '—';
+                            return (
+                              <div className="leading-tight">
+                                <span className="font-semibold text-[#1D1B3A] dark:text-[#F2F2FA] block">
+                                  {resolved.monthOfBirth}
+                                </span>
+                                {resolved.birthMonthGroup && (
+                                  <span className="text-[10px] text-[#6D5CF2] dark:text-[#9D90FF]">
+                                    {resolved.birthMonthGroup}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                       )}
 

@@ -45,6 +45,7 @@ interface DashboardDeepAnalyticsProps {
   onChangeLens: (lens: AnalyticsLens) => void;
   onInspectDepartment: (departmentName: string) => void;
   onInspectGroup: (groupName: string) => void;
+  onInspectBirthMonthGroup?: (birthMonthGroupName: string) => void;
   onSelectService: (serviceId: string) => void;
   onOpenSettings: (groupIntent?: SettingsGroupIntent) => void;
   onAddMember: () => void;
@@ -81,6 +82,7 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
   onChangeLens,
   onInspectDepartment,
   onInspectGroup,
+  onInspectBirthMonthGroup,
   onSelectService,
   onOpenSettings,
   onAddMember,
@@ -1372,6 +1374,60 @@ export const DashboardDeepAnalytics: React.FC<DashboardDeepAnalyticsProps> = Rea
               ))}
             </div>
           </div>
+
+          {/* Automatic Birth Month Fellowship Groups Breakdown */}
+          {analytics.birthMonthGroups && analytics.birthMonthGroups.length > 0 && (
+            <div className="rounded-2xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F8F9FD] dark:bg-[#14142E] p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Automatic Birth Month Groups
+                  </h4>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Every member is grouped automatically from their Date of Birth / Month of Birth.
+                  </p>
+                </div>
+                <span className="text-[11px] font-semibold text-[#6D5CF2] dark:text-[#9D90FF] tabular-nums">
+                  {analytics.birthMonthGroups.filter((g) => g.totalMembers > 0).length} of 12 active months
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 tabular-nums">
+                {analytics.birthMonthGroups.map((bg) => {
+                  const isCurrentMonth = bg.monthIndex === new Date().getMonth();
+                  return (
+                    <button
+                      key={bg.groupName}
+                      type="button"
+                      disabled={bg.totalMembers === 0 || !onInspectBirthMonthGroup}
+                      onClick={() => onInspectBirthMonthGroup?.(bg.groupName)}
+                      className={`p-2.5 rounded-xl border text-left transition-colors ${
+                        isCurrentMonth
+                          ? 'bg-[#EFEDFF] dark:bg-[#23204E] border-[#6D5CF2]/50'
+                          : 'bg-white dark:bg-[#1D1D3D] border-[#E9EBF5] dark:border-[#2D2D55]'
+                      } ${
+                        bg.totalMembers > 0 && onInspectBirthMonthGroup
+                          ? 'hover:border-[#6D5CF2] cursor-pointer'
+                          : 'opacity-70 cursor-default'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[11px] font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                          {bg.monthName}
+                        </span>
+                        <span className="text-xs font-extrabold text-[#6D5CF2] dark:text-[#9D90FF]">
+                          {bg.totalMembers}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] block truncate mt-0.5">
+                        {bg.presentCount > 0 ? `${bg.presentCount} present today` : bg.groupName}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

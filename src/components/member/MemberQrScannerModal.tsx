@@ -1,18 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Camera,
-  Flashlight,
-  RefreshCw,
   QrCode,
   CheckCircle2,
   Users,
   Search,
-  MapPin,
   Clock,
   ShieldCheck,
-  ChevronRight,
-  ArrowLeft,
   Scan,
   Volume2,
   VolumeX,
@@ -30,12 +25,14 @@ interface MemberQrScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUserMember?: Person;
+  initialFellowshipContext?: string;
 }
 
 export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
   isOpen,
   onClose,
   currentUserMember,
+  initialFellowshipContext,
 }) => {
   const {
     members,
@@ -67,7 +64,17 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
     { id: string; label: string; time: string }[]
   >([]);
   const [searchFilter, setSearchFilter] = useState('');
-  const [fellowshipContext, setFellowshipContext] = useState<string>(currentService.name);
+  const [fellowshipContext, setFellowshipContext] = useState<string>(
+    initialFellowshipContext || currentService.name
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setFellowshipContext(initialFellowshipContext || currentService.name);
+    setScannedMember(null);
+    setScannedServiceResult(null);
+    setIsScanning(true);
+  }, [isOpen, initialFellowshipContext, currentService.name]);
 
   if (!isOpen) return null;
 
@@ -503,11 +510,12 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                       className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 outline-none focus:border-[#6D5CF2]"
                     />
                   </div>
-                  {parseServiceQrPayload(searchFilter, services) && (
+                  {(parseServiceQrPayload(searchFilter, services) ||
+                    findMemberByScannedId(members, searchFilter)) && (
                     <button
                       type="button"
                       onClick={() => {
-                        void handleProcessServiceQr(searchFilter);
+                        handleDecodedString(searchFilter);
                         setSearchFilter('');
                       }}
                       className="px-3 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold whitespace-nowrap cursor-pointer"
@@ -520,12 +528,13 @@ export const MemberQrScannerModal: React.FC<MemberQrScannerModalProps> = ({
                 {/* Carousel of available members */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                   {availableMembers.slice(0, 9).map((member) => {
+                    const targetSvcId = selectedGatheringServiceId || currentService.id;
                     const isChecked =
-                      Boolean(currentService.id) &&
+                      Boolean(targetSvcId) &&
                       attendanceRecords.some(
                         (r) =>
                           r.personId === member.id &&
-                          (r.serviceInstanceId === currentService.id ||
+                          (r.serviceInstanceId === targetSvcId ||
                             (!r.serviceInstanceId && services.length === 1))
                       );
                     return (

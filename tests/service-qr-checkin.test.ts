@@ -29,6 +29,14 @@ describe('Scheduled Service QR Check-In System', () => {
     organization_id: TEST_ANCHOR_ORGANIZATION_ID,
   });
 
+  const financeToken = signToken({
+    id: 'user-qr-finance',
+    email: 'qr-finance@ekklesphere.church',
+    role: 'finance',
+    name: 'Finance Steward',
+    organization_id: TEST_ANCHOR_ORGANIZATION_ID,
+  });
+
   const memberToken = signToken({
     id: 'user-qr-member-login',
     email: 'kofi.boateng@ekklesphere.church',
@@ -120,7 +128,13 @@ describe('Scheduled Service QR Check-In System', () => {
       .set('Authorization', `Bearer ${memberToken}`);
     expect(memberQrRes.status).toBe(403);
 
-    // Cross-org admin gets 404 for another tenant's service
+    // Cross-org admin with an active license gets 404 for another tenant's service
+    await platformStore.createOrganization({
+      id: OTHER_ORG_ID,
+      name: 'Other Church Org',
+      slug: 'other-church-qr-test',
+      autoIssueTrial: true,
+    });
     const crossOrgRes = await request(app)
       .get(`/api/events/${liveSvc.id}/qr`)
       .set('Authorization', `Bearer ${otherOrgAdminToken}`);
@@ -137,6 +151,13 @@ describe('Scheduled Service QR Check-In System', () => {
     expect(usherQrRes.body.qrToken.length).toBeGreaterThanOrEqual(16);
     expect(usherQrRes.body.checkInPath).toContain(`serviceId=${liveSvc.id}`);
     expect(usherQrRes.body.checkInPath).toContain(`token=${usherQrRes.body.qrToken}`);
+
+    // Org finance officer can also retrieve service QR for portal operations
+    const financeQrRes = await request(app)
+      .get(`/api/events/${liveSvc.id}/qr`)
+      .set('Authorization', `Bearer ${financeToken}`);
+    expect(financeQrRes.status).toBe(200);
+    expect(financeQrRes.body.qrToken).toBe(usherQrRes.body.qrToken);
   });
 
   it('completes member & group_leader self check-in via signed Service QR and records posted_qr attendance', async () => {

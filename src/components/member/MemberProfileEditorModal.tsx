@@ -22,6 +22,12 @@ import {
   mergeSelectableDepartments,
 } from '../../utils/settingsConnections';
 import { CHURCH_PORTFOLIO_OPTIONS, CHURCH_PORTFOLIOS } from '../../constants/portfolios';
+import {
+  BIRTH_MONTH_NAMES,
+  deriveMonthOfBirth,
+  formatBirthMonthGroupName,
+  resolveMemberBirthFields,
+} from '../../utils/birthMonth';
 
 interface MemberProfileEditorModalProps {
   isOpen: boolean;
@@ -102,6 +108,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
   const [preferredName, setPreferredName] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other'>('other');
   const [dateOfBirth, setDateOfBirth] = useState('');
+  const [monthOfBirth, setMonthOfBirth] = useState('');
   const [email, setEmail] = useState('');
   const [phoneE164, setPhoneE164] = useState('');
   const [occupation, setOccupation] = useState('');
@@ -158,6 +165,13 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
         : 'other'
     );
     setDateOfBirth(member?.dateOfBirth || '');
+    setMonthOfBirth(
+      resolveMemberBirthFields({
+        dateOfBirth: member?.dateOfBirth,
+        monthOfBirth: member?.monthOfBirth,
+        birthMonthGroup: member?.birthMonthGroup,
+      }).monthOfBirth || ''
+    );
     setEmail(member?.email || fallbackEmail || currentUser?.email || '');
     setPhoneE164(member?.phoneE164 || fallbackPhone || currentUser?.phone || '');
     setOccupation(member?.occupation || '');
@@ -255,6 +269,11 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
     const nextPortfolio =
       (portfolio === 'Other' ? customPortfolio.trim() : portfolio.trim()) || 'Member';
 
+    const resolvedBirth = resolveMemberBirthFields({
+      dateOfBirth: dateOfBirth.trim() || undefined,
+      monthOfBirth: monthOfBirth.trim() || undefined,
+    });
+
     setIsSaving(true);
     try {
       await updateOwnProfile({
@@ -264,6 +283,8 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
         preferredName: preferredName.trim() || `${cleanFirst} ${cleanLast}`.trim(),
         gender,
         dateOfBirth: dateOfBirth.trim(),
+        monthOfBirth: resolvedBirth.monthOfBirth || '',
+        birthMonthGroup: resolvedBirth.birthMonthGroup || '',
         email: cleanEmail,
         phoneE164: phoneE164.trim(),
         phoneNumber: phoneE164.trim(),
@@ -539,7 +560,7 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                   <div className="min-w-0">
                     <label htmlFor="mpe-gender" className={labelClass}>
                       Gender
@@ -563,11 +584,53 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
                       id="mpe-dob"
                       type="date"
                       value={dateOfBirth}
-                      onChange={(e) => setDateOfBirth(e.target.value)}
+                      onChange={(e) => {
+                        const nextDob = e.target.value;
+                        setDateOfBirth(nextDob);
+                        const derived = deriveMonthOfBirth(nextDob, undefined);
+                        if (derived) {
+                          setMonthOfBirth(derived);
+                        } else if (!nextDob) {
+                          setMonthOfBirth('');
+                        }
+                      }}
                       className={inputClass}
                     />
                   </div>
+                  <div className="min-w-0">
+                    <label htmlFor="mpe-mob" className={labelClass}>
+                      Month of Birth
+                    </label>
+                    <select
+                      id="mpe-mob"
+                      value={deriveMonthOfBirth(dateOfBirth, monthOfBirth) || ''}
+                      disabled={Boolean(deriveMonthOfBirth(dateOfBirth, undefined))}
+                      onChange={(e) => setMonthOfBirth(e.target.value)}
+                      className={`${inputClass} disabled:opacity-80`}
+                    >
+                      <option value="">Select month...</option>
+                      {BIRTH_MONTH_NAMES.map((mName) => (
+                        <option key={mName} value={mName}>
+                          {mName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+                {(() => {
+                  const resolved = resolveMemberBirthFields({ dateOfBirth, monthOfBirth });
+                  const groupLabel = formatBirthMonthGroupName(resolved.monthOfBirth);
+                  return (
+                    <div className="px-3.5 py-2.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E3E5F2] dark:border-[#2D2D55] flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-[#5B5F7A] dark:text-[#A9ACC8]">
+                        Automatic Birth Month Fellowship Group
+                      </span>
+                      <span className="font-bold text-[#6D5CF2] dark:text-[#9D90FF]">
+                        {groupLabel || 'Assigned automatically when Date or Month of Birth is saved'}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

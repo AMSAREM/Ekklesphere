@@ -3426,7 +3426,7 @@ app.delete(
 
 app.get(
   ['/api/v1/events/:id/qr', '/api/events/:id/qr', '/api/services/:id/qr'],
-  requireAuthRole('admin', 'pastor', 'usher', 'super_admin', 'creator'),
+  requireAuthRole('admin', 'pastor', 'usher', 'finance', 'super_admin', 'creator'),
   requireActiveLicense,
   async (req: Request, res: Response) => {
     try {
@@ -3875,6 +3875,7 @@ const updateOwnProfileSchema = z.object({
   gender: z.enum(['male', 'female', 'other']).optional(),
   dateOfBirth: optionalIsoDateSchema,
   monthOfBirth: z.string().trim().max(32).optional(),
+  birthMonthGroup: z.string().trim().max(64).optional(),
   placeOfResidence: z.string().trim().max(160).optional(),
   specificLocation: z.string().trim().max(160).optional(),
   residentialDigitalAddress: z.string().trim().max(64).optional(),

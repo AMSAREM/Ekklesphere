@@ -10,10 +10,23 @@ import {
   Navigation,
   AlertTriangle,
   Target,
+  QrCode,
+  Camera,
+  CameraOff,
+  Copy,
+  Check,
+  CheckCircle2,
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { GeofenceApiConsole } from './GeofenceApiConsole';
+import { CameraQrScanner } from '../common/CameraQrScanner';
+import { ServiceQrModal, ServiceQrTarget } from '../admin/ServiceQrModal';
+import { findMemberByScannedId } from '../member/DigitalMemberCard';
+import { buildServiceQrCheckInUrl, parseServiceQrPayload } from '../../utils/serviceQr';
+import { isPlaceholderServiceId } from '../../utils/serviceStatus';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
+const QR_STAFF_ROLES = new Set(['admin', 'pastor', 'usher', 'finance', 'super_admin', 'creator']);
 
 function computeDistanceAndBearing(
   premiseLat: number,
@@ -43,16 +56,21 @@ function computeDistanceAndBearing(
 }
 
 export const ProximitySimulator: React.FC = () => {
-  const [viewMode, setViewMode] = useState<'radar' | 'apiConsole'>('apiConsole');
+  const [viewMode, setViewMode] = useState<'radar' | 'apiConsole' | 'qrCheckin'>('apiConsole');
   const {
     systemSettings,
     currentUser,
     currentService,
+    services,
+    activeServiceId,
+    setActiveServiceId,
+    members,
     hasScheduledService,
     checkInEligibility,
     attendanceRecords,
     auditLogs,
     checkInPerson,
+    checkInWithServiceQr,
     setChurchPremiseLocation,
     refreshLivePremise,
     showToast,
@@ -67,6 +85,95 @@ export const ProximitySimulator: React.FC = () => {
     accuracy: number;
   } | null>(null);
   const watchRef = useRef<number | null>(null);
+
+  // QR Check-In Simulator State
+  const [selectedQrServiceId, setSelectedQrServiceId] = useState<string>(
+    activeServiceId || currentService?.id || ''
+  );
+  const [qrMeta, setQrMeta] = useState<{
+    serviceId: string;
+    serviceName: string;
+    date?: string;
+    status: 'live' | 'closed';
+    organizationId: string;
+    shortCode: string;
+    qrToken: string;
+    qrPayload: string;
+    checkInUrl: string;
+  } | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const [copiedQrLink, setCopiedQrLink] = useState(false);
+  const [qrCameraActive, setQrCameraActive] = useState(false);
+  const [manualQrInput, setManualQrInput] = useState('');
+  const [isVerifyingQr, setIsVerifyingQr] = useState(false);
+  const [qrVerifyResult, setQrVerifyResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [qrModalTarget, setQrModalTarget] = useState<ServiceQrTarget | null>(null);
+
+  useEffect(() => {
+    if (!selectedQrServiceId || !services.some((s) => s.id === selectedQrServiceId)) {
+      const nextId = activeServiceId || services[0]?.id || '';
+      if (nextId) setSelectedQrServiceId(nextId);
+    }
+  }, [activeServiceId, services, selectedQrServiceId]);
+
+  const canIssueStaffQr = Boolean(
+    currentUser?.role && QR_STAFF_ROLES.has(String(currentUser.role).toLowerCase())
+  );
+
+  useEffect(() => {
+    if (viewMode !== 'qrCheckin' || !selectedQrServiceId || isPlaceholderServiceId(selectedQrServiceId)) {
+      setQrMeta(null);
+      setQrError(null);
+      return;
+    }
+    if (!canIssueStaffQr) {
+      setQrMeta(null);
+      setQrError('Service Check-In QR generation requires Admin, Pastor, Usher, or Finance sign-in.');
+      return;
+    }
+
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) {
+      setQrError('Sign-in token unavailable.');
+      return;
+    }
+
+    let cancelled = false;
+    setQrLoading(true);
+    setQrError(null);
+    fetch(`/api/events/${encodeURIComponent(selectedQrServiceId)}/qr`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setQrMeta(null);
+          setQrError(data?.message || `Could not load service QR (HTTP ${res.status}).`);
+          return;
+        }
+        setQrMeta(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQrMeta(null);
+          setQrError('Network error while loading signed service QR.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setQrLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, selectedQrServiceId, canIssueStaffQr, currentUser?.token]);
 
   useEffect(() => {
     return () => {
@@ -256,6 +363,67 @@ export const ProximitySimulator: React.FC = () => {
     }
   };
 
+  const handleSimulatorQrPayload = async (rawPayload: string) => {
+    const trimmed = rawPayload.trim();
+    if (!trimmed) return;
+
+    setIsVerifyingQr(true);
+    setQrVerifyResult(null);
+    try {
+      const parsedService = parseServiceQrPayload(trimmed, services);
+      if (parsedService) {
+        const res = await checkInWithServiceQr(parsedService);
+        setQrVerifyResult({
+          ok: res.ok,
+          message: res.message,
+        });
+        if (res.ok) setManualQrInput('');
+        return;
+      }
+
+      const matchedMember = findMemberByScannedId(members, trimmed);
+      if (matchedMember) {
+        if (!hasScheduledService) {
+          setQrVerifyResult({ ok: false, message: checkInEligibility.message });
+          showToast(checkInEligibility.message);
+          return;
+        }
+        const started = checkInPerson(
+          matchedMember.id,
+          'posted_qr',
+          99,
+          'QR Simulator verification'
+        );
+        if (started) {
+          const msg = `Checked in ${matchedMember.firstName} ${matchedMember.lastName} via Member QR pass.`;
+          setQrVerifyResult({ ok: true, message: msg });
+          setManualQrInput('');
+        } else {
+          setQrVerifyResult({ ok: false, message: checkInEligibility.message });
+        }
+        return;
+      }
+
+      setQrVerifyResult({
+        ok: false,
+        message: 'Unrecognized QR code. Paste a Service Check-In URL, payload, short code, or Member ID.',
+      });
+    } finally {
+      setIsVerifyingQr(false);
+    }
+  };
+
+  const selectedQrService = services.find((s) => s.id === selectedQrServiceId) || null;
+  const effectiveSimQrUrl =
+    qrMeta?.qrToken && qrMeta?.serviceId
+      ? buildServiceQrCheckInUrl({
+          origin: typeof window !== 'undefined' ? window.location.origin : '',
+          serviceId: qrMeta.serviceId,
+          qrToken: qrMeta.qrToken,
+          organizationId: qrMeta.organizationId,
+        })
+      : '';
+
   return (
     <div className="max-w-[1100px] mx-auto py-6 px-4 space-y-6">
       {/* Title & View Switcher */}
@@ -265,15 +433,16 @@ export const ProximitySimulator: React.FC = () => {
             Geofence & Live Premise Verification
           </h1>
           <p className="text-xs text-[#666A86] dark:text-[#A9ACC8] max-w-[65ch] mt-1 leading-relaxed">
-            Pin your real church premise GPS coordinates and verify live device arrivals against your configured perimeter.
+            Pin your real church premise GPS coordinates, verify live arrivals, and test Service or Member Check-In QR codes.
           </p>
         </div>
 
         {/* View Toggle */}
-        <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs font-bold">
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs font-bold">
           <button
+            type="button"
             onClick={() => setViewMode('apiConsole')}
-            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
               viewMode === 'apiConsole'
                 ? 'bg-[#6D5CF2] text-white shadow-sm'
                 : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
@@ -283,8 +452,9 @@ export const ProximitySimulator: React.FC = () => {
             <span>Live GPS Console & Shifts</span>
           </button>
           <button
+            type="button"
             onClick={() => setViewMode('radar')}
-            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
               viewMode === 'radar'
                 ? 'bg-[#6D5CF2] text-white shadow-sm'
                 : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
@@ -293,11 +463,244 @@ export const ProximitySimulator: React.FC = () => {
             <Radar className="w-3.5 h-3.5" />
             <span>Live 2D Premise Radar</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('qrCheckin')}
+            className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+              viewMode === 'qrCheckin'
+                ? 'bg-[#6D5CF2] text-white shadow-sm'
+                : 'text-[#666A86] dark:text-[#A9ACC8] hover:text-[#1D1B3A]'
+            }`}
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span>QR Check-In</span>
+          </button>
         </div>
       </div>
 
       {viewMode === 'apiConsole' ? (
         <GeofenceApiConsole />
+      ) : viewMode === 'qrCheckin' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Card: Live Service Check-In QR Poster Generator */}
+          <div className="lg:col-span-6 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                  <QrCode className="w-4 h-4 text-[#6D5CF2]" />
+                  <span>Scheduled Service Check-In QR</span>
+                </h2>
+                <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                  Select any scheduled service to inspect, copy, or test its signed check-in QR code.
+                </p>
+              </div>
+              {selectedQrService && !isPlaceholderServiceId(selectedQrService.id) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setQrModalTarget({
+                      id: selectedQrService.id,
+                      name: selectedQrService.name,
+                      date: selectedQrService.date,
+                      startsAt: selectedQrService.startsAt,
+                      endsAt: selectedQrService.endsAt,
+                      dwellMinutes: selectedQrService.dwellMinutes,
+                      status: selectedQrService.status,
+                    })
+                  }
+                  className="px-2.5 py-1.5 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#8C7DFF] text-[11px] font-bold hover:opacity-90 cursor-pointer shrink-0"
+                >
+                  Open Full Poster
+                </button>
+              )}
+            </div>
+
+            {services.length > 0 ? (
+              <select
+                aria-label="Select scheduled service for QR simulator"
+                value={selectedQrServiceId}
+                onChange={(e) => {
+                  setSelectedQrServiceId(e.target.value);
+                  setActiveServiceId(e.target.value);
+                }}
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+              >
+                {services.map((svc) => (
+                  <option key={svc.id} value={svc.id}>
+                    {svc.name}
+                    {svc.date ? ` · ${svc.date}` : ''} ({svc.startsAt}–{svc.endsAt})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs font-semibold text-amber-800 dark:text-amber-200">
+                No services scheduled yet. Create a service from Admin Dashboard first.
+              </div>
+            )}
+
+            <div className="bg-[#F6F7FC] dark:bg-[#14142E] rounded-2xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] flex flex-col items-center justify-center min-h-[240px]">
+              {qrLoading ? (
+                <p className="text-xs font-semibold text-[#666A86] dark:text-[#A9ACC8]">
+                  Generating signed check-in QR code...
+                </p>
+              ) : qrError ? (
+                <p className="text-xs text-center font-semibold text-amber-700 dark:text-amber-300 max-w-xs">
+                  {qrError}
+                </p>
+              ) : effectiveSimQrUrl && qrMeta ? (
+                <>
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+                    <QRCodeSVG value={effectiveSimQrUrl} size={172} level="H" includeMargin={false} />
+                  </div>
+                  <div className="mt-3 text-center space-y-1">
+                    <p className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      {qrMeta.serviceName}
+                    </p>
+                    <p className="text-[11px] font-mono text-[#666A86] dark:text-[#A9ACC8]">
+                      Ref Code: {qrMeta.shortCode} · {qrMeta.status === 'live' ? 'Live Window' : 'Scheduled / Closed'}
+                    </p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await navigator.clipboard?.writeText(effectiveSimQrUrl);
+                        setCopiedQrLink(true);
+                        showToast('Service QR check-in link copied');
+                        setTimeout(() => setCopiedQrLink(false), 1800);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedQrLink ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                      )}
+                      <span>{copiedQrLink ? 'Copied' : 'Copy QR Link'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualQrInput(effectiveSimQrUrl);
+                        void handleSimulatorQrPayload(effectiveSimQrUrl);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold cursor-pointer"
+                    >
+                      Simulate Scan Now
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
+                  Select a scheduled service to display its signed QR code.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Right Card: Interactive QR Check-In Verifier */}
+          <div className="lg:col-span-6 bg-white dark:bg-[#1D1D3D] rounded-3xl p-5 border border-[#E9EBF5] dark:border-[#2D2D55] shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                  QR Check-In Scanner &amp; Verifier
+                </h2>
+                <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                  Scan via live camera, upload a QR image, or verify any Service QR link or Member Pass ID.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQrCameraActive((prev) => !prev)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
+                  qrCameraActive
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white'
+                }`}
+              >
+                {qrCameraActive ? (
+                  <>
+                    <CameraOff className="w-3.5 h-3.5" />
+                    <span>Stop Camera</span>
+                  </>
+                ) : (
+                  <>
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Open Camera</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {qrCameraActive && (
+              <div className="aspect-4/3 w-full rounded-2xl overflow-hidden border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <CameraQrScanner
+                  isActive={qrCameraActive}
+                  onScan={(code) => {
+                    setQrCameraActive(false);
+                    setManualQrInput(code);
+                    void handleSimulatorQrPayload(code);
+                  }}
+                  reticleSize="sm"
+                  instructionsText="Scan a Service Check-In QR or Member Pass"
+                  className="w-full h-full"
+                />
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSimulatorQrPayload(manualQrInput);
+              }}
+              className="space-y-2.5"
+            >
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
+                Service QR Link / Payload / Member ID
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={manualQrInput}
+                  onChange={(e) => setManualQrInput(e.target.value)}
+                  placeholder="Paste QR link, EKKLESPHERE:SERVICE:..., SVC-..., or MEM-..."
+                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-mono text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+                <button
+                  type="submit"
+                  disabled={!manualQrInput.trim() || isVerifyingQr}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                >
+                  {isVerifyingQr ? 'Verifying...' : 'Verify & Check In'}
+                </button>
+              </div>
+            </form>
+
+            {qrVerifyResult && (
+              <div
+                role="status"
+                className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-start gap-2.5 ${
+                  qrVerifyResult.ok
+                    ? 'bg-emerald-50 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                    : 'bg-rose-50 dark:bg-rose-950/35 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                }`}
+              >
+                {qrVerifyResult.ok ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                )}
+                <span>{qrVerifyResult.message}</span>
+              </div>
+            )}
+          </div>
+
+          <ServiceQrModal
+            isOpen={Boolean(qrModalTarget)}
+            service={qrModalTarget}
+            onClose={() => setQrModalTarget(null)}
+          />
+        </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: 2D Live Radar Canvas (Span 7) */}

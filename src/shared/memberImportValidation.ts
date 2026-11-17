@@ -1,4 +1,9 @@
 import type { Person } from '../types/ekklesphere';
+import {
+  deriveMonthOfBirth,
+  formatBirthMonthGroupName,
+  normalizeMonthName,
+} from '../utils/birthMonth';
 
 export type ImportDuplicateMode = 'skip' | 'update' | 'error';
 
@@ -162,21 +167,6 @@ export function validateStrictIsoDate(raw: string): string | null {
 
   return null;
 }
-
-const MONTH_NAMES = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
 
 function normalizeOfficerName(raw?: string): string {
   if (!raw || !raw.trim()) return 'Member';
@@ -405,12 +395,30 @@ export function validateMemberImportBatch(
         errors.push(`DATE OF BIRTH "${parsed}" cannot be in the future.`);
       } else {
         data.dateOfBirth = parsed;
-        if (!data.monthOfBirth) {
-          const mIdx = Number(parsed.slice(5, 7)) - 1;
-          if (MONTH_NAMES[mIdx]) {
-            data.monthOfBirth = MONTH_NAMES[mIdx];
+        const derivedMonth = deriveMonthOfBirth(parsed);
+        if (derivedMonth) {
+          if (data.monthOfBirth) {
+            const rawNormalized = normalizeMonthName(data.monthOfBirth);
+            if (rawNormalized && rawNormalized !== derivedMonth) {
+              warnings.push(
+                `MONTH OF BIRTH "${data.monthOfBirth}" conflicted with DATE OF BIRTH; synced to ${derivedMonth}.`
+              );
+            }
           }
+          data.monthOfBirth = derivedMonth;
         }
+      }
+    } else if (data.monthOfBirth) {
+      const normalizedMonth = normalizeMonthName(data.monthOfBirth);
+      if (normalizedMonth) {
+        data.monthOfBirth = normalizedMonth;
+      }
+    }
+
+    if (data.monthOfBirth) {
+      const birthGroup = formatBirthMonthGroupName(data.monthOfBirth);
+      if (birthGroup) {
+        data.birthMonthGroup = birthGroup;
       }
     }
 

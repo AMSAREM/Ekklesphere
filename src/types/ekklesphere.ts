@@ -111,6 +111,7 @@ export interface Person {
   homeCellGroup?: string; // HOME CELL GROUP
   groupName: string; // Cell group / Fellowship group
   monthOfBirth?: string; // MONTH OF BIRTH
+  birthMonthGroup?: string; // Auto-assigned Birth Month Group (e.g. "May Birthday Group")
   maritalStatus?: 'Single' | 'Married' | 'Widowed' | 'Divorced' | string; // MARITAL STATUS
   spouseName?: string; // NAME OF SPOUSE
   numberOfChildren?: number; // NUMBER OF CHILDREN
