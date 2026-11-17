@@ -38,11 +38,9 @@ const consoleRateLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => clientIp(req),
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     message: 'Too many Creator Console requests. Please wait a moment and retry.',

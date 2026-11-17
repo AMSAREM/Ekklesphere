@@ -93,16 +93,23 @@ app.use(expressOrganizationMiddleware);
 app.use('/api/console', consoleRouter);
 
 export function getClientIpKey(req: Request): string {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.trim()) {
-    return xff.split(',')[0].trim();
+  try {
+    const xff = req.headers?.['x-forwarded-for'];
+    if (typeof xff === 'string' && xff.trim()) {
+      return xff.split(',')[0].trim();
+    }
+    if (Array.isArray(xff) && xff.length > 0 && xff[0]) {
+      return String(xff[0]).split(',')[0].trim();
+    }
+    const fwd = req.headers?.forwarded;
+    if (typeof fwd === 'string' && fwd.trim()) {
+      const match = fwd.match(/for="?([^;,"]+)/i);
+      if (match?.[1]) return match[1].trim();
+    }
+    return req.ip || req.socket?.remoteAddress || '127.0.0.1';
+  } catch {
+    return '127.0.0.1';
   }
-  const fwd = req.headers.forwarded;
-  if (typeof fwd === 'string' && fwd.trim()) {
-    const match = fwd.match(/for="?([^;,"]+)/i);
-    if (match?.[1]) return match[1].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || '127.0.0.1';
 }
 
 // Rate limiter for attendance telemetry signals
@@ -111,11 +118,9 @@ const attendanceLimiter = rateLimit({
   max: 180,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => getClientIpKey(req),
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: { error: 'rate_limit_exceeded', message: 'Too many attendance submissions. Please wait.' },
 });
 
@@ -125,11 +130,9 @@ const authIpBurstLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => `ip:${getClientIpKey(req)}`,
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     code: 'AUTH_IP_RATE_LIMITED',
@@ -143,19 +146,29 @@ const authLoginLimiter = rateLimit({
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => {
+    const bodyObj =
+      req.body && typeof req.body === 'object'
+        ? req.body
+        : typeof req.body === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(req.body);
+            } catch {
+              return {};
+            }
+          })()
+        : {};
     const rawId =
-      typeof req.body?.identifier === 'string'
-        ? req.body.identifier
-        : typeof req.body?.email === 'string'
-        ? req.body.email
+      typeof bodyObj?.identifier === 'string'
+        ? bodyObj.identifier
+        : typeof bodyObj?.email === 'string'
+        ? bodyObj.email
         : '';
     return `${getClientIpKey(req)}:${rawId.trim().toLowerCase().slice(0, 80) || 'anon'}`;
   },
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     code: 'AUTH_RATE_LIMITED',
@@ -168,11 +181,9 @@ const authRegisterLimiter = rateLimit({
   max: 8,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => `reg:${getClientIpKey(req)}`,
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     code: 'REGISTER_RATE_LIMITED',
@@ -185,11 +196,9 @@ const authSessionLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => `sess:${getClientIpKey(req)}`,
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     code: 'SESSION_RATE_LIMITED',
@@ -297,7 +306,19 @@ app.post(
   authIpBurstLimiter,
   authLoginLimiter,
   async (req: Request, res: Response) => {
-    const parsed = loginRequestSchema.safeParse(req.body || {});
+    const rawBody =
+      req.body && typeof req.body === 'object'
+        ? req.body
+        : typeof req.body === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(req.body);
+            } catch {
+              return {};
+            }
+          })()
+        : {};
+    const parsed = loginRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return res.status(400).json({
         error: 'invalid_input',
@@ -817,11 +838,9 @@ const landingLeadSubmissionLimiter = rateLimit({
   max: 25,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => `landing-lead:${getClientIpKey(req)}`,
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: {
     error: 'rate_limit_exceeded',
     message: 'Too many submissions from this network. Please wait a few minutes and try again.',
@@ -5062,11 +5081,9 @@ const mediaProxyLimiter = rateLimit({
   max: 120,
   standardHeaders: true,
   legacyHeaders: false,
+  passOnStoreError: true,
   keyGenerator: (req) => `media:${getClientIpKey(req)}`,
-  validate: {
-    xForwardedForHeader: false,
-    forwardedHeader: false,
-  },
+  validate: false,
   message: { error: 'rate_limit_exceeded', message: 'Too many image proxy requests. Please wait a moment.' },
 });
 
