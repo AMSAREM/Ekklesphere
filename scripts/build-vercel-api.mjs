@@ -15,7 +15,10 @@ await build({
   packages: 'external',
   external: ['vite'],
   define: {
-    'import.meta.url': 'undefined',
+    'import.meta': '{}',
+  },
+  logOverride: {
+    'empty-import-meta': 'silent',
   },
   sourcemap: false,
   logLevel: 'info',

@@ -11,6 +11,23 @@ export default defineConfig(() => {
         '@': path.resolve(process.cwd(), '.'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 2500,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              { name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/, priority: 40 },
+              { name: 'vendor-charts', test: /node_modules[\\/](recharts|d3-|victory-vendor)[\\/]/, priority: 30 },
+              { name: 'vendor-supabase', test: /node_modules[\\/]@supabase[\\/]/, priority: 25 },
+              { name: 'vendor-firebase', test: /node_modules[\\/]firebase[\\/]/, priority: 25 },
+              { name: 'vendor-ui', test: /node_modules[\\/](lucide-react|motion|framer-motion)[\\/]/, priority: 20 },
+              { name: 'vendor-deps', test: /node_modules[\\/]/, priority: 10 },
+            ],
+          },
+        },
+      },
+    },
     server: {
       host: '0.0.0.0',
       port: 3000,
