@@ -88,6 +88,33 @@ export function isSeniorPastoralPortfolio(portfolio?: string | null): boolean {
   return /\b(senior pastor|presiding elder|elder|pastor|bishop|reverend)\b/i.test(clean);
 }
 
+/**
+ * Oversight access for Pastoral Care Monitor:
+ * Administrator, Pastor, Presiding Elder, Associate Pastor (and platform creator/super_admin).
+ */
+export function isPastoralOversightPortfolio(portfolio?: string | null): boolean {
+  const clean = normalizePortfolioLabel(portfolio).toLowerCase();
+  if (!clean) return false;
+  return /\b(administrator|senior pastor|associate pastor|presiding elder|youth pastor|pastor|bishop|reverend)\b/i.test(
+    clean
+  );
+}
+
+export function canMonitorPastoralCare(
+  user?: { role?: string | null; designation?: string | null; title?: string | null; is_creator?: boolean } | null
+): boolean {
+  if (!user) return false;
+  if (user.is_creator) return true;
+  const role = String(user.role || '').trim().toLowerCase();
+  if (role === 'admin' || role === 'pastor' || role === 'super_admin' || role === 'creator') {
+    return true;
+  }
+  return (
+    isPastoralOversightPortfolio(user.designation) ||
+    isPastoralOversightPortfolio(user.title)
+  );
+}
+
 export function getPortfolioPriorityScore(portfolio?: string | null): number {
   const clean = normalizePortfolioLabel(portfolio).toLowerCase();
   if (clean.includes('senior pastor')) return 100;

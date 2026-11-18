@@ -18,6 +18,7 @@ import {
   createServiceQrToken,
   DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
   extractBearerToken,
+  hasPastoralOversightAccess,
   isCreatorClaim,
   normalizeIdleTimeoutMinutes,
   PRIMARY_CAMPUS_SITE_ID,
@@ -51,6 +52,12 @@ import {
   sendArkeselSms,
   sendResendEmail,
 } from './src/server/communicationsService.ts';
+import {
+  initializePaystackTransaction,
+  testPaystackConnection,
+  verifyPaystackTransaction,
+  verifyPaystackWebhookSignature,
+} from './src/server/paystackService.ts';
 import { getMemberPortfolio, isPastoralOfficerOrLeader } from './src/constants/portfolios.ts';
 import {
   isValidGroupCategorySlug,
@@ -86,7 +93,14 @@ const app = express();
 // Enable trust proxy (1 hop) for Cloud Run / reverse proxy environments to correctly resolve client IP
 app.set('trust proxy', 1);
 
-app.use(express.json({ limit: '2mb' }));
+app.use(
+  express.json({
+    limit: '2mb',
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(expressOrganizationMiddleware);
 
 // Mount Phase 2 Creator Console API (/api/console/*)
@@ -286,6 +300,80 @@ export function requireAuthRole(...allowedRoles: ChurchRole[]) {
       });
     });
   };
+}
+
+/**
+ * Resolves whether the caller has Pastoral Oversight authority:
+ * Administrator, Pastor, Presiding Elder, Associate Pastor, or Platform Creator.
+ */
+async function resolveRequestOversightAccess(req: Request): Promise<boolean> {
+  if (!req.user) return false;
+  if (hasPastoralOversightAccess(req.user)) return true;
+  if (!req.user.designation && req.organizationId) {
+    const resolved = await platformStore.resolveUserDesignation(
+      req.organizationId,
+      req.user.id,
+      req.user.email
+    );
+    if (resolved) {
+      req.user.designation = resolved;
+      return hasPastoralOversightAccess(req.user);
+    }
+  }
+  return false;
+}
+
+export async function requirePastoralOversight(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  await requireUser(req, res, async () => {
+    await enforceOrganizationScope(req, res, async () => {
+      const allowed = await resolveRequestOversightAccess(req);
+      if (!allowed) {
+        res.status(403).json({
+          error: 'forbidden',
+          message:
+            'Access denied. Pastoral Care Monitor is restricted to Administrator, Pastor, Presiding Elder, and Associate Pastor.',
+        });
+        return;
+      }
+      next();
+    });
+  });
+}
+
+export async function requireFollowupAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  await requireUser(req, res, async () => {
+    await enforceOrganizationScope(req, res, async () => {
+      const baseAllowed: ChurchRole[] = [
+        'admin',
+        'pastor',
+        'usher',
+        'group_leader',
+        'super_admin',
+        'creator',
+      ];
+      if (isCreatorClaim(req.user) || baseAllowed.includes(req.user!.role)) {
+        next();
+        return;
+      }
+      const oversightAllowed = await resolveRequestOversightAccess(req);
+      if (oversightAllowed) {
+        next();
+        return;
+      }
+      res.status(403).json({
+        error: 'forbidden',
+        message: `Access denied. Role '${req.user!.role}' does not possess pastoral follow-up permissions.`,
+      });
+    });
+  });
 }
 
 // Development preview-session endpoint permanently disabled (returns 404 not_found)
@@ -1378,6 +1466,10 @@ const SystemSettingsPatchSchema = z.object({
   absenteeThresholdServices: z.number().min(1).max(12).optional(),
   firstTimerFollowupHours: z.number().min(1).max(336).optional(),
   autoAssignCellLeaders: z.boolean().optional(),
+  autoMessageAbsentMembers: z.boolean().optional(),
+  absentMemberMessageChannel: z.enum(['sms', 'email', 'sms_and_email']).optional(),
+  absentMemberMessageTemplate: z.string().trim().max(1000).optional(),
+  autoSendLeaderCareReminders: z.boolean().optional(),
   requireExplicitConsent: z.boolean().optional(),
   auditLogRetentionDays: z.number().min(7).max(3650).optional(),
   sessionTimeoutMinutes: z.number().min(0).max(480).optional(),
@@ -1605,6 +1697,141 @@ app.post(
   }
 );
 
+const TenantGatewayKeysPatchSchema = z.object({
+  arkeselApiKey: z.string().trim().max(300).optional(),
+  clearArkeselApiKey: z.boolean().optional(),
+  paystackPublicKey: z
+    .string()
+    .trim()
+    .max(300)
+    .refine(
+      (val) => !val || /^pk_(live|test)_[a-zA-Z0-9]+$/.test(val) || val.length >= 8,
+      'Paystack Public Key should start with pk_live_ or pk_test_.'
+    )
+    .optional(),
+  paystackSecretKey: z
+    .string()
+    .trim()
+    .max(300)
+    .refine(
+      (val) => !val || /^sk_(live|test)_[a-zA-Z0-9]+$/.test(val) || val.length >= 8,
+      'Paystack Secret Key should start with sk_live_ or sk_test_.'
+    )
+    .optional(),
+  clearPaystackKeys: z.boolean().optional(),
+});
+
+app.get(
+  '/api/system-settings/gateways',
+  requireAuthRole('admin', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const summary = await platformStore.getTenantGatewayConfigSummary(req.organizationId!);
+      return res.status(200).json({
+        success: true,
+        gateways: summary,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'gateways_fetch_failed',
+        message: err?.message || 'Failed to load tenant gateway configuration.',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/system-settings/gateways',
+  requireAuthRole('admin', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = TenantGatewayKeysPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid gateway API key payload.',
+      });
+    }
+
+    try {
+      const summary = await platformStore.saveTenantGatewayKeys(req.organizationId!, parsed.data, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req),
+      });
+      return res.status(200).json({
+        success: true,
+        gateways: summary,
+        message: 'Encrypted tenant gateway credentials saved successfully.',
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'gateways_save_failed',
+        message: err?.message || 'Failed to save tenant gateway credentials.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/system-settings/test-paystack',
+  requireAuthRole('admin', 'finance', 'super_admin', 'creator'),
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const resolved = await platformStore.getResolvedPaystackKeys(req.organizationId!);
+      const result = await testPaystackConnection({
+        secretKey: resolved.secretKey,
+        publicKey: resolved.publicKey,
+      });
+
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId!,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || 'admin@ekklesphere.church',
+        actorRole: req.user?.role || 'admin',
+        action: result.ok ? 'paystack.connection_verified' : 'paystack.connection_failed',
+        targetType: 'payment_gateway',
+        targetId: req.organizationId!,
+        metadata: {
+          mode: result.mode,
+          source: resolved.source,
+          ok: result.ok,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      if (!result.ok) {
+        return res.status(result.configured ? 502 : 400).json({
+          success: false,
+          configured: result.configured,
+          mode: result.mode,
+          source: resolved.source,
+          error: result.error || 'paystack_test_failed',
+          message: result.message,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        mode: result.mode,
+        source: resolved.source,
+        message: result.message,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.code || 'paystack_test_error',
+        message: err?.message || 'Could not verify Paystack connection.',
+      });
+    }
+  }
+);
+
 app.post(
   '/api/system-settings/test-sms',
   requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
@@ -1620,7 +1847,8 @@ app.post(
 
     const senderId = parsed.data.senderId.toUpperCase();
     const dispatchedAt = new Date().toISOString();
-    const gatewayStatus = getCommunicationGatewayStatus();
+    const resolvedArkesel = await platformStore.getResolvedArkeselApiKey(req.organizationId!);
+    const arkeselConfigured = Boolean(resolvedArkesel.apiKey);
     const recipientPhone = parsed.data.recipientPhone?.trim();
     const isArkesel = parsed.data.provider.toLowerCase().includes('arkesel');
 
@@ -1629,6 +1857,7 @@ app.post(
       const settingsRes = await platformStore.getSystemSettings(req.organizationId!).catch(() => null);
       const churchLabel = settingsRes?.settings?.churchName || 'Ekklesphere Church';
       liveResult = await sendArkeselSms({
+        apiKey: resolvedArkesel.apiKey,
         senderId,
         recipients: [recipientPhone],
         message:
@@ -1658,7 +1887,8 @@ app.post(
       metadata: {
         provider: parsed.data.provider,
         senderId,
-        arkeselConfigured: gatewayStatus.arkeselConfigured,
+        arkeselConfigured,
+        arkeselSource: resolvedArkesel.source,
         recipientCount: liveResult ? liveResult.sentCount : 0,
         dispatchedAt,
       },
@@ -1668,15 +1898,16 @@ app.post(
     return res.status(200).json({
       success: true,
       mode: liveResult?.ok ? 'live' : 'validated',
-      configured: gatewayStatus.arkeselConfigured,
+      configured: arkeselConfigured,
+      source: resolvedArkesel.source,
       provider: parsed.data.provider,
       senderId,
       dispatchedAt,
       message: liveResult?.ok
         ? liveResult.message
         : `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).${
-            isArkesel && !gatewayStatus.arkeselConfigured
-              ? ' Set ARKESEL_API_KEY on the server to transmit live SMS.'
+            isArkesel && !arkeselConfigured
+              ? ' Save your church Arkesel API key in SMS & Paystack Gateways to transmit live SMS.'
               : ''
           }`,
     });
@@ -1754,12 +1985,24 @@ app.post(
 
 app.get(
   '/api/communications/status',
-  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireAuthRole('admin', 'pastor', 'usher', 'member', 'group_leader', 'finance', 'super_admin', 'creator'),
   requireActiveLicense,
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
+    const baseStatus = getCommunicationGatewayStatus();
+    const tenantSummary = await platformStore.getTenantGatewayConfigSummary(req.organizationId!);
+    const isAdminOrFinance = ['admin', 'finance', 'super_admin', 'creator'].includes(req.user!.role);
+
     return res.status(200).json({
       success: true,
-      ...getCommunicationGatewayStatus(),
+      ...baseStatus,
+      arkeselConfigured: tenantSummary.arkeselConfigured,
+      arkeselSource: tenantSummary.arkeselSource,
+      arkeselKeyMasked: isAdminOrFinance ? tenantSummary.arkeselKeyMasked : null,
+      paystackConfigured: tenantSummary.paystackConfigured,
+      paystackSource: tenantSummary.paystackSource,
+      paystackPublicKey: tenantSummary.paystackPublicKey,
+      paystackSecretMasked: isAdminOrFinance ? tenantSummary.paystackSecretMasked : null,
+      paystackMode: tenantSummary.paystackMode,
     });
   }
 );
@@ -1779,9 +2022,10 @@ app.post(
 
     try {
       const orgId = req.organizationId!;
-      const [orgMembers, settingsRes] = await Promise.all([
+      const [orgMembers, settingsRes, resolvedArkesel] = await Promise.all([
         platformStore.getMembers(orgId),
         platformStore.getSystemSettings(orgId),
+        platformStore.getResolvedArkeselApiKey(orgId),
       ]);
       const settings = settingsRes.settings;
       const threshold = Math.max(1, Number(settings.absenteeThresholdServices) || 2);
@@ -1812,6 +2056,7 @@ app.post(
           .filter(Boolean);
         const smsText = subject && !body.startsWith(subject) ? `${subject}: ${body}` : body;
         const smsResult = await sendArkeselSms({
+          apiKey: resolvedArkesel.apiKey,
           senderId: settings.smsSenderId || 'EKKLESPHERE',
           recipients: phones,
           message: smsText,
@@ -1839,6 +2084,7 @@ app.post(
           metadata: {
             provider: 'Arkesel SMS',
             senderId: smsResult.senderId,
+            keySource: resolvedArkesel.source,
             audience,
             sentCount: smsResult.sentCount,
             invalidCount: smsResult.invalidCount,
@@ -3448,7 +3694,22 @@ const handleUpdateEvent = async (req: Request, res: Response) => {
 
   try {
     const updated = await platformStore.updateEvent(req.organizationId!, req.params.id, updates);
-    return res.status(200).json(normalizeEventRow(updated));
+    let absenceSweep: Awaited<ReturnType<typeof platformStore.processServiceAbsenceSweep>> | null = null;
+    if (updates.status === 'closed') {
+      try {
+        absenceSweep = await platformStore.processServiceAbsenceSweep(req.organizationId!, {
+          eventId: req.params.id,
+          triggerSource: 'service_closed',
+          actorName: req.user?.name,
+        });
+      } catch (sweepErr: any) {
+        console.warn('[Ekklesphere Pastoral Care] Service close absence sweep warning:', sweepErr?.message || sweepErr);
+      }
+    }
+    return res.status(200).json({
+      ...normalizeEventRow(updated),
+      ...(absenceSweep ? { absenceSweep } : {}),
+    });
   } catch (err: any) {
     return res.status(err?.status || 500).json({
       error: err?.code || 'event_update_failed',
@@ -4287,9 +4548,18 @@ app.get('/api/auth/me', requireUser, enforceOrganizationScope, async (req: Reque
     const sessionTimeoutMinutes = await platformStore.getOrganizationSessionTimeoutMinutes(
       req.organizationId
     );
+    const resolvedDesignation =
+      req.user!.designation ||
+      (memberProfile?.designation || memberProfile?.officerName
+        ? String(memberProfile.designation || memberProfile.officerName).trim()
+        : undefined) ||
+      (req.organizationId
+        ? await platformStore.resolveUserDesignation(req.organizationId, req.user!.id, req.user!.email)
+        : undefined);
     return res.status(200).json({
       user: {
         ...req.user,
+        ...(resolvedDesignation ? { designation: resolvedDesignation } : {}),
         organizationName: org?.name || undefined,
         avatar: memberProfile?.imageUrl || undefined,
         mustChangePassword: credStatus.mustChangePassword,
@@ -4457,6 +4727,271 @@ app.post(
   }
 );
 
+const PaystackInitializeSchema = z.object({
+  amountGhs: z.number().positive('Amount must be greater than zero.'),
+  fundName: z.string().trim().min(1).max(120).default('Tithe'),
+  fundId: z.string().trim().max(120).optional(),
+  provider: z.enum(['MTN MoMo', 'Telecel Cash', 'Card']).default('MTN MoMo'),
+  email: z.string().trim().email().optional(),
+  callbackUrl: z.string().trim().url().optional(),
+});
+
+const PaystackVerifySchema = z.object({
+  reference: z.string().trim().min(3, 'Transaction reference is required.').max(140),
+});
+
+app.get(
+  '/api/giving/paystack/config',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const [summary, settingsRes] = await Promise.all([
+        platformStore.getTenantGatewayConfigSummary(req.organizationId!),
+        platformStore.getSystemSettings(req.organizationId!).catch(() => null),
+      ]);
+      const currencyRaw = settingsRes?.settings?.currency || 'GHS';
+      const currencyCode = currencyRaw.split(' ')[0].toUpperCase() || 'GHS';
+      return res.status(200).json({
+        success: true,
+        configured: summary.paystackConfigured,
+        publicKey: summary.paystackPublicKey,
+        mode: summary.paystackMode,
+        source: summary.paystackSource,
+        currency: currencyCode,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'paystack_config_failed',
+        message: err?.message || 'Could not load Paystack giving config.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/giving/paystack/initialize',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = PaystackInitializeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid Paystack initialization payload.',
+      });
+    }
+
+    try {
+      const orgId = req.organizationId!;
+      const [resolvedKeys, profile, settingsRes] = await Promise.all([
+        platformStore.getResolvedPaystackKeys(orgId),
+        platformStore.getMemberProfileForSession(orgId, req.user!.id, req.user!.email),
+        platformStore.getSystemSettings(orgId).catch(() => null),
+      ]);
+
+      const amountMinor = Math.max(100, Math.round(parsed.data.amountGhs * 100));
+      const currencyRaw = settingsRes?.settings?.currency || 'GHS';
+      const currencyCode = currencyRaw.split(' ')[0].toUpperCase() || 'GHS';
+      const reference = `EKK-${orgId.slice(0, 6).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+      const payerEmail =
+        parsed.data.email ||
+        profile?.email ||
+        req.user?.email ||
+        `giving+${reference.toLowerCase()}@ekklesphere.church`;
+
+      const personId = profile?.id ? String(profile.id) : req.user!.id;
+      const personName = profile
+        ? `${profile.firstName || ''} ${profile.lastName || ''}`.trim()
+        : req.user!.name || req.user!.email || 'Member';
+
+      const initRes = await initializePaystackTransaction({
+        secretKey: resolvedKeys.secretKey,
+        publicKey: resolvedKeys.publicKey,
+        email: payerEmail,
+        amountMinor,
+        currency: currencyCode,
+        reference,
+        callbackUrl: parsed.data.callbackUrl,
+        channels:
+          parsed.data.provider === 'Card'
+            ? ['card']
+            : ['mobile_money', 'card'],
+        metadata: {
+          organizationId: orgId,
+          personId,
+          personName,
+          fundName: parsed.data.fundName,
+          provider: parsed.data.provider,
+        },
+      });
+
+      if (!initRes.ok) {
+        return res.status(initRes.configured ? 502 : 400).json({
+          success: false,
+          configured: initRes.configured,
+          error: initRes.error || 'paystack_init_failed',
+          message: initRes.message,
+        });
+      }
+
+      const donation = await platformStore.createDonation(orgId, {
+        personId,
+        personName,
+        fundName: parsed.data.fundName,
+        fundId: parsed.data.fundId,
+        amountMinor,
+        method: parsed.data.provider === 'Card' ? 'card' : 'momo',
+        provider: parsed.data.provider,
+        status: 'pending',
+        reference: initRes.reference,
+        gatewayProvider: 'paystack',
+      });
+
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        mode: initRes.mode,
+        publicKey: resolvedKeys.publicKey,
+        authorizationUrl: initRes.authorizationUrl,
+        accessCode: initRes.accessCode,
+        reference: initRes.reference,
+        donation,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'paystack_initialize_error',
+        message: err?.message || 'Failed to initialize Paystack giving checkout.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/giving/paystack/verify',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = PaystackVerifySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Paystack transaction reference is required.',
+      });
+    }
+
+    try {
+      const orgId = req.organizationId!;
+      const resolvedKeys = await platformStore.getResolvedPaystackKeys(orgId);
+      const verifyRes = await verifyPaystackTransaction({
+        secretKey: resolvedKeys.secretKey,
+        reference: parsed.data.reference,
+      });
+
+      if (!verifyRes.ok) {
+        return res.status(verifyRes.error === 'PAYSTACK_NOT_CONFIGURED' ? 400 : 502).json({
+          success: false,
+          verified: false,
+          error: verifyRes.error || 'paystack_verify_failed',
+          message: verifyRes.message,
+        });
+      }
+
+      const donation = await platformStore.updateDonationStatusByReference(
+        orgId,
+        verifyRes.reference,
+        verifyRes.status,
+        {
+          paidAt: verifyRes.paidAt || new Date().toISOString(),
+          gatewayMetadata: {
+            channel: verifyRes.channel,
+            gatewayResponse: verifyRes.gatewayResponse,
+            amountMinor: verifyRes.amountMinor,
+          },
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        verified: verifyRes.verified,
+        status: verifyRes.status,
+        reference: verifyRes.reference,
+        donation,
+        message: verifyRes.message,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'paystack_verify_error',
+        message: err?.message || 'Failed to verify Paystack transaction.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/giving/webhooks/paystack/:organizationId?',
+  async (req: Request, res: Response) => {
+    try {
+      const paramOrg = req.params.organizationId?.trim().toLowerCase();
+      const bodyOrg =
+        typeof req.body?.data?.metadata?.organizationId === 'string'
+          ? req.body.data.metadata.organizationId.trim().toLowerCase()
+          : '';
+      const orgId = paramOrg || bodyOrg;
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'organization_required',
+          message: 'Organization ID is required on webhook path or transaction metadata.',
+        });
+      }
+
+      const resolvedKeys = await platformStore.getResolvedPaystackKeys(orgId);
+      const signature = req.headers['x-paystack-signature'];
+      const rawBody: Buffer | string = (req as any).rawBody || JSON.stringify(req.body || {});
+      const sigHeader = Array.isArray(signature) ? signature[0] : signature;
+
+      if (
+        !resolvedKeys.secretKey ||
+        !verifyPaystackWebhookSignature({
+          secretKey: resolvedKeys.secretKey,
+          rawBody,
+          signature: sigHeader,
+        })
+      ) {
+        return res.status(401).json({
+          error: 'invalid_webhook_signature',
+          message: 'Invalid Paystack webhook signature.',
+        });
+      }
+
+      const eventType = String(req.body?.event || '').toLowerCase();
+      const reference = String(req.body?.data?.reference || '').trim();
+
+      if (reference && (eventType === 'charge.success' || eventType === 'charge.failed')) {
+        const nextStatus = eventType === 'charge.success' ? 'paid' : 'failed';
+        await platformStore.updateDonationStatusByReference(orgId, reference, nextStatus, {
+          paidAt: req.body?.data?.paid_at || new Date().toISOString(),
+          gatewayMetadata: {
+            webhookEvent: eventType,
+            channel: req.body?.data?.channel,
+          },
+        });
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'webhook_processing_error',
+        message: err?.message || 'Error processing Paystack webhook.',
+      });
+    }
+  }
+);
+
 // =========================================================================
 // PASTORAL CARE FOLLOW-UP TASKS (ORG-SCOPED)
 // =========================================================================
@@ -4472,7 +5007,10 @@ const createFollowupSchema = z.object({
   assignedToMemberId: z.string().trim().max(120).optional(),
   assignedToRole: z.string().trim().max(120).optional(),
   assignedToPhone: z.string().trim().max(40).optional(),
+  assignedToEmail: z.string().trim().max(160).optional(),
   autoAssigned: z.boolean().optional(),
+  serviceEventId: z.string().trim().max(120).optional(),
+  serviceName: z.string().trim().max(200).optional(),
   dueOn: z.string().trim().max(100).optional(),
   notes: z.string().trim().max(1000).optional(),
 });
@@ -4488,9 +5026,19 @@ const updateFollowupSchema = z.object({
   notes: z.string().trim().max(1000).optional(),
 });
 
+const runAbsenceSweepSchema = z.object({
+  eventId: z.string().trim().max(120).optional(),
+  force: z.boolean().optional(),
+});
+
+const sendLeaderRemindersSchema = z.object({
+  taskId: z.string().trim().max(120).optional(),
+  leaderName: z.string().trim().max(160).optional(),
+});
+
 app.get(
   '/api/followup-tasks',
-  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req: Request, res: Response) => {
     try {
@@ -4507,7 +5055,7 @@ app.get(
 
 app.post(
   '/api/followup-tasks',
-  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const parsed = createFollowupSchema.safeParse(req.body || {});
@@ -4519,8 +5067,23 @@ app.post(
     }
 
     try {
-      const task = await platformStore.createFollowupTask(req.organizationId!, parsed.data);
-      return res.status(201).json({ task });
+      let task = await platformStore.createFollowupTask(req.organizationId!, parsed.data);
+      let reminderDispatches = 0;
+      try {
+        const settingsRes = await platformStore.getSystemSettings(req.organizationId!);
+        if (settingsRes.settings.autoSendLeaderCareReminders !== false) {
+          const remRes = await platformStore.sendPendingLeaderCareReminders(req.organizationId!, {
+            taskId: task.id,
+            actorName: req.user?.name,
+          });
+          reminderDispatches = remRes.sentCount;
+          const updatedTask = remRes.allTasks.find((t) => t.id === task.id);
+          if (updatedTask) task = updatedTask;
+        }
+      } catch (remErr: any) {
+        console.warn('[Ekklesphere Pastoral Care] Leader reminder dispatch warning:', remErr?.message || remErr);
+      }
+      return res.status(201).json({ task, reminderSent: reminderDispatches > 0 });
     } catch (err: any) {
       return res.status(err?.status || 500).json({
         error: err?.code || 'followup_create_failed',
@@ -4532,7 +5095,7 @@ app.post(
 
 app.post(
   '/api/followup-tasks/auto-assign-absentees',
-  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const parsed = autoAssignAbsenteesSchema.safeParse(req.body || {});
@@ -4581,7 +5144,7 @@ app.post(
 
 app.patch(
   '/api/followup-tasks/:id',
-  requireAuthRole('admin', 'pastor', 'usher', 'group_leader', 'super_admin', 'creator'),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req: Request, res: Response) => {
     const parsed = updateFollowupSchema.safeParse(req.body || {});
@@ -4608,9 +5171,46 @@ app.patch(
   }
 );
 
+app.post(
+  '/api/followup-tasks/:id/acknowledge',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const hasOversight = await resolveRequestOversightAccess(req);
+      const isLeaderOrUsher = ['group_leader', 'usher'].includes(req.user!.role);
+      if (!hasOversight && !isLeaderOrUsher) {
+        const myReminders = await platformStore.listLeaderAssignedReminders(req.organizationId!, {
+          userId: req.user!.id,
+          name: req.user!.name,
+          email: req.user!.email,
+        });
+        const ownsTask = myReminders.tasks.some((t) => t.id === req.params.id);
+        if (!ownsTask) {
+          return res.status(403).json({
+            error: 'forbidden',
+            message: 'Access denied. Only the assigned leader or pastoral oversight may acknowledge this care task.',
+          });
+        }
+      }
+      const task = await platformStore.acknowledgeLeaderCareTask(req.organizationId!, req.params.id, {
+        name: req.user?.name,
+        role: req.user?.role,
+      });
+      return res.status(200).json({ success: true, task });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'followup_acknowledge_failed',
+        message: err?.message || 'Failed to acknowledge pastoral care reminder.',
+      });
+    }
+  }
+);
+
 app.delete(
   '/api/followup-tasks/:id',
-  requireAuthRole('admin', 'pastor', 'super_admin', 'creator'),
+  requirePastoralOversight,
   requireActiveLicense,
   async (req: Request, res: Response) => {
     try {
@@ -4620,6 +5220,145 @@ app.delete(
       return res.status(err?.status || 500).json({
         error: err?.code || 'followup_delete_failed',
         message: err?.message || 'Failed to delete follow-up task.',
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/pastoral-care/monitor',
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const monitor = await platformStore.getPastoralCareMonitorSummary(req.organizationId!);
+      return res.status(200).json({ success: true, monitor });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'pastoral_monitor_failed',
+        message: err?.message || 'Failed to load pastoral care monitor.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/pastoral-care/run-absence-sweep',
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = runAbsenceSweepSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid absence sweep parameters.',
+      });
+    }
+    try {
+      const result = await platformStore.processServiceAbsenceSweep(req.organizationId!, {
+        eventId: parsed.data.eventId || undefined,
+        force: Boolean(parsed.data.force),
+        triggerSource: 'manual_monitor_sweep',
+        actorName: req.user?.name,
+      });
+
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId!,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || 'pastor@ekklesphere.church',
+        actorRole: req.user?.role || 'pastor',
+        action: 'pastoral_care.absence_sweep',
+        targetType: 'events',
+        targetId: result.eventId || req.organizationId!,
+        metadata: {
+          eventName: result.eventName,
+          absentMembersCount: result.absentMembersCount,
+          memberMessagesSent: result.memberMessagesSent,
+          tasksCreatedCount: result.tasksCreatedCount,
+          leaderRemindersSent: result.leaderRemindersSent,
+          alreadyProcessed: Boolean(result.alreadyProcessed),
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      return res.status(200).json(result);
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'absence_sweep_failed',
+        message: err?.message || 'Failed to run absence sweep.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/pastoral-care/send-leader-reminders',
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    const parsed = sendLeaderRemindersSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'validation_error',
+        message: parsed.error.issues[0]?.message || 'Invalid reminder dispatch payload.',
+      });
+    }
+    try {
+      const result = await platformStore.sendPendingLeaderCareReminders(req.organizationId!, {
+        taskId: parsed.data.taskId || undefined,
+        leaderName: parsed.data.leaderName || undefined,
+        actorName: req.user?.name,
+      });
+
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId!,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || 'pastor@ekklesphere.church',
+        actorRole: req.user?.role || 'pastor',
+        action: 'pastoral_care.leader_reminders_sent',
+        targetType: 'followup_tasks',
+        targetId: parsed.data.taskId || req.organizationId!,
+        metadata: {
+          sentCount: result.sentCount,
+          attemptedCount: result.attemptedCount,
+          leaderName: parsed.data.leaderName || null,
+        },
+        ipAddress: getClientIpKey(req),
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'leader_reminders_failed',
+        message: err?.message || 'Failed to send pastoral care reminders.',
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/pastoral-care/my-reminders',
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req: Request, res: Response) => {
+    try {
+      const reminders = await platformStore.listLeaderAssignedReminders(req.organizationId!, {
+        userId: req.user!.id,
+        name: req.user!.name,
+        email: req.user!.email,
+      });
+      return res.status(200).json({
+        success: true,
+        ...reminders,
+      });
+    } catch (err: any) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || 'my_reminders_failed',
+        message: err?.message || 'Failed to load leader pastoral reminders.',
       });
     }
   }

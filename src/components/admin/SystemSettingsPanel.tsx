@@ -85,6 +85,10 @@ import {
   History,
   ArrowRight,
   RefreshCw,
+  KeyRound,
+  EyeOff,
+  Copy,
+  Lock,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -103,6 +107,8 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     updateSystemSettings,
     resetSystemSettings,
     communicationStatus,
+    saveTenantGatewayKeys,
+    testPaystackGateway,
     sendTestSmsGateway,
     sendTestEmailGateway,
     autoAssignAbsentees,
@@ -303,6 +309,25 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
     systemSettings.contactEmail || currentUser?.email || ''
   );
   const [isTestingEmail, setIsTestingEmail] = useState(false);
+
+  // Per-tenant encrypted gateway credentials (Arkesel & Paystack)
+  const [arkeselApiKeyInput, setArkeselApiKeyInput] = useState('');
+  const [showArkeselKey, setShowArkeselKey] = useState(false);
+  const [isSavingArkeselKey, setIsSavingArkeselKey] = useState(false);
+
+  const [paystackPublicKeyInput, setPaystackPublicKeyInput] = useState(
+    communicationStatus.paystackPublicKey || ''
+  );
+  const [paystackSecretKeyInput, setPaystackSecretKeyInput] = useState('');
+  const [showPaystackSecret, setShowPaystackSecret] = useState(false);
+  const [isSavingPaystackKeys, setIsSavingPaystackKeys] = useState(false);
+  const [isTestingPaystack, setIsTestingPaystack] = useState(false);
+
+  useEffect(() => {
+    if (communicationStatus.paystackPublicKey !== undefined) {
+      setPaystackPublicKeyInput(communicationStatus.paystackPublicKey || '');
+    }
+  }, [communicationStatus.paystackPublicKey]);
 
   const syncNumericDraftsFromSettings = useCallback(
     (source: SystemSettings, skipFocused = true) => {
@@ -1540,6 +1565,88 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
       });
     } finally {
       setIsTestingEmail(false);
+    }
+  };
+
+  const handleSaveArkeselKey = async () => {
+    if (!isSettingsAdmin) {
+      showToast('Only church admins can update tenant SMS API keys.');
+      return;
+    }
+    const cleanKey = arkeselApiKeyInput.trim();
+    if (!cleanKey) {
+      showToast('Enter your church Arkesel API key before saving.');
+      return;
+    }
+    setIsSavingArkeselKey(true);
+    try {
+      const res = await saveTenantGatewayKeys({ arkeselApiKey: cleanKey });
+      if (res.success) {
+        setArkeselApiKeyInput('');
+        setShowArkeselKey(false);
+      }
+    } finally {
+      setIsSavingArkeselKey(false);
+    }
+  };
+
+  const handleClearArkeselKey = async () => {
+    if (!isSettingsAdmin) return;
+    setIsSavingArkeselKey(true);
+    try {
+      await saveTenantGatewayKeys({ clearArkeselApiKey: true });
+      setArkeselApiKeyInput('');
+    } finally {
+      setIsSavingArkeselKey(false);
+    }
+  };
+
+  const handleSavePaystackKeys = async () => {
+    if (!isSettingsAdmin) {
+      showToast('Only church admins can update tenant Paystack API keys.');
+      return;
+    }
+    const pub = paystackPublicKeyInput.trim();
+    const sec = paystackSecretKeyInput.trim();
+    if (!pub && !sec) {
+      showToast('Enter your Paystack Public Key and/or Secret Key to save.');
+      return;
+    }
+    setIsSavingPaystackKeys(true);
+    try {
+      const res = await saveTenantGatewayKeys({
+        ...(pub ? { paystackPublicKey: pub } : {}),
+        ...(sec ? { paystackSecretKey: sec } : {}),
+      });
+      if (res.success) {
+        setPaystackSecretKeyInput('');
+        setShowPaystackSecret(false);
+      }
+    } finally {
+      setIsSavingPaystackKeys(false);
+    }
+  };
+
+  const handleClearPaystackKeys = async () => {
+    if (!isSettingsAdmin) return;
+    setIsSavingPaystackKeys(true);
+    try {
+      const res = await saveTenantGatewayKeys({ clearPaystackKeys: true });
+      if (res.success) {
+        setPaystackPublicKeyInput('');
+        setPaystackSecretKeyInput('');
+      }
+    } finally {
+      setIsSavingPaystackKeys(false);
+    }
+  };
+
+  const handleTestPaystack = async () => {
+    setIsTestingPaystack(true);
+    try {
+      await testPaystackGateway();
+    } finally {
+      setIsTestingPaystack(false);
     }
   };
 
@@ -3261,6 +3368,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                   onChange={(e) => handleChange('absenteeThresholdServices', parseInt(e.target.value, 10))}
                   className="w-full px-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
                 >
+                  <option value={1}>1 Missed Service (Immediate Outreach &amp; Reminder)</option>
                   <option value={2}>2 Consecutive Services (Early Warning · Recommended)</option>
                   <option value={3}>3 Consecutive Services (Critical Inactivity Flag)</option>
                   <option value={4}>4 Consecutive Services</option>
@@ -3293,13 +3401,98 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
                 <div>
                   <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Auto-Message Absent Members
+                  </div>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                    Automatically sends a personalized check-in message when a service closes for active members who missed it (honoring explicit SMS/email opt-outs).
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={formData.autoMessageAbsentMembers ?? true}
+                    onChange={(e) => handleChange('autoMessageAbsentMembers', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#6D5CF2]" />
+                </label>
+              </div>
+
+              {(formData.autoMessageAbsentMembers ?? true) && (
+                <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                        Absent Member Outreach Channel
+                      </label>
+                      <select
+                        value={formData.absentMemberMessageChannel || 'sms_and_email'}
+                        onChange={(e) =>
+                          handleChange(
+                            'absentMemberMessageChannel',
+                            e.target.value as 'sms_and_email' | 'sms' | 'email'
+                          )
+                        }
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      >
+                        <option value="sms_and_email">Arkesel SMS + Resend Email</option>
+                        <option value="sms">Arkesel SMS Only</option>
+                        <option value="email">Resend Email Only</option>
+                      </select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                        Personalized Absent Member Message Template
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={formData.absentMemberMessageTemplate ?? ''}
+                        onChange={(e) => handleChange('absentMemberMessageTemplate', e.target.value)}
+                        placeholder="Shalom {{firstName}}, we missed you at {{serviceName}} at {{churchName}}..."
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                      />
+                      <p className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] mt-1">
+                        Placeholders: <code className="font-mono">{'{{firstName}}'}</code>,{' '}
+                        <code className="font-mono">{'{{serviceName}}'}</code>,{' '}
+                        <code className="font-mono">{'{{churchName}}'}</code>,{' '}
+                        <code className="font-mono">{'{{missedCount}}'}</code>,{' '}
+                        <code className="font-mono">{'{{contactPhone}}'}</code>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <div>
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                    Auto-Send Pastoral Care Reminders to Leaders in Charge
+                  </div>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                    Sends SMS, email, and portal reminders to assigned Cell Leaders, Elders, Deacons, and Pastors whenever a follow-up task is created, monitored by the Administrator, Pastor, Presiding Elder, and Associate Pastor.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={formData.autoSendLeaderCareReminders ?? true}
+                    onChange={(e) => handleChange('autoSendLeaderCareReminders', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#6D5CF2]" />
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55]">
+                <div>
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
                     Auto-Assign Care Tasks to Cell Group Leaders
                   </div>
                   <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
                     Automatically directs absentee follow-ups to assigned home cell, ministry, or youth leaders rather than centralized pastors.
                   </p>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer ml-4">
+                <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
                   <input
                     type="checkbox"
                     checked={formData.autoAssignCellLeaders}
@@ -3319,7 +3512,7 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                     Pings usher heads and pastoral ministers immediately when an attendance anomaly or critical absentee flag is logged.
                   </p>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer ml-4">
+                <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
                   <input
                     type="checkbox"
                     checked={formData.enablePushNotifications}
@@ -3480,10 +3673,10 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             <div>
               <h3 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-2 mb-1">
                 <Send className="w-4 h-4 text-[#6D5CF2]" />
-                <span>Communication & Mobile Money Gateways</span>
+                <span>Communication &amp; Mobile Money Gateways</span>
               </h3>
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
-                Configure Arkesel SMS broadcasts, Resend transactional &amp; pastoral emails, and Mobile Money webhooks. Server API keys remain encrypted in environment secrets.
+                Configure your church&apos;s own Arkesel SMS API key, Paystack merchant keys, and Resend email settings. Secret keys are encrypted at rest with AES-256-GCM per tenant and never returned to the browser.
               </p>
             </div>
 
@@ -3491,11 +3684,20 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                    SMS Broadcast Gateway (Arkesel API)
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                    <span>SMS Broadcast Gateway (Arkesel API)</span>
+                    {communicationStatus.arkeselKeyMasked && (
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                        {communicationStatus.arkeselKeyMasked}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
-                    Authenticated server-side via <span className="font-mono">ARKESEL_API_KEY</span>.
+                    {communicationStatus.arkeselSource === 'tenant'
+                      ? 'Using your church’s encrypted Arkesel API key stored for this tenant.'
+                      : communicationStatus.arkeselSource === 'platform_env'
+                      ? 'Falling back to platform environment ARKESEL_API_KEY. Save a tenant key below to bill your own Arkesel account.'
+                      : 'Enter your church’s Arkesel API v2 key below to enable live SMS broadcasts.'}
                   </div>
                 </div>
                 <span
@@ -3505,8 +3707,71 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
                   }`}
                 >
-                  {communicationStatus.arkeselConfigured ? 'Arkesel API Ready' : 'Set ARKESEL_API_KEY in Env'}
+                  {communicationStatus.arkeselSource === 'tenant'
+                    ? 'Tenant Arkesel Key Active'
+                    : communicationStatus.arkeselConfigured
+                    ? 'Platform Env Key Active'
+                    : 'Arkesel Key Needed'}
                 </span>
+              </div>
+
+              {/* Per-Tenant Arkesel API Key Input */}
+              <div className="p-3.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                    <KeyRound className="w-3.5 h-3.5 text-[#6D5CF2]" />
+                    <span>Tenant Arkesel API Key (Write-Only)</span>
+                  </label>
+                  <span className="text-[10px] font-medium text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                    <Lock className="w-3 h-3" />
+                    <span>AES-256-GCM Encrypted</span>
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1 min-w-0">
+                    <input
+                      type={showArkeselKey ? 'text' : 'password'}
+                      autoComplete="off"
+                      value={arkeselApiKeyInput}
+                      onChange={(e) => setArkeselApiKeyInput(e.target.value)}
+                      placeholder={
+                        communicationStatus.arkeselSource === 'tenant' && communicationStatus.arkeselKeyMasked
+                          ? `Saved (${communicationStatus.arkeselKeyMasked}) — enter new key to replace`
+                          : 'Paste your church Arkesel API v2 key'
+                      }
+                      className="w-full pr-9 pl-3.5 py-2 text-xs rounded-xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowArkeselKey((prev) => !prev)}
+                      aria-label={showArkeselKey ? 'Hide Arkesel API key' : 'Show Arkesel API key'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#666A86] hover:text-[#1D1B3A] dark:text-[#A9ACC8] cursor-pointer"
+                    >
+                      {showArkeselKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isSavingArkeselKey || !arkeselApiKeyInput.trim() || !isSettingsAdmin}
+                      onClick={handleSaveArkeselKey}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {isSavingArkeselKey ? 'Encrypting...' : 'Save Arkesel Key'}
+                    </button>
+                    {communicationStatus.arkeselSource === 'tenant' && (
+                      <button
+                        type="button"
+                        disabled={isSavingArkeselKey || !isSettingsAdmin}
+                        onClick={handleClearArkeselKey}
+                        title="Remove tenant Arkesel API key"
+                        className="px-2.5 py-2 rounded-xl text-xs font-semibold border border-rose-200 dark:border-rose-800/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -3574,6 +3839,151 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
                       {isTestingSms ? 'Sending...' : 'Send Test'}
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Paystack & Mobile Money Payment Gateway (Per-Tenant Keys) */}
+            <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] flex items-center gap-1.5">
+                    <CreditCard className="w-4 h-4 text-[#6D5CF2]" />
+                    <span>Paystack &amp; Mobile Money Giving Gateway</span>
+                    {communicationStatus.paystackSecretMasked && (
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#5B5F7A] dark:text-[#A9ACC8]">
+                        {communicationStatus.paystackSecretMasked}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Route tithes, offerings, and MTN MoMo / Telecel Cash directly to this church&apos;s Paystack merchant account. Settlement: {formData.currency || 'GHS (Ghana Cedi)'}.
+                  </div>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                    communicationStatus.paystackConfigured
+                      ? communicationStatus.paystackMode === 'live'
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  }`}
+                >
+                  {communicationStatus.paystackConfigured
+                    ? communicationStatus.paystackMode === 'live'
+                      ? 'Paystack Live Ready'
+                      : 'Paystack Test Mode'
+                    : 'Paystack Keys Needed'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mb-1">
+                    Paystack Public Key
+                  </label>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={paystackPublicKeyInput}
+                    onChange={(e) => setPaystackPublicKeyInput(e.target.value)}
+                    placeholder="pk_live_... or pk_test_..."
+                    className="w-full px-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      Paystack Secret Key (Write-Only)
+                    </label>
+                    <span className="text-[10px] text-[#666A86] dark:text-[#A9ACC8] flex items-center gap-1">
+                      <Lock className="w-3 h-3" />
+                      <span>Encrypted</span>
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPaystackSecret ? 'text' : 'password'}
+                      autoComplete="off"
+                      value={paystackSecretKeyInput}
+                      onChange={(e) => setPaystackSecretKeyInput(e.target.value)}
+                      placeholder={
+                        communicationStatus.paystackConfigured && communicationStatus.paystackSecretMasked
+                          ? `Saved (${communicationStatus.paystackSecretMasked}) — enter new key to replace`
+                          : 'sk_live_... or sk_test_...'
+                      }
+                      className="w-full pr-9 pl-3.5 py-2 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2] font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPaystackSecret((prev) => !prev)}
+                      aria-label={showPaystackSecret ? 'Hide Paystack secret key' : 'Show Paystack secret key'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#666A86] hover:text-[#1D1B3A] dark:text-[#A9ACC8] cursor-pointer"
+                    >
+                      {showPaystackSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Paystack Webhook URL + Actions */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-1">
+                <div className="flex-1 min-w-0 p-2.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[#666A86] dark:text-[#A9ACC8]">
+                      Paystack Webhook URL (Paste in Paystack Dashboard)
+                    </div>
+                    <div className="text-[11px] font-mono text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                      {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/giving/webhooks/paystack/${currentUser?.organization_id || currentUser?.tenant_id || ''}`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const webhookUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/giving/webhooks/paystack/${currentUser?.organization_id || currentUser?.tenant_id || ''}`;
+                      navigator.clipboard?.writeText(webhookUrl);
+                      showToast('Paystack webhook URL copied to clipboard');
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-[#F6F7FC] dark:bg-[#14142E] hover:bg-[#EFEDFF] text-[#6D5CF2] flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={
+                      isSavingPaystackKeys ||
+                      (!paystackPublicKeyInput.trim() && !paystackSecretKeyInput.trim()) ||
+                      !isSettingsAdmin
+                    }
+                    onClick={handleSavePaystackKeys}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isSavingPaystackKeys ? 'Saving...' : 'Save Paystack Keys'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isTestingPaystack || !communicationStatus.paystackConfigured}
+                    onClick={handleTestPaystack}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold border border-[#E9EBF5] dark:border-[#2D2D55] bg-white dark:bg-[#1D1D3D] hover:bg-[#EFEDFF] dark:hover:bg-[#2A2A55] text-[#1D1B3A] dark:text-[#F2F2FA] transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isTestingPaystack ? 'Verifying...' : 'Verify Paystack API'}
+                  </button>
+                  {communicationStatus.paystackSource === 'tenant' && (
+                    <button
+                      type="button"
+                      disabled={isSavingPaystackKeys || !isSettingsAdmin}
+                      onClick={handleClearPaystackKeys}
+                      title="Remove tenant Paystack keys"
+                      className="px-2.5 py-2 rounded-xl text-xs font-semibold border border-rose-200 dark:border-rose-800/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -3659,20 +4069,32 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               <div className="p-3.5 rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                    <CheckCircle2 className="w-4 h-4" />
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                    communicationStatus.paystackConfigured
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  }`}>
+                    {communicationStatus.paystackConfigured ? (
+                      <CheckCircle2 className="w-4 h-4" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4" />
+                    )}
                   </div>
                   <div>
                     <div className="text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
-                      Paystack & MTN MoMo Webhook
+                      Paystack &amp; MTN MoMo Checkout
                     </div>
                     <div className="text-[10px] text-[#666A86] dark:text-[#A9ACC8]">
                       Settlement currency: {formData.currency || 'GHS (Ghana Cedi)'}
                     </div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                  Verified
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  communicationStatus.paystackConfigured
+                    ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
+                    : 'text-amber-600 dark:text-amber-400 bg-amber-500/10'
+                }`}>
+                  {communicationStatus.paystackConfigured ? 'Connected' : 'Setup Needed'}
                 </span>
               </div>
 

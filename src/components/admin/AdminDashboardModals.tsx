@@ -13,6 +13,7 @@ import {
   Clock,
   Edit3,
   Trash2,
+  Bell,
 } from 'lucide-react';
 import {
   ChurchGroup,
@@ -1096,6 +1097,7 @@ export interface FollowupQueueModalProps {
     }
   ) => Promise<unknown> | void;
   onDeleteTask?: (id: string) => Promise<unknown> | void;
+  onSendTaskReminder?: (taskId: string) => Promise<unknown> | void;
   onNotify: (msg: string) => void;
 }
 
@@ -1114,6 +1116,7 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
     onResolveTask,
     onEditTask,
     onDeleteTask,
+    onSendTaskReminder,
   }) => {
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [editAssignee, setEditAssignee] = useState('');
@@ -1121,6 +1124,7 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
     const [editOutcome, setEditOutcome] = useState('');
     const [editNotes, setEditNotes] = useState('');
     const [isSavingEdit, setIsSavingEdit] = useState(false);
+    const [remindingTaskId, setRemindingTaskId] = useState<string | null>(null);
     const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
 
     useEffect(() => {
@@ -1291,6 +1295,21 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
                               Notes: {t.notes}
                             </div>
                           )}
+                          {((t.reminderCount ?? 0) > 0 || t.acknowledgedAt || t.serviceName) && (
+                            <div className="mt-1 text-[11px] text-[#666A86] dark:text-[#A9ACC8] tabular-nums">
+                              {t.serviceName ? `${t.serviceName} · ` : ''}
+                              Reminders sent: <strong className="text-[#1D1B3A] dark:text-[#F2F2FA]">{t.reminderCount ?? 0}</strong>
+                              {t.lastReminderAt
+                                ? ` · Last: ${new Date(t.lastReminderAt).toLocaleString('en-GB', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}`
+                                : ''}
+                              {t.acknowledgedAt ? ' · Acknowledged by leader' : ''}
+                            </div>
+                          )}
                           {t.outcome && (
                             <div className="mt-1 text-emerald-600 dark:text-emerald-400">
                               Outcome: {t.outcome}
@@ -1316,6 +1335,28 @@ export const FollowupQueueModal = React.memo<FollowupQueueModalProps>(
                                 );
                               }}
                             />
+                            {onSendTaskReminder && (
+                              <button
+                                type="button"
+                                disabled={remindingTaskId === t.id}
+                                onClick={async () => {
+                                  setRemindingTaskId(t.id);
+                                  try {
+                                    await onSendTaskReminder(t.id);
+                                  } finally {
+                                    setRemindingTaskId(null);
+                                  }
+                                }}
+                                className="bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] px-2.5 py-1.5 min-h-[34px] rounded-xl font-bold whitespace-nowrap cursor-pointer disabled:opacity-60 inline-flex items-center gap-1"
+                              >
+                                {remindingTaskId === t.id ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Bell className="w-3 h-3" />
+                                )}
+                                <span>{remindingTaskId === t.id ? 'Sending...' : 'Remind Leader'}</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => onResolveTask(t.id, 'Excused absence', 'resolved')}

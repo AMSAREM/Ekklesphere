@@ -15,6 +15,7 @@ import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
 import { KeyRound } from 'lucide-react';
 import { PublicLandingPage } from './components/landing/PublicLandingPage';
 import { isPublicLandingLocation } from './utils/authRoute';
+import { canMonitorPastoralCare } from './constants/portfolios';
 
 const readLocationKey = () =>
   typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
@@ -22,6 +23,7 @@ const readLocationKey = () =>
 const EkklesphereMain: React.FC = () => {
   const {
     currentUser,
+    activePortal,
     isVerifyingSession,
     toastMessage,
     viewMode,
@@ -188,13 +190,15 @@ const EkklesphereMain: React.FC = () => {
         </div>
       ) : (
         <>
-          {(currentUser.role === 'admin' ||
-            currentUser.role === 'pastor' ||
-            currentUser.role === 'super_admin' ||
-            currentUser.role === 'creator' ||
-            currentUser.role === 'finance') && <AdminDashboard />}
-          {currentUser.role === 'usher' && <UsherTool />}
-          {(currentUser.role === 'member' || currentUser.role === 'group_leader') && <MemberApp />}
+          {currentUser.role === 'usher' ? (
+            <UsherTool />
+          ) : activePortal === 'member' ? (
+            <MemberApp />
+          ) : canMonitorPastoralCare(currentUser) || currentUser.role === 'finance' ? (
+            <AdminDashboard />
+          ) : (
+            <MemberApp />
+          )}
         </>
       )}
 

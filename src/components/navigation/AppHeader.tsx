@@ -21,10 +21,12 @@ import {
 import { MemberAvatar } from '../common/MemberAvatar';
 import { BrandLogo } from '../common/BrandLogo';
 import { PWAInstallButton } from '../common/PWAInstallButton';
+import { canMonitorPastoralCare } from '../../constants/portfolios';
 
 export const AppHeader: React.FC = () => {
   const {
     currentUser,
+    activePortal,
     switchUserRole,
     logout,
     theme,
@@ -149,18 +151,21 @@ export const AppHeader: React.FC = () => {
 
         {/* Right: Minimal controls & clean switcher */}
         <div className="flex items-center gap-1 sm:gap-1.5">
-          {/* Quick Role Preview Switcher (Verified Admin / Pastor / Creator ONLY) */}
+          {/* Quick Role Preview Switcher (Verified Admin / Pastor / Presiding Elder / Associate Pastor / Creator) */}
           {currentUser &&
-            (currentUser.is_creator ||
-              ['creator', 'super_admin', 'admin', 'pastor'].includes(
-                currentUser.verifiedRole || currentUser.role
-              )) && (
+            canMonitorPastoralCare({
+              role: currentUser.verifiedRole || currentUser.role,
+              designation: currentUser.designation,
+              is_creator: currentUser.is_creator,
+            }) && (
               <div className="hidden lg:flex items-center p-0.5 rounded-lg bg-[#F2F2FA] dark:bg-white/5 border border-[#E9EBF5] dark:border-white/10 text-xs">
                 {roles.map((item) => {
                   const isActive =
-                    currentUser.role === item.role ||
-                    (item.role === 'admin' && (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
-                    (item.role === 'member' && currentUser.role === 'group_leader');
+                    item.role === 'usher'
+                      ? currentUser.role === 'usher'
+                      : item.role === 'member'
+                      ? activePortal === 'member' && currentUser.role !== 'usher'
+                      : activePortal === 'admin' && currentUser.role !== 'usher';
                   return (
                     <button
                       key={item.role}
@@ -273,7 +278,7 @@ export const AppHeader: React.FC = () => {
                       </p>
                     )}
                   </div>
-                  {currentUser.role === 'admin' && (
+                  {canMonitorPastoralCare(currentUser) && (
                     <button
                       onClick={() => {
                         setIsNotifDropdownOpen(false);
@@ -342,21 +347,23 @@ export const AppHeader: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Switch Role Quick Links (Verified Admin / Pastor / Creator ONLY) */}
-                  {(currentUser.is_creator ||
-                    ['creator', 'super_admin', 'admin', 'pastor'].includes(
-                      currentUser.verifiedRole || currentUser.role
-                    )) && (
+                  {/* Switch Role Quick Links (Verified Admin / Pastor / Presiding Elder / Associate Pastor / Creator) */}
+                  {canMonitorPastoralCare({
+                    role: currentUser.verifiedRole || currentUser.role,
+                    designation: currentUser.designation,
+                    is_creator: currentUser.is_creator,
+                  }) && (
                     <div className="px-2 py-1.5 border-b border-[#E9EBF5] dark:border-[#2D2D55]">
                       <div className="text-[10px] font-bold text-[#666A86] dark:text-[#A9ACC8] uppercase px-2 py-1 tracking-wider">
                         Switch Active Portal
                       </div>
                       {roles.map((item) => {
                         const isActive =
-                          currentUser.role === item.role ||
-                          (item.role === 'admin' &&
-                            (currentUser.role === 'super_admin' || currentUser.role === 'pastor')) ||
-                          (item.role === 'member' && currentUser.role === 'group_leader');
+                          item.role === 'usher'
+                            ? currentUser.role === 'usher'
+                            : item.role === 'member'
+                            ? activePortal === 'member' && currentUser.role !== 'usher'
+                            : activePortal === 'admin' && currentUser.role !== 'usher';
                         return (
                           <button
                             key={item.role}

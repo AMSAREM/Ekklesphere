@@ -26,6 +26,7 @@ export interface AuthUserPayload {
   organization_id?: string;
   campus_id?: string;
   name?: string;
+  designation?: string;
   is_creator?: boolean;
   auth_provider?: 'supabase' | 'session_jwt';
   sid?: string;
@@ -178,6 +179,57 @@ export function unsealTemporaryPassword(
   } catch {
     return undefined;
   }
+}
+
+function getTenantSecretSealKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  const configured = (env.GATEWAY_SECRETS_KEY || '').trim();
+  const base = configured.length >= 16 ? configured : getJwtSecret(env);
+  return createHash('sha256')
+    .update(`ekklesphere-tenant-gateway-secret-v1:${base}`)
+    .digest();
+}
+
+/**
+ * Encrypts per-tenant external API secrets (Arkesel, Paystack) with AES-256-GCM at rest.
+ */
+export function sealTenantSecret(
+  plaintext: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const clean = String(plaintext || '').trim();
+  if (!clean) return '';
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', getTenantSecretSealKey(env), iv);
+  const encrypted = Buffer.concat([cipher.update(clean, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `tgv1:${iv.toString('base64url')}:${tag.toString('base64url')}:${encrypted.toString('base64url')}`;
+}
+
+export function unsealTenantSecret(
+  sealed?: string | null,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  if (!sealed || typeof sealed !== 'string') return undefined;
+  const parts = sealed.split(':');
+  if (parts.length !== 4 || parts[0] !== 'tgv1') return undefined;
+  try {
+    const iv = Buffer.from(parts[1], 'base64url');
+    const tag = Buffer.from(parts[2], 'base64url');
+    const payload = Buffer.from(parts[3], 'base64url');
+    const decipher = createDecipheriv('aes-256-gcm', getTenantSecretSealKey(env), iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(payload), decipher.final()]).toString('utf8');
+    return decrypted || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function maskSecretTail(plaintext?: string | null): string | null {
+  const clean = String(plaintext || '').trim();
+  if (!clean) return null;
+  if (clean.length <= 4) return '••••';
+  return `••••${clean.slice(-4)}`;
 }
 
 /**
@@ -612,6 +664,26 @@ export function canManagePremise(role?: ChurchRole): boolean {
 
 export function canManageMembers(role?: ChurchRole): boolean {
   return role === 'super_admin' || role === 'creator' || role === 'admin' || role === 'pastor';
+}
+
+export function hasPastoralOversightAccess(
+  user?: Pick<AuthUserPayload, 'role' | 'designation' | 'is_creator'> | null
+): boolean {
+  if (!user) return false;
+  if (user.is_creator) return true;
+  if (
+    user.role === 'super_admin' ||
+    user.role === 'creator' ||
+    user.role === 'admin' ||
+    user.role === 'pastor'
+  ) {
+    return true;
+  }
+  const cleanDesignation = String(user.designation || '').trim().toLowerCase();
+  if (!cleanDesignation) return false;
+  return /\b(administrator|senior pastor|associate pastor|presiding elder|youth pastor|pastor|bishop|reverend)\b/i.test(
+    cleanDesignation
+  );
 }
 
 export function canCheckinAttendance(role?: ChurchRole): boolean {

@@ -31,7 +31,11 @@ import {
   LiveTelemetrySummary,
   ChurchWallPost,
   AuthActionResult,
+  PastoralCareDispatch,
+  PastoralCareMonitorSummary,
+  ServiceAbsenceSweepResult,
 } from '../types/ekklesphere';
+import { canMonitorPastoralCare } from '../constants/portfolios';
 import { pushNotificationService } from '../services/pushNotificationService';
 import {
   validateMemberImportBatch,
@@ -97,6 +101,11 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   absenteeThresholdServices: 2,
   firstTimerFollowupHours: 24,
   autoAssignCellLeaders: true,
+  autoMessageAbsentMembers: true,
+  absentMemberMessageChannel: 'sms_and_email',
+  absentMemberMessageTemplate:
+    'Shalom {{firstName}}, we missed you at {{serviceName}} at {{churchName}}. You are deeply valued in our church family. Reach our care team anytime on {{contactPhone}}.',
+  autoSendLeaderCareReminders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
   sessionTimeoutMinutes: 30,
@@ -134,6 +143,11 @@ function areSystemSettingsEqual(a: SystemSettings, b: SystemSettings): boolean {
     a.absenteeThresholdServices !== b.absenteeThresholdServices ||
     a.firstTimerFollowupHours !== b.firstTimerFollowupHours ||
     a.autoAssignCellLeaders !== b.autoAssignCellLeaders ||
+    (a.autoMessageAbsentMembers ?? true) !== (b.autoMessageAbsentMembers ?? true) ||
+    (a.absentMemberMessageChannel || 'sms_and_email') !==
+      (b.absentMemberMessageChannel || 'sms_and_email') ||
+    (a.absentMemberMessageTemplate || '') !== (b.absentMemberMessageTemplate || '') ||
+    (a.autoSendLeaderCareReminders ?? true) !== (b.autoSendLeaderCareReminders ?? true) ||
     a.requireExplicitConsent !== b.requireExplicitConsent ||
     a.auditLogRetentionDays !== b.auditLogRetentionDays ||
     (a.sessionTimeoutMinutes ?? 30) !== (b.sessionTimeoutMinutes ?? 30) ||
@@ -228,7 +242,14 @@ function normalizePersonRecord(input: Partial<Person> | Record<string, unknown>)
 
 export interface CommunicationGatewayStatusState {
   arkeselConfigured: boolean;
+  arkeselSource?: 'tenant' | 'platform_env' | 'none';
+  arkeselKeyMasked?: string | null;
   resendConfigured: boolean;
+  paystackConfigured?: boolean;
+  paystackSource?: 'tenant' | 'platform_env' | 'none';
+  paystackPublicKey?: string;
+  paystackSecretMasked?: string | null;
+  paystackMode?: 'live' | 'test' | 'unconfigured';
   defaultSmsSenderId: string;
   defaultFromEmail: string;
   defaultFromName: string;
@@ -297,8 +318,8 @@ interface EkklesphereContextType {
   toggleSidebar: () => void;
   isMobileNavOpen: boolean;
   setIsMobileNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings';
-  setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings') => void;
+  adminSubTab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'pastoral' | 'integrations' | 'proximity' | 'settings';
+  setAdminSubTab: (tab: 'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'pastoral' | 'integrations' | 'proximity' | 'settings') => void;
   requestedSettingsTab: { tab: SettingsTabId; groupIntent?: SettingsGroupIntent; nonce: number } | null;
   requestOpenSettings: (tab: SettingsTabId, groupIntent?: SettingsGroupIntent) => void;
   requestedUserTarget: {
@@ -402,6 +423,14 @@ interface EkklesphereContextType {
   resetSystemSettings: () => Promise<boolean>;
   communicationStatus: CommunicationGatewayStatusState;
   refreshCommunicationStatus: () => Promise<void>;
+  saveTenantGatewayKeys: (patch: {
+    arkeselApiKey?: string;
+    clearArkeselApiKey?: boolean;
+    paystackPublicKey?: string;
+    paystackSecretKey?: string;
+    clearPaystackKeys?: boolean;
+  }) => Promise<{ success: boolean; message: string }>;
+  testPaystackGateway: () => Promise<{ success: boolean; mode?: 'live' | 'test' | 'unconfigured'; message: string }>;
   sendTestSmsGateway: (
     provider: string,
     senderId: string,
@@ -501,6 +530,22 @@ interface EkklesphereContextType {
   // Follow-up & Pastoral Care
   followupTasks: FollowupTask[];
   isAutoAssigningAbsentees: boolean;
+  pastoralMonitor: PastoralCareMonitorSummary | null;
+  isLoadingPastoralMonitor: boolean;
+  isRunningAbsenceSweep: boolean;
+  isSendingLeaderReminders: boolean;
+  myLeaderReminders: { tasks: FollowupTask[]; dispatches: PastoralCareDispatch[] };
+  fetchPastoralMonitor: () => Promise<PastoralCareMonitorSummary | null>;
+  fetchMyLeaderReminders: () => Promise<{ tasks: FollowupTask[]; dispatches: PastoralCareDispatch[] }>;
+  runAbsenceSweep: (options?: {
+    eventId?: string;
+    force?: boolean;
+  }) => Promise<ServiceAbsenceSweepResult | null>;
+  sendLeaderCareReminders: (options?: {
+    taskId?: string;
+    leaderName?: string;
+  }) => Promise<{ sentCount: number; message?: string }>;
+  acknowledgeLeaderReminder: (taskId: string) => Promise<FollowupTask | null>;
   resolveFollowupTask: (
     taskId: string,
     outcome: string,
@@ -533,6 +578,25 @@ interface EkklesphereContextType {
   toggleRsvp: (eventName: string, eventId?: string) => Promise<void>;
   donations: Donation[];
   submitDonation: (amountGhs: number, fund: string, method: 'MTN MoMo' | 'Telecel Cash' | 'Card') => Promise<boolean>;
+  initializePaystackGiving: (params: {
+    amountGhs: number;
+    fundName: string;
+    provider: 'MTN MoMo' | 'Telecel Cash' | 'Card';
+    email?: string;
+  }) => Promise<{
+    success: boolean;
+    authorizationUrl?: string;
+    reference?: string;
+    publicKey?: string;
+    mode?: 'live' | 'test' | 'unconfigured';
+    message?: string;
+  }>;
+  verifyPaystackGiving: (reference: string) => Promise<{
+    success: boolean;
+    verified: boolean;
+    status?: 'paid' | 'pending' | 'failed';
+    message: string;
+  }>;
   churchWallPosts: ChurchWallPost[];
   refreshChurchWallPosts: () => Promise<void>;
   addChurchWallPost: (input: {
@@ -749,7 +813,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return false;
   });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
-  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'integrations' | 'proximity' | 'settings'>('dashboard');
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'history' | 'insights' | 'workflows' | 'users' | 'pastoral' | 'integrations' | 'proximity' | 'settings'>('dashboard');
   const [requestedSettingsTab, setRequestedSettingsTab] = useState<{
     tab: SettingsTabId;
     groupIntent?: SettingsGroupIntent;
@@ -1146,6 +1210,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       email: string;
       name: string;
       role: UserRole;
+      designation?: string;
       organizationId?: string;
       organization_id?: string;
       organizationName?: string;
@@ -1169,6 +1234,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const matchedMember = members.find(
       (m) => m.id === payload.id || (payload.email && (m.email || '').toLowerCase() === payload.email.toLowerCase())
     );
+    const resolvedDesignation =
+      (payload.designation || matchedMember?.designation || matchedMember?.officerName || '').trim() || undefined;
     const displayName = (payload.name || payload.email?.split('@')[0] || 'Ekklesphere User').trim();
     const initials =
       displayName
@@ -1179,12 +1246,19 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         .join('')
         .toUpperCase() || 'EU';
 
+    const canOversight = canMonitorPastoralCare({
+      role,
+      designation: resolvedDesignation,
+      is_creator: isCreator,
+    });
+
     return {
       id: payload.id,
       name: displayName,
       email: payload.email || '',
       role,
       verifiedRole: role,
+      designation: resolvedDesignation,
       is_creator: isCreator,
       mustChangePassword: Boolean(payload.mustChangePassword),
       token,
@@ -1199,6 +1273,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       title:
         role === 'creator' || role === 'super_admin'
           ? 'Platform Creator & Owner'
+          : resolvedDesignation
+          ? resolvedDesignation
           : role === 'admin' || role === 'pastor'
           ? 'Administrator / Executive Pastor'
           : role === 'usher'
@@ -1211,6 +1287,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ? ['all_access', 'creator_console', 'pastoral_care', 'service_management', 'system_settings']
           : role === 'admin' || role === 'pastor'
           ? ['all_access', 'pastoral_care', 'service_management', 'system_settings']
+          : canOversight
+          ? ['pastoral_care', 'member_portal', 'proximity_checkin', 'giving', 'rsvp']
           : role === 'usher'
           ? ['checkin_members', 'register_visitors', 'offline_sync', 'proximity_radar']
           : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
@@ -1245,12 +1323,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // ignore
     }
 
-    if (
-      verifiedUser.role === 'admin' ||
-      verifiedUser.role === 'pastor' ||
-      verifiedUser.role === 'creator' ||
-      verifiedUser.role === 'super_admin'
-    ) {
+    if (canMonitorPastoralCare(verifiedUser) || verifiedUser.role === 'finance') {
       setActivePortalState('admin');
     } else if (verifiedUser.role === 'usher') {
       setActivePortalState('usher');
@@ -1341,6 +1414,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setAuditLogs([]);
     setDonations([]);
     setFollowupTasks([]);
+    setPastoralMonitor(null);
+    setMyLeaderReminders({ tasks: [], dispatches: [] });
     setMemberConsents({ autoCheckin: true, push: true, sms: false, email: true });
     setMemberRsvps({});
     setPushSubscribersCount(0);
@@ -1530,6 +1605,13 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : ['member_portal', 'proximity_checkin', 'giving', 'rsvp'],
     };
     login(updatedUser);
+    if (role === 'usher') {
+      setActivePortalState('usher');
+    } else if (role === 'member' || role === 'group_leader') {
+      setActivePortalState('member');
+    } else {
+      setActivePortalState('admin');
+    }
   };
 
   const loginWithCredentials = async (
@@ -1928,6 +2010,10 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 email: data.user.email,
                 name: data.user.name,
                 role: data.user.role,
+                designation:
+                  data.user.designation ||
+                  data.memberProfile?.designation ||
+                  data.memberProfile?.officerName,
                 organizationId: data.organizationId || data.user.organization_id,
                 organizationName: resolvedOrgName || undefined,
                 isCreator: data.isCreator,
@@ -1979,6 +2065,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setAttendanceRecords([]);
       setDonations([]);
       setFollowupTasks([]);
+      setPastoralMonitor(null);
+      setMyLeaderReminders({ tasks: [], dispatches: [] });
       setMemberConsents({ autoCheckin: true, push: true, sms: false, email: true });
       setMemberRsvps({});
       if (currentUser) {
@@ -2184,9 +2272,24 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isLoadingLeadershipHistory, setIsLoadingLeadershipHistory] = useState(false);
   const [followupTasks, setFollowupTasks] = useState<FollowupTask[]>([]);
   const [isAutoAssigningAbsentees, setIsAutoAssigningAbsentees] = useState(false);
+  const [pastoralMonitor, setPastoralMonitor] = useState<PastoralCareMonitorSummary | null>(null);
+  const [isLoadingPastoralMonitor, setIsLoadingPastoralMonitor] = useState(false);
+  const [isRunningAbsenceSweep, setIsRunningAbsenceSweep] = useState(false);
+  const [isSendingLeaderReminders, setIsSendingLeaderReminders] = useState(false);
+  const [myLeaderReminders, setMyLeaderReminders] = useState<{
+    tasks: FollowupTask[];
+    dispatches: PastoralCareDispatch[];
+  }>({ tasks: [], dispatches: [] });
   const [communicationStatus, setCommunicationStatus] = useState<CommunicationGatewayStatusState>({
     arkeselConfigured: false,
+    arkeselSource: 'none',
+    arkeselKeyMasked: null,
     resendConfigured: false,
+    paystackConfigured: false,
+    paystackSource: 'none',
+    paystackPublicKey: '',
+    paystackSecretMasked: null,
+    paystackMode: 'unconfigured',
     defaultSmsSenderId: 'EKKLESPHERE',
     defaultFromEmail: 'onboarding@resend.dev',
     defaultFromName: 'Ekklesphere Church',
@@ -4242,6 +4345,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId);
 
     let mappedUpdated: ServiceInstance | null = null;
+    let closeAbsenceSweep: ServiceAbsenceSweepResult | null = null;
     try {
       let res: Response;
       if (isPlaceholderId) {
@@ -4268,6 +4372,9 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         mappedUpdated = mapDbEventToService(data);
+        if (data?.absenceSweep) {
+          closeAbsenceSweep = data.absenceSweep as ServiceAbsenceSweepResult;
+        }
       } else {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(errBody?.message || `Failed to update service (HTTP ${res.status})`);
@@ -4359,9 +4466,23 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
     }
 
-    showToast(
-      `Updated "${mappedUpdated.name}" (${updatedBinaryStatus === 'live' ? 'Live' : 'Closed'})`
-    );
+    if (closeAbsenceSweep) {
+      if (Array.isArray(closeAbsenceSweep.allTasks)) {
+        setFollowupTasks(closeAbsenceSweep.allTasks);
+      }
+      refreshMembers().catch(() => {});
+      if (pastoralMonitor) {
+        fetchPastoralMonitor().catch(() => {});
+      }
+      showToast(
+        closeAbsenceSweep.message ||
+          `Closed "${mappedUpdated.name}": ${closeAbsenceSweep.memberMessagesSent} absent alert(s), ${closeAbsenceSweep.leaderRemindersSent} leader reminder(s).`
+      );
+    } else {
+      showToast(
+        `Updated "${mappedUpdated.name}" (${updatedBinaryStatus === 'live' ? 'Live' : 'Closed'})`
+      );
+    }
   };
 
   const deleteService = async (serviceId: string): Promise<void> => {
@@ -4437,6 +4558,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
     const role = currentUser?.verifiedRole || currentUser?.role;
     const isStaff =
+      canMonitorPastoralCare(currentUser) ||
       role === 'admin' ||
       role === 'pastor' ||
       role === 'usher' ||
@@ -4741,7 +4863,14 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (data?.success) {
         setCommunicationStatus({
           arkeselConfigured: Boolean(data.arkeselConfigured),
+          arkeselSource: data.arkeselSource || 'none',
+          arkeselKeyMasked: data.arkeselKeyMasked ?? null,
           resendConfigured: Boolean(data.resendConfigured),
+          paystackConfigured: Boolean(data.paystackConfigured),
+          paystackSource: data.paystackSource || 'none',
+          paystackPublicKey: String(data.paystackPublicKey || ''),
+          paystackSecretMasked: data.paystackSecretMasked ?? null,
+          paystackMode: data.paystackMode || 'unconfigured',
           defaultSmsSenderId: String(data.defaultSmsSenderId || 'EKKLESPHERE'),
           defaultFromEmail: String(data.defaultFromEmail || 'onboarding@resend.dev'),
           defaultFromName: String(data.defaultFromName || 'Ekklesphere Church'),
@@ -4749,6 +4878,78 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     } catch {
       // keep fallback status
+    }
+  };
+
+  const saveTenantGatewayKeys = async (patch: {
+    arkeselApiKey?: string;
+    clearArkeselApiKey?: boolean;
+    paystackPublicKey?: string;
+    paystackSecretKey?: string;
+    clearPaystackKeys?: boolean;
+  }): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/system-settings/gateways', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not save tenant gateway credentials.';
+        showToast(msg);
+        return { success: false, message: msg };
+      }
+      if (data?.gateways) {
+        setCommunicationStatus((prev) => ({
+          ...prev,
+          arkeselConfigured: Boolean(data.gateways.arkeselConfigured),
+          arkeselSource: data.gateways.arkeselSource || 'none',
+          arkeselKeyMasked: data.gateways.arkeselKeyMasked ?? null,
+          paystackConfigured: Boolean(data.gateways.paystackConfigured),
+          paystackSource: data.gateways.paystackSource || 'none',
+          paystackPublicKey: String(data.gateways.paystackPublicKey || ''),
+          paystackSecretMasked: data.gateways.paystackSecretMasked ?? null,
+          paystackMode: data.gateways.paystackMode || 'unconfigured',
+        }));
+      } else {
+        await refreshCommunicationStatus();
+      }
+      refreshAuditLogs().catch(() => {});
+      const msg = data?.message || 'Encrypted tenant gateway credentials saved.';
+      showToast(msg);
+      return { success: true, message: msg };
+    } catch {
+      const msg = 'Network error saving tenant gateway keys.';
+      showToast(msg);
+      return { success: false, message: msg };
+    }
+  };
+
+  const testPaystackGateway = async (): Promise<{
+    success: boolean;
+    mode?: 'live' | 'test' | 'unconfigured';
+    message: string;
+  }> => {
+    try {
+      const res = await fetch('/api/system-settings/test-paystack', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Paystack API verification failed.';
+        showToast(msg);
+        return { success: false, mode: data?.mode, message: msg };
+      }
+      const msg = data?.message || 'Paystack API connection verified.';
+      showToast(msg);
+      refreshAuditLogs().catch(() => {});
+      return { success: true, mode: data?.mode, message: msg };
+    } catch {
+      const msg = 'Network error verifying Paystack API.';
+      showToast(msg);
+      return { success: false, message: msg };
     }
   };
 
@@ -5188,6 +5389,96 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const initializePaystackGiving = async (params: {
+    amountGhs: number;
+    fundName: string;
+    provider: 'MTN MoMo' | 'Telecel Cash' | 'Card';
+    email?: string;
+  }): Promise<{
+    success: boolean;
+    authorizationUrl?: string;
+    reference?: string;
+    publicKey?: string;
+    mode?: 'live' | 'test' | 'unconfigured';
+    message?: string;
+  }> => {
+    try {
+      const res = await fetch('/api/giving/paystack/initialize', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          amountGhs: params.amountGhs,
+          fundName: params.fundName,
+          fundId: params.fundName.toLowerCase().replace(/\s+/g, '-'),
+          provider: params.provider,
+          ...(params.email ? { email: params.email } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not initialize Paystack checkout.';
+        showToast(msg);
+        return { success: false, message: msg };
+      }
+      if (data?.donation) {
+        setDonations((prev) => [data.donation, ...prev.filter((d) => d.id !== data.donation.id)]);
+      }
+      return {
+        success: true,
+        authorizationUrl: data.authorizationUrl,
+        reference: data.reference,
+        publicKey: data.publicKey,
+        mode: data.mode,
+      };
+    } catch {
+      const msg = 'Network error initializing Paystack checkout.';
+      showToast(msg);
+      return { success: false, message: msg };
+    }
+  };
+
+  const verifyPaystackGiving = async (
+    reference: string
+  ): Promise<{
+    success: boolean;
+    verified: boolean;
+    status?: 'paid' | 'pending' | 'failed';
+    message: string;
+  }> => {
+    try {
+      const res = await fetch('/api/giving/paystack/verify', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ reference }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not verify Paystack transaction.';
+        showToast(msg);
+        return { success: false, verified: false, message: msg };
+      }
+      if (data?.donation) {
+        setDonations((prev) => [
+          data.donation,
+          ...prev.filter((d) => d.id !== data.donation.id && d.reference !== data.reference),
+        ]);
+      } else {
+        refreshDonations().catch(() => {});
+      }
+      showToast(data.message || 'Paystack transaction verified.');
+      return {
+        success: true,
+        verified: Boolean(data.verified),
+        status: data.status,
+        message: data.message || 'Payment status updated.',
+      };
+    } catch {
+      const msg = 'Network error verifying Paystack payment.';
+      showToast(msg);
+      return { success: false, verified: false, message: msg };
+    }
+  };
+
   const activeWallOrgKey = currentUser?.organization_id || currentUser?.tenant_id || 'default';
   const [churchWallPosts, setChurchWallPosts] = useState<ChurchWallPost[]>(() => {
     try {
@@ -5524,10 +5815,172 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const fetchPastoralMonitor = async (): Promise<PastoralCareMonitorSummary | null> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token || !canMonitorPastoralCare(currentUser)) return null;
+    setIsLoadingPastoralMonitor(true);
+    try {
+      const res = await fetch('/api/pastoral-care/monitor', {
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.monitor) {
+        return null;
+      }
+      setPastoralMonitor(data.monitor);
+      if (Array.isArray(data.monitor.tasks)) {
+        setFollowupTasks(data.monitor.tasks);
+      }
+      return data.monitor as PastoralCareMonitorSummary;
+    } catch {
+      return null;
+    } finally {
+      setIsLoadingPastoralMonitor(false);
+    }
+  };
+
+  const fetchMyLeaderReminders = async (): Promise<{
+    tasks: FollowupTask[];
+    dispatches: PastoralCareDispatch[];
+  }> => {
+    const token =
+      currentUser?.token ||
+      (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
+    if (!token) return { tasks: [], dispatches: [] };
+    try {
+      const res = await fetch('/api/pastoral-care/my-reminders', {
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return { tasks: [], dispatches: [] };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { tasks: [], dispatches: [] };
+      const next = {
+        tasks: Array.isArray(data.tasks) ? data.tasks : [],
+        dispatches: Array.isArray(data.dispatches) ? data.dispatches : [],
+      };
+      setMyLeaderReminders(next);
+      return next;
+    } catch {
+      return { tasks: [], dispatches: [] };
+    }
+  };
+
+  const runAbsenceSweep = async (options?: {
+    eventId?: string;
+    force?: boolean;
+  }): Promise<ServiceAbsenceSweepResult | null> => {
+    setIsRunningAbsenceSweep(true);
+    try {
+      const res = await fetch('/api/pastoral-care/run-absence-sweep', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          ...(options?.eventId ? { eventId: options.eventId } : {}),
+          ...(options?.force !== undefined ? { force: options.force } : {}),
+        }),
+      });
+      if (handleUnauthorizedSession(res.status)) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        showToast(data?.message || 'Could not execute absence sweep.');
+        return null;
+      }
+      if (Array.isArray(data.allTasks)) {
+        setFollowupTasks(data.allTasks);
+      }
+      await Promise.all([
+        refreshMembers().catch(() => {}),
+        fetchPastoralMonitor().catch(() => {}),
+        refreshAuditLogs().catch(() => {}),
+      ]);
+      showToast(data.message || 'Absence outreach and pastoral leader reminders completed.');
+      return data as ServiceAbsenceSweepResult;
+    } catch {
+      showToast('Network error running absence outreach sweep.');
+      return null;
+    } finally {
+      setIsRunningAbsenceSweep(false);
+    }
+  };
+
+  const sendLeaderCareReminders = async (options?: {
+    taskId?: string;
+    leaderName?: string;
+  }): Promise<{ sentCount: number; message?: string }> => {
+    setIsSendingLeaderReminders(true);
+    try {
+      const res = await fetch('/api/pastoral-care/send-leader-reminders', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          ...(options?.taskId ? { taskId: options.taskId } : {}),
+          ...(options?.leaderName ? { leaderName: options.leaderName } : {}),
+        }),
+      });
+      if (handleUnauthorizedSession(res.status)) return { sentCount: 0 };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        const msg = data?.message || 'Could not dispatch leader pastoral reminders.';
+        showToast(msg);
+        return { sentCount: 0, message: msg };
+      }
+      if (Array.isArray(data.allTasks)) {
+        setFollowupTasks(data.allTasks);
+      }
+      await Promise.all([
+        fetchPastoralMonitor().catch(() => {}),
+        refreshAuditLogs().catch(() => {}),
+      ]);
+      const count = Number(data.sentCount || 0);
+      showToast(
+        count > 0
+          ? `Sent pastoral care reminder${count === 1 ? '' : 's'} to ${count} leader${count === 1 ? '' : 's'} in charge.`
+          : 'No open or contacted tasks matched for reminder dispatch.'
+      );
+      return { sentCount: count };
+    } catch {
+      showToast('Network error sending leader pastoral care reminders.');
+      return { sentCount: 0 };
+    } finally {
+      setIsSendingLeaderReminders(false);
+    }
+  };
+
+  const acknowledgeLeaderReminder = async (taskId: string): Promise<FollowupTask | null> => {
+    try {
+      const res = await fetch(`/api/followup-tasks/${encodeURIComponent(taskId)}/acknowledge`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (handleUnauthorizedSession(res.status)) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.task) {
+        showToast(data?.message || 'Could not acknowledge pastoral care reminder.');
+        return null;
+      }
+      setFollowupTasks((prev) => prev.map((t) => (t.id === taskId ? data.task : t)));
+      setMyLeaderReminders((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((t) => (t.id === taskId ? data.task : t)),
+      }));
+      showToast(`Acknowledged pastoral care reminder for ${data.task.personName}.`);
+      return data.task as FollowupTask;
+    } catch {
+      showToast('Network error acknowledging pastoral reminder.');
+      return null;
+    }
+  };
+
   // Automatically trigger idempotent absentee->officer/leader assignment once per session/org when threshold absentees exist
   useEffect(() => {
     if (!isSessionVerified || !currentUser?.token) return;
-    if (!['admin', 'pastor', 'group_leader', 'super_admin', 'creator'].includes(currentUser.role)) {
+    if (
+      !canMonitorPastoralCare(currentUser) &&
+      !['admin', 'pastor', 'group_leader', 'super_admin', 'creator'].includes(currentUser.role)
+    ) {
       return;
     }
     if (members.length === 0) return;
@@ -5559,6 +6012,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     isSessionVerified,
     currentUser?.token,
     currentUser?.role,
+    currentUser?.designation,
     currentUser?.organization_id,
     members,
     followupTasks,
@@ -5699,6 +6153,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       resetSystemSettings,
       communicationStatus,
       refreshCommunicationStatus,
+      saveTenantGatewayKeys,
+      testPaystackGateway,
       sendTestSmsGateway,
       sendTestEmailGateway,
       sendCommunicationBroadcast,
@@ -5741,6 +6197,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       triggerDwellComplete,
       followupTasks,
       isAutoAssigningAbsentees,
+      pastoralMonitor,
+      isLoadingPastoralMonitor,
+      isRunningAbsenceSweep,
+      isSendingLeaderReminders,
+      myLeaderReminders,
+      fetchPastoralMonitor,
+      fetchMyLeaderReminders,
+      runAbsenceSweep,
+      sendLeaderCareReminders,
+      acknowledgeLeaderReminder,
       resolveFollowupTask,
       updateFollowupTask,
       deleteFollowupTask,
@@ -5751,6 +6217,8 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       toggleRsvp,
       donations,
       submitDonation,
+      initializePaystackGiving,
+      verifyPaystackGiving,
       churchWallPosts,
       refreshChurchWallPosts,
       addChurchWallPost,
@@ -5830,6 +6298,11 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isBeaconDetected,
       followupTasks,
       isAutoAssigningAbsentees,
+      pastoralMonitor,
+      isLoadingPastoralMonitor,
+      isRunningAbsenceSweep,
+      isSendingLeaderReminders,
+      myLeaderReminders,
       memberConsents,
       memberRsvps,
       donations,

@@ -34,6 +34,7 @@ import {
   Users,
   Phone,
   Edit3,
+  HeartHandshake,
 } from 'lucide-react';
 import { MemberQrScannerModal } from './MemberQrScannerModal';
 import { MemberProfileEditorModal } from './MemberProfileEditorModal';
@@ -64,6 +65,7 @@ import {
 } from '../../utils/demographicMinistries';
 import { MultiDepartmentSelector } from '../common/MultiDepartmentSelector';
 import { PWAInstallButton } from '../common/PWAInstallButton';
+import { ContactCallButton } from '../common/ContactCallButton';
 
 const PRIMARY_CAMPUS_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -93,6 +95,9 @@ export const MemberApp: React.FC = () => {
     memberRsvps,
     toggleRsvp,
     submitDonation,
+    initializePaystackGiving,
+    verifyPaystackGiving,
+    communicationStatus,
     showToast,
     attendanceRecords,
     checkInPerson,
@@ -112,9 +117,14 @@ export const MemberApp: React.FC = () => {
     addChurchWallPost,
     toggleChurchWallAmen,
     setIsChangePasswordModalOpen,
+    myLeaderReminders,
+    fetchMyLeaderReminders,
+    acknowledgeLeaderReminder,
+    resolveFollowupTask,
   } = useEkklesphere();
 
   const [activeTab, setActiveTab] = useState<'home' | 'events' | 'give' | 'me'>('home');
+  const [acknowledgingTaskId, setAcknowledgingTaskId] = useState<string | null>(null);
   const [isQrSheetOpen, setIsQrSheetOpen] = useState(false);
   const [qrInitialContext, setQrInitialContext] = useState<string | undefined>(undefined);
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
@@ -142,6 +152,16 @@ export const MemberApp: React.FC = () => {
   const [giveFund, setGiveFund] = useState<string>('Tithe');
   const [giveMethod, setGiveMethod] = useState<'MTN MoMo' | 'Telecel Cash' | 'Card'>('MTN MoMo');
   const [givenSuccess, setGivenSuccess] = useState(false);
+  const [isProcessingGive, setIsProcessingGive] = useState(false);
+  const [paystackCheckout, setPaystackCheckout] = useState<{
+    authorizationUrl: string;
+    reference: string;
+    amount: number;
+    fund: string;
+    provider: 'MTN MoMo' | 'Telecel Cash' | 'Card';
+    mode?: 'live' | 'test' | 'unconfigured';
+  } | null>(null);
+  const [isVerifyingPaystack, setIsVerifyingPaystack] = useState(false);
 
   useEffect(() => {
     if (!currency.presetAmounts.includes(giveAmount) && !giveCustomAmount) {
@@ -154,6 +174,11 @@ export const MemberApp: React.FC = () => {
     const t = window.setTimeout(() => setConfirmDeleteMyRecord(false), 6000);
     return () => window.clearTimeout(t);
   }, [confirmDeleteMyRecord]);
+
+  useEffect(() => {
+    if (!currentUser?.token) return;
+    fetchMyLeaderReminders().catch(() => {});
+  }, [currentUser?.token, fetchMyLeaderReminders]);
 
   const handleExportMyData = () => {
     const myAttendance = attendanceRecords.filter(
@@ -754,14 +779,54 @@ export const MemberApp: React.FC = () => {
 
   const handleGiveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const finalAmount = giveCustomAmount ? parseInt(giveCustomAmount, 10) : giveAmount;
-    if (!finalAmount || finalAmount <= 0) {
+    const finalAmount = giveCustomAmount ? parseFloat(giveCustomAmount) : giveAmount;
+    if (!finalAmount || Number.isNaN(finalAmount) || finalAmount <= 0) {
       showToast('Please enter a valid amount');
       return;
     }
-    const ok = await submitDonation(finalAmount, giveFund, giveMethod);
-    if (ok) {
-      setGivenSuccess(true);
+
+    setIsProcessingGive(true);
+    try {
+      if (communicationStatus.paystackConfigured) {
+        const initRes = await initializePaystackGiving({
+          amountGhs: finalAmount,
+          fundName: giveFund,
+          provider: giveMethod,
+          email: memberEmail && memberEmail.includes('@') ? memberEmail : undefined,
+        });
+        if (initRes.success && initRes.authorizationUrl && initRes.reference) {
+          setPaystackCheckout({
+            authorizationUrl: initRes.authorizationUrl,
+            reference: initRes.reference,
+            amount: finalAmount,
+            fund: giveFund,
+            provider: giveMethod,
+            mode: initRes.mode,
+          });
+        }
+        return;
+      }
+
+      const ok = await submitDonation(finalAmount, giveFund, giveMethod);
+      if (ok) {
+        setGivenSuccess(true);
+      }
+    } finally {
+      setIsProcessingGive(false);
+    }
+  };
+
+  const handleVerifyPaystackCheckout = async () => {
+    if (!paystackCheckout?.reference) return;
+    setIsVerifyingPaystack(true);
+    try {
+      const verifyRes = await verifyPaystackGiving(paystackCheckout.reference);
+      if (verifyRes.verified) {
+        setPaystackCheckout(null);
+        setGivenSuccess(true);
+      }
+    } finally {
+      setIsVerifyingPaystack(false);
     }
   };
 
@@ -861,6 +926,128 @@ export const MemberApp: React.FC = () => {
           onToggleAmen={toggleChurchWallAmen}
           onSaveBirthdayDate={handleSaveMemberBirthday}
         />
+
+        {/* Pastoral Care Reminders Assigned to Leader in Charge */}
+        {(myLeaderReminders.tasks.length > 0 || myLeaderReminders.dispatches.length > 0) && (
+          <section
+            aria-label="Pastoral Care Reminders Assigned to You"
+            className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-4 sm:p-5 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-xs space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] flex items-center justify-center shrink-0">
+                  <HeartHandshake className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold text-[#1D1B3A] dark:text-[#F2F2FA] truncate">
+                    Pastoral Care Reminders ({myLeaderReminders.tasks.length})
+                  </h2>
+                  <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                    Members assigned to you for follow-up · Monitored by church leadership
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchMyLeaderReminders()}
+                className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#9D90FF] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {myLeaderReminders.tasks.length > 0 && (
+              <div className="divide-y divide-[#E9EBF5] dark:divide-[#2D2D55] border-y border-[#E9EBF5] dark:border-[#2D2D55]">
+                {myLeaderReminders.tasks.map((task) => {
+                  const linkedMember = members.find((m) => m.id === task.personId);
+                  const phone =
+                    task.personPhone || linkedMember?.phoneE164 || linkedMember?.phoneNumber;
+                  const email = task.personEmail || linkedMember?.email;
+                  const isBusy = acknowledgingTaskId === task.id;
+                  return (
+                    <div
+                      key={task.id}
+                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                          <span className="font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                            {task.personName}
+                          </span>
+                          <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                            ·{' '}
+                            {task.reason === 'absent_3'
+                              ? 'Absent 3+ Services'
+                              : task.reason === 'absent_2'
+                              ? 'Absent 2 Services'
+                              : task.reason === 'first_timer'
+                              ? 'First-Time Visitor'
+                              : 'Care Follow-up'}
+                          </span>
+                          {task.acknowledgedAt && (
+                            <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                              · Acknowledged
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[#666A86] dark:text-[#A9ACC8] mt-0.5">
+                          {task.groupName}
+                          {task.serviceName ? ` · ${task.serviceName}` : ''}
+                          {task.notes ? ` · ${task.notes}` : ''}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <ContactCallButton
+                          contactName={task.personName}
+                          contactPhone={phone}
+                          contactEmail={email}
+                          contactGroup={task.groupName}
+                          label="Call"
+                          onLogOutcome={async (outcome, markResolved) => {
+                            await resolveFollowupTask(
+                              task.id,
+                              outcome,
+                              markResolved ? 'resolved' : 'contacted'
+                            );
+                            await fetchMyLeaderReminders();
+                          }}
+                        />
+                        {!task.acknowledgedAt && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={async () => {
+                              setAcknowledgingTaskId(task.id);
+                              try {
+                                await acknowledgeLeaderReminder(task.id);
+                              } finally {
+                                setAcknowledgingTaskId(null);
+                              }
+                            }}
+                            className="px-2.5 py-1.5 min-h-[34px] rounded-xl bg-[#EFEDFF] dark:bg-[#2A2A55] text-[#6D5CF2] dark:text-[#9D90FF] text-xs font-bold whitespace-nowrap cursor-pointer disabled:opacity-60"
+                          >
+                            {isBusy ? 'Saving...' : 'Acknowledge'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await resolveFollowupTask(task.id, 'Followed up by leader', 'resolved');
+                            await fetchMyLeaderReminders();
+                          }}
+                          className="px-2.5 py-1.5 min-h-[34px] rounded-xl border border-[#E9EBF5] dark:border-[#2D2D55] bg-[#F6F7FC] dark:bg-[#14142E] text-[#1D1B3A] dark:text-[#F2F2FA] text-xs font-semibold whitespace-nowrap cursor-pointer hover:border-emerald-400"
+                        >
+                          Mark Resolved
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Real Hardware GPS Proximity & Live Attendance Card */}
         <div className="bg-[#6C5CE7] dark:bg-[#7D6DF8] text-white rounded-3xl p-5 sm:p-6 shadow-md transition-all space-y-4">
@@ -1691,7 +1878,13 @@ export const MemberApp: React.FC = () => {
         </div>
         <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
           <ShieldCheck className="w-4 h-4" />
-          <span>Paystack Encrypted</span>
+          <span>
+            {communicationStatus.paystackConfigured
+              ? communicationStatus.paystackMode === 'live'
+                ? 'Paystack Live Encrypted'
+                : 'Paystack Test Mode'
+              : 'Church Ledger Mode'}
+          </span>
         </div>
       </div>
 
@@ -1715,9 +1908,60 @@ export const MemberApp: React.FC = () => {
               </div>
               <button
                 onClick={() => setGivenSuccess(false)}
-                className="w-full sm:w-auto px-8 py-3 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-md transition-all"
+                className="w-full sm:w-auto px-8 py-3 rounded-2xl bg-[#6C5CE7] hover:bg-[#5b4be0] text-white text-xs font-bold shadow-md transition-all cursor-pointer"
               >
                 Make Another Gift
+              </button>
+            </div>
+          ) : paystackCheckout ? (
+            <div className="bg-white dark:bg-[#1C1C3C] rounded-3xl p-6 sm:p-8 border border-[#E3E5F2] dark:border-[#2D2D55] shadow-sm space-y-4 animate-in fade-in">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-[#EEEBFF] text-[#6C5CE7] dark:bg-[#2A2A55] dark:text-[#9D92FF]">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Paystack {paystackCheckout.mode === 'live' ? 'Live' : 'Test'} Checkout Ready
+                  </span>
+                  <h3 className="text-lg font-bold text-[#1D1B3A] dark:text-[#F2F2FA] mt-2">
+                    Complete {currency.code} {paystackCheckout.amount} for {paystackCheckout.fund}
+                  </h3>
+                  <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8] mt-1">
+                    Reference: <span className="font-mono font-semibold">{paystackCheckout.reference}</span> · Method: {paystackCheckout.provider}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#F6F7FC] dark:bg-black/20 border border-[#E3E5F2] dark:border-[#2D2D55] text-xs text-[#5B5F7A] dark:text-[#A9ACC8] space-y-2">
+                <p>1. Open the church&apos;s Paystack checkout page below to authorize your {paystackCheckout.provider} payment.</p>
+                <p>2. Return here and tap <b>Verify Payment &amp; Issue Receipt</b> to confirm settlement.</p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <a
+                  href={paystackCheckout.authorizationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-3 px-4 rounded-2xl bg-[#6C5CE7] hover:bg-[#5B4BE0] text-white text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5"
+                >
+                  <span>Open Paystack Checkout</span>
+                  <ArrowUpRight className="w-4 h-4" />
+                </a>
+                <button
+                  type="button"
+                  disabled={isVerifyingPaystack}
+                  onClick={handleVerifyPaystackCheckout}
+                  className="flex-1 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isVerifyingPaystack ? 'animate-spin' : ''}`} />
+                  <span>{isVerifyingPaystack ? 'Verifying...' : 'Verify Payment & Issue Receipt'}</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPaystackCheckout(null)}
+                className="text-xs font-semibold text-[#5B5F7A] hover:text-[#1D1B3A] dark:text-[#A9ACC8] cursor-pointer"
+              >
+                ← Change amount or payment method
               </button>
             </div>
           ) : (
@@ -1802,9 +2046,12 @@ export const MemberApp: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3.5 rounded-2xl bg-[#1D1B3A] dark:bg-[#6C5CE7] hover:bg-[#282855] text-white text-xs sm:text-sm font-bold shadow-lg transition-all mt-4 tabular-nums"
+                disabled={isProcessingGive}
+                className="w-full py-3.5 rounded-2xl bg-[#6C5CE7] hover:bg-[#5B4BE0] text-white text-xs sm:text-sm font-bold shadow-lg transition-all mt-4 tabular-nums cursor-pointer disabled:opacity-60"
               >
-                Proceed to Give {currency.code} {giveCustomAmount || giveAmount}
+                {isProcessingGive
+                  ? 'Initializing Checkout...'
+                  : `${communicationStatus.paystackConfigured ? 'Give via Paystack' : 'Proceed to Give'} ${currency.code} ${giveCustomAmount || giveAmount}`}
               </button>
             </form>
           )}

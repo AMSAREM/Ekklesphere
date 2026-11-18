@@ -58,6 +58,7 @@ import {
   NewAssignmentModal,
 } from './AdminDashboardModals';
 import { ServiceQrModal, ServiceQrTarget } from './ServiceQrModal';
+import { PastoralCareMonitorPanel } from './PastoralCareMonitorPanel';
 import { computeDashboardAnalytics } from '../../utils/dashboardAnalytics';
 import { ChurchGroupCategory, Person } from '../../types/ekklesphere';
 import { MemberAvatar } from '../common/MemberAvatar';
@@ -72,6 +73,7 @@ type AdminNavTab =
   | 'workflows'
   | 'users'
   | 'members'
+  | 'pastoral'
   | 'integrations'
   | 'proximity'
   | 'settings';
@@ -132,6 +134,7 @@ export const AdminDashboard: React.FC = () => {
     addFollowupTask,
     autoAssignAbsentees,
     isAutoAssigningAbsentees,
+    sendLeaderCareReminders,
     communicationStatus,
     sendCommunicationBroadcast,
     currentService,
@@ -234,6 +237,7 @@ export const AdminDashboard: React.FC = () => {
         | 'insights'
         | 'workflows'
         | 'users'
+        | 'pastoral'
         | 'integrations'
         | 'proximity'
         | 'settings'
@@ -504,7 +508,7 @@ export const AdminDashboard: React.FC = () => {
       {/* Left Navigation Rail (Desktop) & Bottom Dock (Mobile) */}
       <aside
         aria-label="Admin Module Navigation"
-        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-16px)] max-w-lg lg:w-[64px] bg-[#6D5CF2] dark:bg-[#5E4EE0] rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-6 lg:flex lg:flex-col items-center justify-items-center lg:justify-start gap-1 sm:gap-1.5 lg:gap-3 px-1.5 py-1.5 sm:px-3 sm:py-2 lg:py-6 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-6 shadow-md border border-white/15 lg:border-none select-none touch-manipulation"
+        className="fixed z-50 bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 lg:translate-x-0 lg:bottom-auto lg:top-20 lg:left-0 w-[calc(100%-16px)] max-w-lg lg:w-[64px] bg-[#6D5CF2] dark:bg-[#5E4EE0] rounded-2xl sm:rounded-full lg:rounded-r-[28px] lg:rounded-l-none grid grid-cols-7 lg:flex lg:flex-col items-center justify-items-center lg:justify-start gap-1 sm:gap-1.5 lg:gap-3 px-1.5 py-1.5 sm:px-3 sm:py-2 lg:py-6 lg:px-0 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:pb-6 shadow-md border border-white/15 lg:border-none select-none touch-manipulation"
       >
         {/* 1. Dashboard Overview */}
         <div className="relative group w-full min-w-0 flex justify-center">
@@ -592,7 +596,28 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 5. Proximity Radar */}
+        {/* 5. Pastoral Care Monitor */}
+        <div className="relative group w-full min-w-0 flex justify-center">
+          <button
+            type="button"
+            onClick={() => navigateTab('pastoral')}
+            aria-label="Pastoral Care Monitor"
+            aria-current={activeTab === 'pastoral' ? 'page' : undefined}
+            className={`w-full max-w-[56px] min-h-[44px] lg:w-11 lg:h-11 px-1 py-1 lg:px-0 rounded-xl lg:rounded-[14px] flex flex-col lg:flex-row items-center justify-center gap-0.5 transition-colors cursor-pointer ${
+              activeTab === 'pastoral'
+                ? 'bg-white text-[#6D5CF2] font-bold shadow-xs'
+                : 'text-white/85 hover:text-white hover:bg-white/15'
+            }`}
+          >
+            <HeartHandshake className="w-4.5 h-4.5 shrink-0" />
+            <span className="lg:hidden text-[10px] leading-tight font-semibold">Care</span>
+          </button>
+          <span className="hidden lg:group-hover:flex items-center gap-1.5 absolute left-[70px] top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-white dark:bg-[#1D1D3D] text-[#1D1B3A] dark:text-[#F2F2FA] border border-[#E9EBF5] dark:border-[#2D2D55] text-xs font-bold rounded-xl shadow-md pointer-events-none whitespace-nowrap z-50 tabular-nums">
+            <span>Pastoral Care ({openFollowupCount})</span>
+          </span>
+        </div>
+
+        {/* 6. Proximity Radar */}
         <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
@@ -613,7 +638,7 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 6. System Settings */}
+        {/* 7. System Settings */}
         <div className="relative group w-full min-w-0 flex justify-center">
           <button
             type="button"
@@ -1684,9 +1709,16 @@ export const AdminDashboard: React.FC = () => {
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
+                          onClick={() => navigateTab('pastoral')}
+                          className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline whitespace-nowrap cursor-pointer"
+                        >
+                          Monitor
+                        </button>
+                        <button
+                          type="button"
                           disabled={isAutoAssigningAbsentees}
                           onClick={() => autoAssignAbsentees({ silent: false })}
-                          className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          className="text-[11px] font-bold text-[#6D5CF2] dark:text-[#8C7DFF] hover:underline flex items-center gap-1 whitespace-nowrap cursor-pointer disabled:opacity-50"
                         >
                           {isAutoAssigningAbsentees ? (
                             <RefreshCw className="w-3 h-3 animate-spin" />
@@ -1698,7 +1730,7 @@ export const AdminDashboard: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setIsFollowupModalOpen(true)}
-                          className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] cursor-pointer"
+                          className="text-[11px] font-semibold text-[#666A86] dark:text-[#A9ACC8] hover:text-[#6D5CF2] whitespace-nowrap cursor-pointer"
                         >
                           All
                         </button>
@@ -2445,6 +2477,12 @@ export const AdminDashboard: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'pastoral' && (
+          <div className="mt-4">
+            <PastoralCareMonitorPanel />
+          </div>
+        )}
+
         {activeTab === 'proximity' && (
           <div className="mt-4">
             <ProximitySimulator />
@@ -2609,6 +2647,7 @@ export const AdminDashboard: React.FC = () => {
         onResolveTask={resolveFollowupTask}
         onEditTask={updateFollowupTask}
         onDeleteTask={deleteFollowupTask}
+        onSendTaskReminder={(taskId) => sendLeaderCareReminders({ taskId })}
         onNotify={showToast}
       />
 

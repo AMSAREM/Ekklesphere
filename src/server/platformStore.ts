@@ -15,15 +15,25 @@ import {
   normalizeIdleTimeoutMinutes,
   resetSessionRegistryForTests,
   sealTemporaryPassword,
+  sealTenantSecret,
   signSessionToken,
   unsealTemporaryPassword,
+  unsealTenantSecret,
+  maskSecretTail,
   type ActiveSupportGrantContext,
   type AuthUserPayload,
   type ChurchRole,
 } from '../../lib/auth.ts';
+import { detectPaystackMode } from './paystackService.ts';
+import { sendArkeselSms, sendResendEmail, normalizeArkeselPhone } from './communicationsService.ts';
 import { churchWallStore } from './churchWallStore.ts';
 import { resolveServiceWindow, type BinaryServiceStatus } from '../utils/serviceStatus.ts';
-import { buildAutoAssignAbsenteesPlan } from '../utils/settingsConnections.ts';
+import {
+  buildAutoAssignAbsenteesPlan,
+  getMemberFullName,
+  normalizeSettingLabel,
+} from '../utils/settingsConnections.ts';
+import { getMemberPortfolio } from '../constants/portfolios.ts';
 import {
   normalizeIncomingGroupCategory,
   sanitizeCustomGroupCategories,
@@ -52,6 +62,7 @@ import type {
   LandingLeadStatus,
   LandingLeadType,
   LandingPageConfig,
+  LeaderAccountabilityRow,
   LicenseEvaluationResult,
   LicenseOverrides,
   LicensePaymentRecord,
@@ -59,17 +70,24 @@ import type {
   LicenseTier,
   OrganisationDetailPayload,
   OrganisationType,
+  PastoralCareDispatch,
+  PastoralCareDispatchChannel,
+  PastoralCareDispatchStatus,
+  PastoralCareDispatchType,
+  PastoralCareMonitorSummary,
   PaymentCurrency,
   PaymentMethod,
   Person,
   PlatformAnnouncement,
   PlatformFeatureFlag,
   PublicLandingOverview,
+  ServiceAbsenceSweepResult,
   SupportGrantSession,
   SystemLicense,
   SystemSettings,
   TenantChurch,
   TenantFeatures,
+  TenantGatewayConfigSummary,
   TenantStatus,
   UsageDailyAggregate,
 } from '../types/ekklesphere.ts';
@@ -140,6 +158,7 @@ export interface UserCredentialRecord {
   username?: string;
   phoneE164?: string;
   name: string;
+  designation?: string;
   role: ChurchRole;
   isCreator: boolean;
   passwordHash: string;
@@ -280,6 +299,9 @@ export const DEFAULT_LANDING_CMS: LandingPageConfig = {
   },
 };
 
+export const DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE =
+  'Hello {{firstName}}, we missed you at {{serviceName}} ({{churchName}}) today. You are dearly loved and prayed for. Need prayer or support? Reply or call {{contactPhone}}.';
+
 export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   churchName: '',
   campusName: '',
@@ -303,6 +325,10 @@ export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   absenteeThresholdServices: 2,
   firstTimerFollowupHours: 24,
   autoAssignCellLeaders: true,
+  autoMessageAbsentMembers: true,
+  absentMemberMessageChannel: 'sms_and_email',
+  absentMemberMessageTemplate: DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+  autoSendLeaderCareReminders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
   sessionTimeoutMinutes: DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
@@ -463,6 +489,8 @@ class PlatformStore {
   private pushSubsByOrg = new Map<string, PushSubscriptionItem[]>();
   private donationsByOrg = new Map<string, Donation[]>();
   private followupTasksByOrg = new Map<string, FollowupTask[]>();
+  private dispatchesByOrg = new Map<string, PastoralCareDispatch[]>();
+  private absenceRunsByOrg = new Map<string, Map<string, { eventId: string; eventName: string; processedAt: string }>>();
   private memberConsentsByOrg = new Map<
     string,
     Record<
@@ -481,6 +509,18 @@ class PlatformStore {
   private legacyTenantsForDryRun: Array<{ id: string; name: string; slug: string }> = [];
   private userCredentials = new Map<string, UserCredentialRecord>();
   private tempPasswordByCredId = new Map<string, string>();
+  private gatewaySecretsByOrg = new Map<
+    string,
+    {
+      arkeselApiKeyEnc?: string | null;
+      arkeselApiKeyMasked?: string | null;
+      paystackPublicKey?: string | null;
+      paystackSecretKeyEnc?: string | null;
+      paystackSecretKeyMasked?: string | null;
+      updatedBy?: string | null;
+      updatedAt?: string | null;
+    }
+  >();
 
   constructor() {
     this.isTestRuntime = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
@@ -585,11 +625,14 @@ class PlatformStore {
     this.pushSubsByOrg.clear();
     this.donationsByOrg.clear();
     this.followupTasksByOrg.clear();
+    this.dispatchesByOrg.clear();
+    this.absenceRunsByOrg.clear();
     this.memberConsentsByOrg.clear();
     this.eventRsvpsByOrg.clear();
     this.legacyTenantsForDryRun = [];
     this.userCredentials.clear();
     this.tempPasswordByCredId.clear();
+    this.gatewaySecretsByOrg.clear();
     this.customSupabaseClientOverride = null;
     this.customSupabaseAuthVerifier = null;
     this.landingLeads.clear();
@@ -2576,6 +2619,7 @@ class PlatformStore {
       username?: string;
       phoneE164?: string;
       name: string;
+      designation?: string;
       role: ChurchRole;
       organizationId: string;
       isCreator: boolean;
@@ -2922,6 +2966,12 @@ class PlatformStore {
     const sessionTimeoutMinutes = await this.getOrganizationSessionTimeoutMinutes(
       foundCred.organizationId
     );
+    const resolvedDesignation = await this.resolveUserDesignation(
+      foundCred.organizationId,
+      foundCred.memberId || foundCred.id,
+      foundCred.email,
+      foundCred.designation
+    );
     const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
       {
         id: foundCred.memberId || foundCred.id,
@@ -2930,6 +2980,7 @@ class PlatformStore {
         organization_id: foundCred.organizationId,
         tenant_id: foundCred.organizationId,
         name: foundCred.name,
+        ...(resolvedDesignation ? { designation: resolvedDesignation } : {}),
         is_creator: foundCred.isCreator,
       },
       sessionTimeoutMinutes
@@ -2942,6 +2993,7 @@ class PlatformStore {
         username: foundCred.username,
         phoneE164: foundCred.phoneE164,
         name: foundCred.name,
+        ...(resolvedDesignation ? { designation: resolvedDesignation } : {}),
         role: foundCred.role,
         organizationId: foundCred.organizationId,
         isCreator: foundCred.isCreator,
@@ -4023,6 +4075,25 @@ class PlatformStore {
             typeof raw.auto_assign_cell_leaders === 'boolean'
               ? raw.auto_assign_cell_leaders
               : DEFAULT_ORG_SYSTEM_SETTINGS.autoAssignCellLeaders,
+          autoMessageAbsentMembers:
+            typeof raw.auto_message_absent_members === 'boolean'
+              ? raw.auto_message_absent_members
+              : DEFAULT_ORG_SYSTEM_SETTINGS.autoMessageAbsentMembers,
+          absentMemberMessageChannel:
+            raw.absent_member_message_channel === 'sms' ||
+            raw.absent_member_message_channel === 'email' ||
+            raw.absent_member_message_channel === 'sms_and_email'
+              ? raw.absent_member_message_channel
+              : DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageChannel,
+          absentMemberMessageTemplate:
+            typeof raw.absent_member_message_template === 'string' &&
+            raw.absent_member_message_template.trim()
+              ? raw.absent_member_message_template
+              : DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageTemplate,
+          autoSendLeaderCareReminders:
+            typeof raw.auto_send_leader_care_reminders === 'boolean'
+              ? raw.auto_send_leader_care_reminders
+              : DEFAULT_ORG_SYSTEM_SETTINGS.autoSendLeaderCareReminders,
           requireExplicitConsent:
             typeof raw.require_explicit_consent === 'boolean'
               ? raw.require_explicit_consent
@@ -4224,6 +4295,28 @@ class PlatformStore {
       emailSenderName: String(patch.emailSenderName ?? current.emailSenderName ?? '').trim(),
       driveByProtection: Boolean(patch.driveByProtection ?? current.driveByProtection),
       autoAssignCellLeaders: Boolean(patch.autoAssignCellLeaders ?? current.autoAssignCellLeaders),
+      autoMessageAbsentMembers: Boolean(
+        patch.autoMessageAbsentMembers ??
+          current.autoMessageAbsentMembers ??
+          DEFAULT_ORG_SYSTEM_SETTINGS.autoMessageAbsentMembers
+      ),
+      absentMemberMessageChannel:
+        patch.absentMemberMessageChannel === 'sms' ||
+        patch.absentMemberMessageChannel === 'email' ||
+        patch.absentMemberMessageChannel === 'sms_and_email'
+          ? patch.absentMemberMessageChannel
+          : current.absentMemberMessageChannel || DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageChannel,
+      absentMemberMessageTemplate:
+        String(
+          patch.absentMemberMessageTemplate ??
+            current.absentMemberMessageTemplate ??
+            DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE
+        ).trim() || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+      autoSendLeaderCareReminders: Boolean(
+        patch.autoSendLeaderCareReminders ??
+          current.autoSendLeaderCareReminders ??
+          DEFAULT_ORG_SYSTEM_SETTINGS.autoSendLeaderCareReminders
+      ),
       requireExplicitConsent: Boolean(patch.requireExplicitConsent ?? current.requireExplicitConsent),
       enablePushNotifications: Boolean(patch.enablePushNotifications ?? current.enablePushNotifications),
       customGroupCategories:
@@ -4300,6 +4393,10 @@ class PlatformStore {
         absentee_threshold_services: merged.absenteeThresholdServices,
         first_timer_followup_hours: merged.firstTimerFollowupHours,
         auto_assign_cell_leaders: merged.autoAssignCellLeaders,
+        auto_message_absent_members: merged.autoMessageAbsentMembers,
+        absent_member_message_channel: merged.absentMemberMessageChannel,
+        absent_member_message_template: merged.absentMemberMessageTemplate,
+        auto_send_leader_care_reminders: merged.autoSendLeaderCareReminders,
         require_explicit_consent: merged.requireExplicitConsent,
         audit_log_retention_days: merged.auditLogRetentionDays,
         session_timeout_minutes: merged.sessionTimeoutMinutes,
@@ -4520,6 +4617,325 @@ class PlatformStore {
     });
 
     return this.getSystemSettings(orgId);
+  }
+
+  private isMissingTenantGatewaySecretsTableError(err: { message?: string; code?: string } | null | undefined): boolean {
+    if (!err) return false;
+    const msg = `${err.code || ''} ${err.message || ''}`;
+    return /tenant_gateway_secrets/i.test(msg) && /does not exist|schema cache|42P01|PGRST205/i.test(msg);
+  }
+
+  private async readEncryptedGatewayRow(organizationId: string): Promise<{
+    arkeselApiKeyEnc?: string | null;
+    arkeselApiKeyMasked?: string | null;
+    paystackPublicKey?: string | null;
+    paystackSecretKeyEnc?: string | null;
+    paystackSecretKeyMasked?: string | null;
+    updatedBy?: string | null;
+    updatedAt?: string | null;
+  }> {
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) return {};
+    const sb = this.activeSupabase;
+
+    if (sb) {
+      if (!UUID_REGEX.test(orgId)) return {};
+      const { data, error } = await sb
+        .from('tenant_gateway_secrets')
+        .select('*')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (!error && data) {
+        return {
+          arkeselApiKeyEnc: data.arkesel_api_key_enc || null,
+          arkeselApiKeyMasked: data.arkesel_api_key_masked || null,
+          paystackPublicKey: data.paystack_public_key || null,
+          paystackSecretKeyEnc: data.paystack_secret_key_enc || null,
+          paystackSecretKeyMasked: data.paystack_secret_key_masked || null,
+          updatedBy: data.updated_by || null,
+          updatedAt: data.updated_at ? String(data.updated_at) : null,
+        };
+      }
+
+      if (error && !this.isMissingTenantGatewaySecretsTableError(error)) {
+        throw new Error(`Failed to read tenant gateway keys: ${error.message}`);
+      }
+
+      // Graceful fallback when migration hasn't run yet: store encrypted blobs in organizations.settings._encrypted_gateway_secrets
+      const { data: orgRow } = await sb
+        .from('organizations')
+        .select('settings')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      const rawSettings =
+        orgRow?.settings && typeof orgRow.settings === 'object'
+          ? (orgRow.settings as Record<string, any>)
+          : {};
+      const embedded = rawSettings._encrypted_gateway_secrets;
+      if (embedded && typeof embedded === 'object') {
+        return {
+          arkeselApiKeyEnc: embedded.arkesel_api_key_enc || null,
+          arkeselApiKeyMasked: embedded.arkesel_api_key_masked || null,
+          paystackPublicKey: embedded.paystack_public_key || null,
+          paystackSecretKeyEnc: embedded.paystack_secret_key_enc || null,
+          paystackSecretKeyMasked: embedded.paystack_secret_key_masked || null,
+          updatedBy: embedded.updated_by || null,
+          updatedAt: embedded.updated_at ? String(embedded.updated_at) : null,
+        };
+      }
+      return {};
+    }
+
+    return this.gatewaySecretsByOrg.get(orgId) || {};
+  }
+
+  public async getTenantGatewayConfigSummary(organizationId: string): Promise<TenantGatewayConfigSummary> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const row = orgId ? await this.readEncryptedGatewayRow(orgId) : {};
+
+    const tenantArkesel = unsealTenantSecret(row.arkeselApiKeyEnc);
+    const envArkesel = (process.env.ARKESEL_API_KEY || '').trim();
+    const arkeselSource: 'tenant' | 'platform_env' | 'none' = tenantArkesel
+      ? 'tenant'
+      : envArkesel
+      ? 'platform_env'
+      : 'none';
+
+    const tenantPaystackSecret = unsealTenantSecret(row.paystackSecretKeyEnc);
+    const tenantPaystackPublic = String(row.paystackPublicKey || '').trim();
+    const envPaystackSecret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+    const envPaystackPublic = (process.env.PAYSTACK_PUBLIC_KEY || '').trim();
+
+    const paystackSource: 'tenant' | 'platform_env' | 'none' = tenantPaystackSecret
+      ? 'tenant'
+      : envPaystackSecret
+      ? 'platform_env'
+      : 'none';
+
+    const effectivePublicKey = tenantPaystackPublic || envPaystackPublic || '';
+    const effectiveSecret = tenantPaystackSecret || envPaystackSecret || '';
+
+    return {
+      arkeselConfigured: arkeselSource !== 'none',
+      arkeselSource,
+      arkeselKeyMasked: tenantArkesel
+        ? row.arkeselApiKeyMasked || maskSecretTail(tenantArkesel)
+        : envArkesel
+        ? maskSecretTail(envArkesel)
+        : null,
+      paystackConfigured: paystackSource !== 'none',
+      paystackSource,
+      paystackPublicKey: effectivePublicKey,
+      paystackSecretMasked: tenantPaystackSecret
+        ? row.paystackSecretKeyMasked || maskSecretTail(tenantPaystackSecret)
+        : envPaystackSecret
+        ? maskSecretTail(envPaystackSecret)
+        : null,
+      paystackMode: detectPaystackMode(effectivePublicKey, effectiveSecret),
+      updatedAt: row.updatedAt || null,
+    };
+  }
+
+  public async getResolvedArkeselApiKey(organizationId: string): Promise<{
+    apiKey: string;
+    source: 'tenant' | 'platform_env' | 'none';
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (orgId) {
+      const row = await this.readEncryptedGatewayRow(orgId);
+      const tenantKey = unsealTenantSecret(row.arkeselApiKeyEnc);
+      if (tenantKey) {
+        return { apiKey: tenantKey, source: 'tenant' };
+      }
+    }
+    const envKey = (process.env.ARKESEL_API_KEY || '').trim();
+    if (envKey) {
+      return { apiKey: envKey, source: 'platform_env' };
+    }
+    return { apiKey: '', source: 'none' };
+  }
+
+  public async getResolvedPaystackKeys(organizationId: string): Promise<{
+    publicKey: string;
+    secretKey: string;
+    source: 'tenant' | 'platform_env' | 'none';
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (orgId) {
+      const row = await this.readEncryptedGatewayRow(orgId);
+      const tenantSecret = unsealTenantSecret(row.paystackSecretKeyEnc);
+      const tenantPublic = String(row.paystackPublicKey || '').trim();
+      if (tenantSecret) {
+        return {
+          publicKey: tenantPublic,
+          secretKey: tenantSecret,
+          source: 'tenant',
+        };
+      }
+    }
+    const envSecret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+    const envPublic = (process.env.PAYSTACK_PUBLIC_KEY || '').trim();
+    if (envSecret) {
+      return {
+        publicKey: envPublic,
+        secretKey: envSecret,
+        source: 'platform_env',
+      };
+    }
+    return { publicKey: '', secretKey: '', source: 'none' };
+  }
+
+  public async saveTenantGatewayKeys(
+    organizationId: string,
+    patch: {
+      arkeselApiKey?: string;
+      clearArkeselApiKey?: boolean;
+      paystackPublicKey?: string;
+      paystackSecretKey?: string;
+      clearPaystackKeys?: boolean;
+    },
+    actor?: { id?: string; email?: string; role?: string; name?: string; ipAddress?: string }
+  ): Promise<TenantGatewayConfigSummary> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) {
+      throw new Error('Organization ID is required to save gateway API keys.');
+    }
+
+    const existing = await this.readEncryptedGatewayRow(orgId);
+    const nowIso = new Date().toISOString();
+
+    let nextArkeselEnc = existing.arkeselApiKeyEnc || null;
+    let nextArkeselMasked = existing.arkeselApiKeyMasked || null;
+    if (patch.clearArkeselApiKey) {
+      nextArkeselEnc = null;
+      nextArkeselMasked = null;
+    } else if (typeof patch.arkeselApiKey === 'string' && patch.arkeselApiKey.trim()) {
+      const clean = patch.arkeselApiKey.trim();
+      nextArkeselEnc = sealTenantSecret(clean);
+      nextArkeselMasked = maskSecretTail(clean);
+    }
+
+    let nextPaystackPublic = existing.paystackPublicKey || null;
+    let nextPaystackSecretEnc = existing.paystackSecretKeyEnc || null;
+    let nextPaystackSecretMasked = existing.paystackSecretKeyMasked || null;
+    if (patch.clearPaystackKeys) {
+      nextPaystackPublic = null;
+      nextPaystackSecretEnc = null;
+      nextPaystackSecretMasked = null;
+    } else {
+      if (typeof patch.paystackPublicKey === 'string') {
+        const cleanPub = patch.paystackPublicKey.trim();
+        nextPaystackPublic = cleanPub || null;
+      }
+      if (typeof patch.paystackSecretKey === 'string' && patch.paystackSecretKey.trim()) {
+        const cleanSec = patch.paystackSecretKey.trim();
+        nextPaystackSecretEnc = sealTenantSecret(cleanSec);
+        nextPaystackSecretMasked = maskSecretTail(cleanSec);
+      }
+    }
+
+    const updatedBy = actor?.email || actor?.name || 'Administrator';
+    const sb = this.activeSupabase;
+
+    if (sb) {
+      if (!UUID_REGEX.test(orgId)) {
+        throw new Error('Valid organization UUID is required.');
+      }
+      const { error } = await sb.from('tenant_gateway_secrets').upsert(
+        {
+          organization_id: orgId,
+          arkesel_api_key_enc: nextArkeselEnc,
+          arkesel_api_key_masked: nextArkeselMasked,
+          paystack_public_key: nextPaystackPublic,
+          paystack_secret_key_enc: nextPaystackSecretEnc,
+          paystack_secret_key_masked: nextPaystackSecretMasked,
+          updated_by: updatedBy,
+          updated_at: nowIso,
+        },
+        { onConflict: 'organization_id' }
+      );
+
+      if (error) {
+        if (!this.isMissingTenantGatewaySecretsTableError(error)) {
+          throw new Error(`Failed to persist tenant gateway keys in Supabase: ${error.message}`);
+        }
+        // Fallback into organizations.settings._encrypted_gateway_secrets when migration pending
+        const { data: orgRow } = await sb
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const rawSettings =
+          orgRow?.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, unknown>)
+            : {};
+        const nextSettings = {
+          ...rawSettings,
+          _encrypted_gateway_secrets: {
+            arkesel_api_key_enc: nextArkeselEnc,
+            arkesel_api_key_masked: nextArkeselMasked,
+            paystack_public_key: nextPaystackPublic,
+            paystack_secret_key_enc: nextPaystackSecretEnc,
+            paystack_secret_key_masked: nextPaystackSecretMasked,
+            updated_by: updatedBy,
+            updated_at: nowIso,
+          },
+        };
+        const { error: orgErr } = await sb
+          .from('organizations')
+          .update({ settings: nextSettings, sms_configured: Boolean(nextArkeselEnc), updated_at: nowIso })
+          .eq('id', orgId);
+        if (orgErr) {
+          throw new Error(`Failed to save gateway keys on organization: ${orgErr.message}`);
+        }
+      } else {
+        await sb
+          .from('organizations')
+          .update({ sms_configured: Boolean(nextArkeselEnc), updated_at: nowIso })
+          .eq('id', orgId);
+      }
+    } else {
+      this.gatewaySecretsByOrg.set(orgId, {
+        arkeselApiKeyEnc: nextArkeselEnc,
+        arkeselApiKeyMasked: nextArkeselMasked,
+        paystackPublicKey: nextPaystackPublic,
+        paystackSecretKeyEnc: nextPaystackSecretEnc,
+        paystackSecretKeyMasked: nextPaystackSecretMasked,
+        updatedBy,
+        updatedAt: nowIso,
+      });
+      const memOrg = this.orgs.get(orgId);
+      if (memOrg) {
+        memOrg.smsConfigured = Boolean(nextArkeselEnc);
+      }
+    }
+
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || 'admin@ekklesphere.church',
+      actorRole: actor?.role || 'admin',
+      action: 'gateways.keys_updated',
+      targetType: 'tenant_gateway_secrets',
+      targetId: orgId,
+      metadata: {
+        arkeselUpdated: Boolean(patch.arkeselApiKey || patch.clearArkeselApiKey),
+        arkeselCleared: Boolean(patch.clearArkeselApiKey),
+        paystackUpdated: Boolean(
+          patch.paystackPublicKey !== undefined || patch.paystackSecretKey || patch.clearPaystackKeys
+        ),
+        paystackCleared: Boolean(patch.clearPaystackKeys),
+      },
+      ipAddress: actor?.ipAddress || null,
+    });
+
+    return this.getTenantGatewayConfigSummary(orgId);
   }
 
   private mapSupabaseChurchGroupRow(row: Record<string, any>): ChurchGroup {
@@ -5720,6 +6136,7 @@ class PlatformStore {
       if (error) {
         throw new Error(`Failed to record live check-in in Supabase: ${error.message}`);
       }
+      await this.resetMemberAbsenceStreakOnCheckin(orgId, fullRecord.personId).catch(() => {});
       return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
     }
 
@@ -5780,6 +6197,8 @@ class PlatformStore {
     if (org) {
       org.lastActivityAt = fullRecord.checkedInIso;
     }
+
+    await this.resetMemberAbsenceStreakOnCheckin(orgId, fullRecord.personId).catch(() => {});
 
     return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
   }
@@ -10918,6 +11337,7 @@ class PlatformStore {
       provider,
       status,
       paidAt: paidIso.slice(0, 10),
+      ...(row.reference ? { reference: String(row.reference) } : {}),
     };
   }
 
@@ -10971,6 +11391,8 @@ class PlatformStore {
       provider: 'MTN MoMo' | 'Telecel Cash' | 'Card' | 'Cash';
       status?: 'pending' | 'paid' | 'failed';
       paidAt?: string;
+      reference?: string;
+      gatewayProvider?: string;
     }
   ): Promise<Donation> {
     this.assertDatabaseAvailable();
@@ -10980,6 +11402,7 @@ class PlatformStore {
     const nowIso = new Date().toISOString();
     const paidAtIso = input.paidAt ? new Date(input.paidAt).toISOString() : nowIso;
     const amountMinor = Math.max(1, Math.round(Number(input.amountMinor || 0)));
+    const reference = input.reference ? String(input.reference).trim() : undefined;
 
     if (this.supabase) {
       if (!UUID_REGEX.test(orgId)) {
@@ -10999,13 +11422,30 @@ class PlatformStore {
         provider: input.provider,
         status: input.status || 'paid',
         paid_at: paidAtIso,
+        ...(reference ? { reference } : {}),
+        ...(input.gatewayProvider ? { gateway_provider: input.gatewayProvider } : {}),
       };
 
-      const { data, error } = await this.supabase
+      let { data, error } = await this.supabase
         .from('donations')
         .insert(insertRow)
         .select('*')
         .single();
+
+      for (let attempt = 0; attempt < 2 && error; attempt++) {
+        const msg = error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(insertRow, colMatch[1])) {
+          delete insertRow[colMatch[1]];
+          const retry = await this.supabase.from('donations').insert(insertRow).select('*').single();
+          data = retry.data;
+          error = retry.error;
+          continue;
+        }
+        break;
+      }
 
       if (error) {
         throw new Error(`Failed to record donation in Supabase: ${error.message}`);
@@ -11025,10 +11465,60 @@ class PlatformStore {
       provider: input.provider,
       status: input.status || 'paid',
       paidAt: paidAtIso.slice(0, 10),
+      ...(reference ? { reference } : {}),
     };
     const existing = this.donationsByOrg.get(orgId) || [];
     this.donationsByOrg.set(orgId, [created, ...existing]);
     return created;
+  }
+
+  public async updateDonationStatusByReference(
+    organizationId: string,
+    reference: string,
+    status: 'pending' | 'paid' | 'failed',
+    meta?: {
+      paidAt?: string;
+      gatewayMetadata?: Record<string, unknown>;
+    }
+  ): Promise<Donation | null> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const cleanRef = (reference || '').trim();
+    if (!orgId || !cleanRef) return null;
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return null;
+      const updatePayload: Record<string, unknown> = {
+        status,
+        ...(meta?.paidAt ? { paid_at: meta.paidAt } : {}),
+        ...(meta?.gatewayMetadata ? { gateway_metadata: meta.gatewayMetadata } : {}),
+      };
+      const { data, error } = await this.supabase
+        .from('donations')
+        .update(updatePayload)
+        .eq('organization_id', orgId)
+        .eq('reference', cleanRef)
+        .select('*')
+        .maybeSingle();
+
+      if (error || !data) {
+        return null;
+      }
+      return this.mapSupabaseDonationRow(data);
+    }
+
+    const existing = this.donationsByOrg.get(orgId) || [];
+    const idx = existing.findIndex((d) => d.reference === cleanRef);
+    if (idx < 0) return null;
+    const updated: Donation = {
+      ...existing[idx],
+      status,
+      ...(meta?.paidAt ? { paidAt: meta.paidAt.slice(0, 10) } : {}),
+    };
+    const next = [...existing];
+    next[idx] = updated;
+    this.donationsByOrg.set(orgId, next);
+    return updated;
   }
 
   // ===========================================================================
@@ -11063,7 +11553,13 @@ class PlatformStore {
       assignedToMemberId: row.assigned_to_member_id ? String(row.assigned_to_member_id) : undefined,
       assignedToRole: row.assigned_to_role ? String(row.assigned_to_role) : undefined,
       assignedToPhone: row.assigned_to_phone ? String(row.assigned_to_phone) : undefined,
+      assignedToEmail: row.assigned_to_email ? String(row.assigned_to_email) : undefined,
       autoAssigned: typeof row.auto_assigned === 'boolean' ? row.auto_assigned : undefined,
+      lastReminderAt: row.last_reminder_at ? String(row.last_reminder_at) : undefined,
+      reminderCount: typeof row.reminder_count === 'number' ? row.reminder_count : 0,
+      serviceEventId: row.service_event_id ? String(row.service_event_id) : undefined,
+      serviceName: row.service_name ? String(row.service_name) : undefined,
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : undefined,
       status,
       dueOn: String(row.due_label || row.due_on || 'In 3 days'),
       outcome: row.outcome ? String(row.outcome) : undefined,
@@ -11075,7 +11571,8 @@ class PlatformStore {
 
   private enrichFollowupTasksWithMembers(
     tasks: FollowupTask[],
-    orgMembers: Record<string, any>[]
+    orgMembers: Record<string, any>[],
+    churchGroups: ChurchGroup[] = []
   ): FollowupTask[] {
     const byId = new Map<string, Record<string, any>>();
     const byName = new Map<string, Record<string, any>>();
@@ -11086,11 +11583,18 @@ class PlatformStore {
         .toLowerCase();
       if (fullName) byName.set(fullName, m);
     }
+    const groupByLeader = new Map<string, ChurchGroup>();
+    for (const g of churchGroups) {
+      const k = normalizeSettingLabel(g.leaderName).toLowerCase();
+      if (k && !groupByLeader.has(k)) groupByLeader.set(k, g);
+    }
+
     return tasks.map((t) => {
       const targetMember = byId.get(String(t.personId));
       const assigneeMember =
         (t.assignedToMemberId ? byId.get(t.assignedToMemberId) : undefined) ||
-        byName.get(String(t.assignedToName || '').trim().toLowerCase());
+        byName.get(normalizeSettingLabel(t.assignedToName).toLowerCase());
+      const matchedGroup = groupByLeader.get(normalizeSettingLabel(t.assignedToName).toLowerCase());
       return {
         ...t,
         personPhone:
@@ -11098,15 +11602,30 @@ class PlatformStore {
           (targetMember?.phoneE164 ? String(targetMember.phoneE164) : undefined) ||
           (targetMember?.phoneNumber ? String(targetMember.phoneNumber) : undefined),
         personEmail: t.personEmail || (targetMember?.email ? String(targetMember.email) : undefined),
-        assignedToMemberId: t.assignedToMemberId || (assigneeMember ? String(assigneeMember.id) : undefined),
+        assignedToMemberId:
+          t.assignedToMemberId ||
+          (assigneeMember ? String(assigneeMember.id) : undefined) ||
+          matchedGroup?.leaderMemberId ||
+          undefined,
         assignedToRole:
           t.assignedToRole ||
           (assigneeMember?.officerName || assigneeMember?.designation
             ? String(assigneeMember.officerName || assigneeMember.designation)
+            : matchedGroup
+            ? matchedGroup.category === 'cell_group'
+              ? 'Cell Leader'
+              : 'Ministry Leader'
             : undefined),
         assignedToPhone:
           t.assignedToPhone ||
-          (assigneeMember?.phoneE164 ? String(assigneeMember.phoneE164) : undefined),
+          (assigneeMember?.phoneE164 ? String(assigneeMember.phoneE164) : undefined) ||
+          matchedGroup?.leaderPhone ||
+          undefined,
+        assignedToEmail:
+          t.assignedToEmail ||
+          (assigneeMember?.email ? String(assigneeMember.email) : undefined) ||
+          matchedGroup?.leaderEmail ||
+          undefined,
       };
     });
   }
@@ -11115,7 +11634,10 @@ class PlatformStore {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || '').trim().toLowerCase();
     if (!orgId) return [];
-    const orgMembers = await this.getMembers(orgId);
+    const [orgMembers, churchGroups] = await Promise.all([
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [] as ChurchGroup[]),
+    ]);
 
     if (this.supabase) {
       if (!UUID_REGEX.test(orgId)) return [];
@@ -11134,11 +11656,11 @@ class PlatformStore {
       }
 
       const mapped = (data || []).map((row) => this.mapSupabaseFollowupRow(row));
-      return this.enrichFollowupTasksWithMembers(mapped, orgMembers);
+      return this.enrichFollowupTasksWithMembers(mapped, orgMembers, churchGroups);
     }
 
     const memTasks = [...(this.followupTasksByOrg.get(orgId) || [])];
-    return this.enrichFollowupTasksWithMembers(memTasks, orgMembers);
+    return this.enrichFollowupTasksWithMembers(memTasks, orgMembers, churchGroups);
   }
 
   public async createFollowupTask(
@@ -11154,14 +11676,20 @@ class PlatformStore {
       assignedToMemberId?: string;
       assignedToRole?: string;
       assignedToPhone?: string;
+      assignedToEmail?: string;
       autoAssigned?: boolean;
+      serviceEventId?: string;
+      serviceName?: string;
       dueOn?: string;
       notes?: string;
     }
   ): Promise<FollowupTask> {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || '').trim().toLowerCase();
-    const orgMembers = await this.getMembers(orgId);
+    const [orgMembers, churchGroups] = await Promise.all([
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [] as ChurchGroup[]),
+    ]);
     const matchedMember = orgMembers.find((m) => String(m.id) === input.personId);
     const resolvedPersonName =
       (input.personName || '').trim() ||
@@ -11183,7 +11711,14 @@ class PlatformStore {
         throw new Error('Valid organisation ID is required for follow-up tasks.');
       }
       const memberUuid = UUID_REGEX.test(input.personId) ? input.personId : null;
-      const insertRow: Record<string, unknown> = {
+      const assigneeMemberUuid =
+        input.assignedToMemberId && UUID_REGEX.test(input.assignedToMemberId)
+          ? input.assignedToMemberId
+          : null;
+      const serviceEventUuid =
+        input.serviceEventId && UUID_REGEX.test(input.serviceEventId) ? input.serviceEventId : null;
+
+      let insertRow: Record<string, unknown> = {
         id: randomUUID(),
         organization_id: orgId,
         member_id: memberUuid,
@@ -11191,16 +11726,46 @@ class PlatformStore {
         group_name: resolvedGroupName,
         reason: input.reason,
         assigned_to_name: resolvedAssignee,
+        assigned_to_member_id: assigneeMemberUuid,
+        assigned_to_role: input.assignedToRole || null,
+        assigned_to_phone: input.assignedToPhone || null,
+        assigned_to_email: input.assignedToEmail || null,
+        auto_assigned: Boolean(input.autoAssigned),
+        service_event_id: serviceEventUuid,
+        service_name: input.serviceName || null,
+        reminder_count: 0,
         status: 'open',
         due_label: resolvedDueLabel,
         notes: input.notes || null,
       };
 
-      const { data, error } = await this.supabase
+      let { data, error } = await this.supabase
         .from('followup_tasks')
         .insert(insertRow)
         .select('*')
         .single();
+
+      for (let attempt = 0; attempt < 8 && error; attempt++) {
+        const msg = error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (!colMatch) break;
+        const badCol = colMatch[1];
+        if (badCol in insertRow) {
+          const { [badCol]: _omitted, ...rest } = insertRow;
+          insertRow = rest;
+          const retry = await this.supabase
+            .from('followup_tasks')
+            .insert(insertRow)
+            .select('*')
+            .single();
+          data = retry.data;
+          error = retry.error;
+        } else {
+          break;
+        }
+      }
 
       if (error) {
         throw new Error(`Failed to create follow-up task in Supabase: ${error.message}`);
@@ -11213,10 +11778,14 @@ class PlatformStore {
             ...(input.assignedToMemberId ? { assignedToMemberId: input.assignedToMemberId } : {}),
             ...(input.assignedToRole ? { assignedToRole: input.assignedToRole } : {}),
             ...(input.assignedToPhone ? { assignedToPhone: input.assignedToPhone } : {}),
+            ...(input.assignedToEmail ? { assignedToEmail: input.assignedToEmail } : {}),
             ...(input.autoAssigned !== undefined ? { autoAssigned: input.autoAssigned } : {}),
+            ...(input.serviceEventId ? { serviceEventId: input.serviceEventId } : {}),
+            ...(input.serviceName ? { serviceName: input.serviceName } : {}),
           },
         ],
-        orgMembers
+        orgMembers,
+        churchGroups
       )[0];
     }
 
@@ -11232,7 +11801,11 @@ class PlatformStore {
       assignedToMemberId: input.assignedToMemberId,
       assignedToRole: input.assignedToRole,
       assignedToPhone: input.assignedToPhone,
+      assignedToEmail: input.assignedToEmail,
       autoAssigned: input.autoAssigned,
+      serviceEventId: input.serviceEventId,
+      serviceName: input.serviceName,
+      reminderCount: 0,
       status: 'open',
       dueOn: resolvedDueLabel,
       notes: input.notes || undefined,
@@ -11240,7 +11813,7 @@ class PlatformStore {
     };
     const existing = this.followupTasksByOrg.get(orgId) || [];
     this.followupTasksByOrg.set(orgId, [created, ...existing]);
-    return this.enrichFollowupTasksWithMembers([created], orgMembers)[0];
+    return this.enrichFollowupTasksWithMembers([created], orgMembers, churchGroups)[0];
   }
 
   public async autoAssignAbsenteeFollowupTasks(
@@ -11248,17 +11821,27 @@ class PlatformStore {
     opts?: {
       unarrivedMemberIds?: string[];
       fallbackActorName?: string;
+      serviceEventId?: string;
+      serviceName?: string;
+      sendLeaderReminders?: boolean;
     }
   ): Promise<{
     assignedCount: number;
     skippedExistingCount: number;
     tasks: FollowupTask[];
     allTasks: FollowupTask[];
+    leaderRemindersSent: number;
   }> {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || '').trim().toLowerCase();
     if (!orgId) {
-      return { assignedCount: 0, skippedExistingCount: 0, tasks: [], allTasks: [] };
+      return {
+        assignedCount: 0,
+        skippedExistingCount: 0,
+        tasks: [],
+        allTasks: [],
+        leaderRemindersSent: 0,
+      };
     }
 
     const [membersRaw, churchGroups, existingTasks, settingsRes] = await Promise.all([
@@ -11297,10 +11880,23 @@ class PlatformStore {
         assignedToRole: item.assignedToRole,
         assignedToPhone: item.assignedToPhone,
         autoAssigned: true,
+        serviceEventId: opts?.serviceEventId,
+        serviceName: opts?.serviceName,
         dueOn: item.dueOn,
         notes: item.notes,
       });
       createdTasks.push(created);
+    }
+
+    let leaderRemindersSent = 0;
+    const shouldNotifyLeaders =
+      opts?.sendLeaderReminders ?? settingsRes.settings.autoSendLeaderCareReminders !== false;
+    if (shouldNotifyLeaders && createdTasks.length > 0) {
+      const reminderRes = await this.sendPendingLeaderCareReminders(orgId, {
+        taskIds: createdTasks.map((t) => t.id),
+        actorName: opts?.fallbackActorName || 'Pastoral Care Automation',
+      });
+      leaderRemindersSent = reminderRes.sentCount;
     }
 
     const allTasks = await this.listFollowupTasks(orgId);
@@ -11313,6 +11909,7 @@ class PlatformStore {
       skippedExistingCount: activeOpenIds,
       tasks: createdTasks,
       allTasks,
+      leaderRemindersSent,
     };
   }
 
@@ -11324,6 +11921,9 @@ class PlatformStore {
       outcome?: string;
       assignedToName?: string;
       notes?: string;
+      lastReminderAt?: string;
+      reminderCount?: number;
+      acknowledgedAt?: string;
     }
   ): Promise<FollowupTask> {
     this.assertDatabaseAvailable();
@@ -11337,7 +11937,7 @@ class PlatformStore {
         throw err;
       }
 
-      const updateFields: Record<string, unknown> = {};
+      let updateFields: Record<string, unknown> = {};
       if (patch.status !== undefined) {
         updateFields.status = patch.status;
         if (patch.status === 'resolved' || patch.status === 'dismissed') {
@@ -11347,14 +11947,52 @@ class PlatformStore {
       if (patch.outcome !== undefined) updateFields.outcome = patch.outcome;
       if (patch.assignedToName !== undefined) updateFields.assigned_to_name = patch.assignedToName;
       if (patch.notes !== undefined) updateFields.notes = patch.notes;
+      if (patch.lastReminderAt !== undefined) updateFields.last_reminder_at = patch.lastReminderAt;
+      if (patch.reminderCount !== undefined) updateFields.reminder_count = patch.reminderCount;
+      if (patch.acknowledgedAt !== undefined) updateFields.acknowledged_at = patch.acknowledgedAt;
 
-      const { data, error } = await this.supabase
+      let { data, error } = await this.supabase
         .from('followup_tasks')
         .update(updateFields)
         .eq('organization_id', orgId)
         .eq('id', taskId)
         .select('*')
         .maybeSingle();
+
+      for (let attempt = 0; attempt < 6 && error; attempt++) {
+        const msg = error.message || '';
+        const colMatch =
+          msg.match(/Could not find the '([^']+)' column/i) ||
+          msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (!colMatch) break;
+        const badCol = colMatch[1];
+        if (badCol in updateFields) {
+          const { [badCol]: _omitted, ...rest } = updateFields;
+          updateFields = rest;
+          if (Object.keys(updateFields).length === 0) {
+            const existing = await this.supabase
+              .from('followup_tasks')
+              .select('*')
+              .eq('organization_id', orgId)
+              .eq('id', taskId)
+              .maybeSingle();
+            data = existing.data;
+            error = existing.error;
+            break;
+          }
+          const retry = await this.supabase
+            .from('followup_tasks')
+            .update(updateFields)
+            .eq('organization_id', orgId)
+            .eq('id', taskId)
+            .select('*')
+            .maybeSingle();
+          data = retry.data;
+          error = retry.error;
+        } else {
+          break;
+        }
+      }
 
       if (error) {
         throw new Error(`Failed to update follow-up task in Supabase: ${error.message}`);
@@ -11364,7 +12002,15 @@ class PlatformStore {
         err.status = 404;
         throw err;
       }
-      return this.mapSupabaseFollowupRow(data);
+      const [orgMembers, churchGroups] = await Promise.all([
+        this.getMembers(orgId),
+        this.listChurchGroups(orgId).catch(() => [] as ChurchGroup[]),
+      ]);
+      return this.enrichFollowupTasksWithMembers(
+        [this.mapSupabaseFollowupRow(data)],
+        orgMembers,
+        churchGroups
+      )[0];
     }
 
     const list = this.followupTasksByOrg.get(orgId) || [];
@@ -11379,6 +12025,10 @@ class PlatformStore {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.outcome !== undefined ? { outcome: patch.outcome } : {}),
       ...(patch.assignedToName !== undefined ? { assignedToName: patch.assignedToName } : {}),
+      ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+      ...(patch.lastReminderAt !== undefined ? { lastReminderAt: patch.lastReminderAt } : {}),
+      ...(patch.reminderCount !== undefined ? { reminderCount: patch.reminderCount } : {}),
+      ...(patch.acknowledgedAt !== undefined ? { acknowledgedAt: patch.acknowledgedAt } : {}),
       ...(patch.status === 'resolved' || patch.status === 'dismissed'
         ? { resolvedAt: nowIso }
         : {}),
@@ -11426,6 +12076,1232 @@ class PlatformStore {
       orgId,
       list.filter((t) => t.id !== taskId)
     );
+  }
+
+  // ===========================================================================
+  // AUTOMATED ABSENTEE OUTREACH, LEADER CARE REMINDERS & OVERSIGHT MONITOR
+  // ===========================================================================
+
+  public async resolveUserDesignation(
+    organizationId?: string,
+    userId?: string,
+    email?: string,
+    explicitDesignation?: string
+  ): Promise<string | undefined> {
+    if (explicitDesignation && explicitDesignation.trim()) {
+      return explicitDesignation.trim();
+    }
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId || !userId) return undefined;
+    try {
+      const profile = await this.getMemberProfileForSession(orgId, userId, email);
+      const raw = profile?.designation || profile?.officerName;
+      return raw ? String(raw).trim() || undefined : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async resetMemberAbsenceStreakOnCheckin(
+    organizationId: string,
+    personId: string
+  ): Promise<void> {
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId || !personId) return;
+    const members = await this.getMembers(orgId);
+    const member = members.find((m) => String(m.id) === String(personId));
+    if (member && Number(member.consecutiveAbsences || 0) > 0) {
+      await this.updateMember(orgId, String(member.id), {
+        consecutiveAbsences: 0,
+      }).catch(() => {});
+    }
+
+    const tasks = await this.listFollowupTasks(orgId);
+    const activeAbsentTasks = tasks.filter(
+      (t) =>
+        String(t.personId) === String(personId) &&
+        (t.status === 'open' || t.status === 'contacted') &&
+        (t.reason === 'absent_2' || t.reason === 'absent_3')
+    );
+    for (const task of activeAbsentTasks) {
+      await this.updateFollowupTask(orgId, task.id, {
+        status: 'resolved',
+        outcome: 'Returned and checked in for service',
+      }).catch(() => {});
+    }
+  }
+
+  private async getExplicitMemberConsentRecord(
+    organizationId: string,
+    memberId: string,
+    email?: string
+  ): Promise<{ autoCheckin: boolean; push: boolean; sms: boolean; email: boolean } | null> {
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId || !memberId) return null;
+
+    if (this.supabase) {
+      if (!UUID_REGEX.test(orgId)) return null;
+      const orClauses = [`user_id.eq.${memberId}`];
+      if (UUID_REGEX.test(memberId)) {
+        orClauses.push(`member_id.eq.${memberId}`);
+      }
+      const { data, error } = await this.supabase
+        .from('member_consents')
+        .select('*')
+        .eq('organization_id', orgId)
+        .or(orClauses.join(','))
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return {
+        autoCheckin: Boolean(data.auto_checkin),
+        push: Boolean(data.push),
+        sms: Boolean(data.sms),
+        email: Boolean(data.email),
+      };
+    }
+
+    const byOrg = this.memberConsentsByOrg.get(orgId) || {};
+    if (byOrg[memberId]) {
+      const c = byOrg[memberId];
+      return { autoCheckin: c.autoCheckin, push: c.push, sms: c.sms, email: c.email };
+    }
+    const matched = Object.values(byOrg).find(
+      (c) => c.memberId === memberId || (email && (c as any).email === email)
+    );
+    if (matched) {
+      return {
+        autoCheckin: matched.autoCheckin,
+        push: matched.push,
+        sms: matched.sms,
+        email: matched.email,
+      };
+    }
+    return null;
+  }
+
+  private renderAbsentMemberMessage(
+    template: string,
+    vars: {
+      firstName: string;
+      fullName: string;
+      serviceName: string;
+      churchName: string;
+      missedCount: number;
+      contactPhone: string;
+    }
+  ): string {
+    const base = (template || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE).trim();
+    return base
+      .replace(/\{\{\s*firstName\s*\}\}/gi, vars.firstName || 'Friend')
+      .replace(/\{\{\s*fullName\s*\}\}/gi, vars.fullName || 'Beloved Member')
+      .replace(/\{\{\s*serviceName\s*\}\}/gi, vars.serviceName || 'today’s service')
+      .replace(/\{\{\s*churchName\s*\}\}/gi, vars.churchName || 'your church family')
+      .replace(/\{\{\s*missedCount\s*\}\}/gi, String(vars.missedCount || 1))
+      .replace(/\{\{\s*contactPhone\s*\}\}/gi, vars.contactPhone || 'our church office');
+  }
+
+  private isMissingPastoralAutomationTableError(error: { code?: string; message?: string } | null): boolean {
+    if (!error) return false;
+    const code = String(error.code || '').toUpperCase();
+    const msg = String(error.message || '');
+    return (
+      code === 'PGRST205' ||
+      code === '42P01' ||
+      /pastoral_care_dispatches|service_absence_runs|schema cache|does not exist|could not find the table/i.test(
+        msg
+      )
+    );
+  }
+
+  private mapSupabaseDispatchRow(row: Record<string, any>): PastoralCareDispatch {
+    return {
+      id: String(row.id),
+      organizationId: String(row.organization_id || '').toLowerCase(),
+      dispatchType:
+        row.dispatch_type === 'leader_reminder' ? 'leader_reminder' : 'absent_member_alert',
+      serviceEventId: row.service_event_id ? String(row.service_event_id) : undefined,
+      serviceName: row.service_name ? String(row.service_name) : undefined,
+      followupTaskId: row.followup_task_id ? String(row.followup_task_id) : undefined,
+      memberId: row.member_id ? String(row.member_id) : undefined,
+      memberName: String(row.member_name || 'Member'),
+      recipientName: String(row.recipient_name || 'Recipient'),
+      recipientRole: row.recipient_role ? String(row.recipient_role) : undefined,
+      recipientPhone: row.recipient_phone ? String(row.recipient_phone) : undefined,
+      recipientEmail: row.recipient_email ? String(row.recipient_email) : undefined,
+      channel:
+        row.channel === 'email' || row.channel === 'push' || row.channel === 'in_app'
+          ? row.channel
+          : 'sms',
+      status:
+        row.status === 'sent' ||
+        row.status === 'queued' ||
+        row.status === 'skipped_unconfigured' ||
+        row.status === 'skipped_opt_out' ||
+        row.status === 'skipped_no_contact' ||
+        row.status === 'failed'
+          ? row.status
+          : 'queued',
+      messageBody: String(row.message_body || ''),
+      provider: row.provider ? String(row.provider) : undefined,
+      errorMessage: row.error_message ? String(row.error_message) : undefined,
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : undefined,
+      createdAt: String(row.created_at || new Date().toISOString()),
+    };
+  }
+
+  private async recordPastoralCareDispatch(
+    organizationId: string,
+    input: {
+      dispatchType: PastoralCareDispatchType;
+      serviceEventId?: string;
+      serviceName?: string;
+      followupTaskId?: string;
+      memberId?: string;
+      memberName: string;
+      recipientName: string;
+      recipientRole?: string;
+      recipientPhone?: string;
+      recipientEmail?: string;
+      channel: PastoralCareDispatchChannel;
+      status: PastoralCareDispatchStatus;
+      messageBody: string;
+      provider?: string;
+      errorMessage?: string;
+    }
+  ): Promise<PastoralCareDispatch> {
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const nowIso = new Date().toISOString();
+    const record: PastoralCareDispatch = {
+      id: randomUUID(),
+      organizationId: orgId,
+      dispatchType: input.dispatchType,
+      serviceEventId: input.serviceEventId,
+      serviceName: input.serviceName,
+      followupTaskId: input.followupTaskId,
+      memberId: input.memberId,
+      memberName: input.memberName,
+      recipientName: input.recipientName,
+      recipientRole: input.recipientRole,
+      recipientPhone: input.recipientPhone,
+      recipientEmail: input.recipientEmail,
+      channel: input.channel,
+      status: input.status,
+      messageBody: input.messageBody,
+      provider: input.provider,
+      errorMessage: input.errorMessage,
+      createdAt: nowIso,
+    };
+
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX.test(orgId)) {
+      const insertRow: Record<string, unknown> = {
+        id: record.id,
+        organization_id: orgId,
+        dispatch_type: record.dispatchType,
+        service_event_id:
+          record.serviceEventId && UUID_REGEX.test(record.serviceEventId)
+            ? record.serviceEventId
+            : null,
+        service_name: record.serviceName || null,
+        followup_task_id:
+          record.followupTaskId && UUID_REGEX.test(record.followupTaskId)
+            ? record.followupTaskId
+            : null,
+        member_id: record.memberId && UUID_REGEX.test(record.memberId) ? record.memberId : null,
+        member_name: record.memberName,
+        recipient_name: record.recipientName,
+        recipient_role: record.recipientRole || null,
+        recipient_phone: record.recipientPhone || null,
+        recipient_email: record.recipientEmail || null,
+        channel: record.channel,
+        status: record.status,
+        message_body: record.messageBody,
+        provider: record.provider || null,
+        error_message: record.errorMessage || null,
+        created_at: nowIso,
+      };
+
+      const { data, error } = await sb
+        .from('pastoral_care_dispatches')
+        .insert(insertRow)
+        .select('*')
+        .single();
+
+      if (!error && data) {
+        return this.mapSupabaseDispatchRow(data);
+      }
+
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        // Fallback into organizations.settings._pastoral_dispatches if migration hasn't been applied yet
+        const { data: orgRow } = await sb
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const existingSettings =
+          orgRow?.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, any>)
+            : {};
+        const prevList = Array.isArray(existingSettings._pastoral_dispatches)
+          ? existingSettings._pastoral_dispatches
+          : [];
+        const nextList = [record, ...prevList].slice(0, 250);
+        await sb
+          .from('organizations')
+          .update({
+            settings: { ...existingSettings, _pastoral_dispatches: nextList },
+            updated_at: nowIso,
+          })
+          .eq('id', orgId);
+        return record;
+      }
+    }
+
+    const memList = this.dispatchesByOrg.get(orgId) || [];
+    this.dispatchesByOrg.set(orgId, [record, ...memList].slice(0, 250));
+    return record;
+  }
+
+  public async listPastoralCareDispatches(
+    organizationId: string,
+    limit: number = 150
+  ): Promise<PastoralCareDispatch[]> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    if (!orgId) return [];
+
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX.test(orgId)) {
+      const { data, error } = await sb
+        .from('pastoral_care_dispatches')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (!error && Array.isArray(data)) {
+        return data.map((r) => this.mapSupabaseDispatchRow(r));
+      }
+
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const raw =
+          orgRow?.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, any>)
+            : {};
+        const list = Array.isArray(raw._pastoral_dispatches) ? raw._pastoral_dispatches : [];
+        return list.slice(0, limit);
+      }
+    }
+
+    return (this.dispatchesByOrg.get(orgId) || []).slice(0, limit);
+  }
+
+  private async getProcessedAbsenceEventIds(orgId: string): Promise<string[]> {
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX.test(orgId)) {
+      const { data, error } = await sb
+        .from('service_absence_runs')
+        .select('event_id')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (!error && Array.isArray(data)) {
+        return data.map((r: any) => String(r.event_id));
+      }
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const raw =
+          orgRow?.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, any>)
+            : {};
+        return Array.isArray(raw._processed_absence_events)
+          ? raw._processed_absence_events.map(String)
+          : [];
+      }
+    }
+    const memMap = this.absenceRunsByOrg.get(orgId);
+    return memMap ? Array.from(memMap.keys()) : [];
+  }
+
+  private async markAbsenceEventProcessed(
+    orgId: string,
+    summary: {
+      eventId: string;
+      eventName: string;
+      triggerSource: string;
+      absentMembersCount: number;
+      memberMessagesSent: number;
+      tasksCreatedCount: number;
+      leaderRemindersSent: number;
+      triggeredBy?: string;
+    }
+  ): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX.test(orgId) && UUID_REGEX.test(summary.eventId)) {
+      const { error } = await sb.from('service_absence_runs').upsert(
+        {
+          organization_id: orgId,
+          event_id: summary.eventId,
+          event_name: summary.eventName,
+          trigger_source: summary.triggerSource,
+          absent_members_count: summary.absentMembersCount,
+          member_messages_sent: summary.memberMessagesSent,
+          tasks_created_count: summary.tasksCreatedCount,
+          leader_reminders_sent: summary.leaderRemindersSent,
+          triggered_by: summary.triggeredBy || null,
+          created_at: nowIso,
+        },
+        { onConflict: 'organization_id,event_id' }
+      );
+      if (!error) return;
+      if (this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb
+          .from('organizations')
+          .select('settings')
+          .eq('id', orgId)
+          .maybeSingle();
+        const existingSettings =
+          orgRow?.settings && typeof orgRow.settings === 'object'
+            ? (orgRow.settings as Record<string, any>)
+            : {};
+        const prev = Array.isArray(existingSettings._processed_absence_events)
+          ? existingSettings._processed_absence_events.map(String)
+          : [];
+        const next = Array.from(new Set([summary.eventId, ...prev])).slice(0, 200);
+        await sb
+          .from('organizations')
+          .update({
+            settings: { ...existingSettings, _processed_absence_events: next },
+            updated_at: nowIso,
+          })
+          .eq('id', orgId);
+        return;
+      }
+    }
+
+    const memMap = this.absenceRunsByOrg.get(orgId) || new Map();
+    memMap.set(summary.eventId, {
+      eventId: summary.eventId,
+      eventName: summary.eventName,
+      processedAt: nowIso,
+    });
+    this.absenceRunsByOrg.set(orgId, memMap);
+  }
+
+  public async processServiceAbsenceSweep(
+    organizationId: string,
+    opts?: {
+      eventId?: string;
+      force?: boolean;
+      triggerSource?: string;
+      actorName?: string;
+    }
+  ): Promise<ServiceAbsenceSweepResult> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const events = await this.getEvents(orgId);
+
+    const targetEvent = opts?.eventId
+      ? events.find((e) => String(e.id) === String(opts.eventId))
+      : events.find((e) => {
+          const st = String(e.status || '').toLowerCase();
+          return st === 'closed' || st === 'completed';
+        }) || events[0];
+
+    if (!targetEvent) {
+      const allTasks = await this.listFollowupTasks(orgId);
+      return {
+        success: true,
+        eventId: '',
+        eventName: 'No service scheduled',
+        absentMembersCount: 0,
+        memberMessagesSent: 0,
+        memberMessagesAttempted: 0,
+        tasksCreatedCount: 0,
+        leaderRemindersSent: 0,
+        leaderRemindersAttempted: 0,
+        dispatches: [],
+        allTasks,
+        message: 'No worship service found to evaluate absences.',
+      };
+    }
+
+    const eventId = String(targetEvent.id);
+    const eventName = String(targetEvent.name || 'Worship Service');
+    const processedIds = await this.getProcessedAbsenceEventIds(orgId);
+
+    if (!opts?.force && processedIds.includes(eventId)) {
+      const [allTasks, existingDispatches] = await Promise.all([
+        this.listFollowupTasks(orgId),
+        this.listPastoralCareDispatches(orgId, 60),
+      ]);
+      return {
+        success: true,
+        alreadyProcessed: true,
+        eventId,
+        eventName,
+        absentMembersCount: 0,
+        memberMessagesSent: 0,
+        memberMessagesAttempted: 0,
+        tasksCreatedCount: 0,
+        leaderRemindersSent: 0,
+        leaderRemindersAttempted: 0,
+        dispatches: existingDispatches.filter((d) => d.serviceEventId === eventId),
+        allTasks,
+        message: `Absence sweep already completed for "${eventName}".`,
+      };
+    }
+
+    const [membersRaw, checkins, settingsRes, churchGroups, existingTasks, arkeselResolved] =
+      await Promise.all([
+        this.getMembers(orgId),
+        this.getLiveCheckins(orgId, eventId),
+        this.getSystemSettings(orgId),
+        this.listChurchGroups(orgId),
+        this.listFollowupTasks(orgId),
+        this.getResolvedArkeselApiKey(orgId),
+      ]);
+
+    const settings = settingsRes.settings;
+    const presentIds = new Set(checkins.map((c) => String(c.personId)));
+
+    // 1. Update consecutive absence streaks accurately across active members
+    const updatedMembers: Person[] = [];
+    const absentMembers: Array<{ member: Person; newStreak: number }> = [];
+
+    for (const raw of membersRaw) {
+      const m = raw as unknown as Person;
+      const status = String(m.status || 'member').toLowerCase();
+      if (status === 'inactive' || status === 'transferred' || status === 'deceased' || status === 'visitor') {
+        updatedMembers.push(m);
+        continue;
+      }
+
+      if (presentIds.has(String(m.id))) {
+        if (Number(m.consecutiveAbsences || 0) > 0) {
+          await this.updateMember(orgId, String(m.id), { consecutiveAbsences: 0 }).catch(() => {});
+        }
+        updatedMembers.push({ ...m, consecutiveAbsences: 0 });
+      } else {
+        const nextStreak = (Number(m.consecutiveAbsences || 0) || 0) + 1;
+        await this.updateMember(orgId, String(m.id), { consecutiveAbsences: nextStreak }).catch(() => {});
+        const updated = { ...m, consecutiveAbsences: nextStreak };
+        updatedMembers.push(updated);
+        absentMembers.push({ member: updated, newStreak: nextStreak });
+      }
+    }
+
+    // 2. Automatically send caring messages to absent members
+    const dispatches: PastoralCareDispatch[] = [];
+    let memberMessagesSent = 0;
+    let memberMessagesAttempted = 0;
+
+    if (settings.autoMessageAbsentMembers !== false && absentMembers.length > 0) {
+      const channelPref = settings.absentMemberMessageChannel || 'sms_and_email';
+      const resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
+      const arkeselConfigured = Boolean(arkeselResolved.apiKey);
+      const churchDisplay = settings.churchName || 'Your Church Family';
+      const churchContactPhone = settings.contactPhone || 'our pastoral desk';
+
+      for (const { member, newStreak } of absentMembers) {
+        const fullName = getMemberFullName(member) || 'Beloved Member';
+        const messageBody = this.renderAbsentMemberMessage(
+          settings.absentMemberMessageTemplate || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+          {
+            firstName: member.firstName || fullName.split(' ')[0] || 'Friend',
+            fullName,
+            serviceName: eventName,
+            churchName: churchDisplay,
+            missedCount: newStreak,
+            contactPhone: churchContactPhone,
+          }
+        );
+
+        const explicitConsent = await this.getExplicitMemberConsentRecord(
+          orgId,
+          String(member.id),
+          member.email
+        );
+
+        const wantsSms = channelPref === 'sms' || channelPref === 'sms_and_email';
+        const wantsEmail = channelPref === 'email' || channelPref === 'sms_and_email';
+        const phone = member.phoneE164 || member.phoneNumber || '';
+        const normalizedMsisdn = normalizeArkeselPhone(phone);
+        const email = (member.email || '').trim().toLowerCase();
+        let deliveredToThisMember = false;
+
+        if (wantsSms) {
+          memberMessagesAttempted++;
+          if (explicitConsent && explicitConsent.sms === false) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                recipientPhone: phone || undefined,
+                channel: 'sms',
+                status: 'skipped_opt_out',
+                messageBody,
+                provider: 'Arkesel SMS',
+                errorMessage: 'Member opted out of SMS notifications.',
+              })
+            );
+          } else if (!normalizedMsisdn) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                channel: 'sms',
+                status: 'skipped_no_contact',
+                messageBody,
+                provider: 'Arkesel SMS',
+                errorMessage: 'No valid mobile phone number on member profile.',
+              })
+            );
+          } else if (!arkeselConfigured) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                recipientPhone: phone,
+                channel: 'sms',
+                status: 'skipped_unconfigured',
+                messageBody,
+                provider: 'Arkesel SMS',
+                errorMessage: 'Tenant Arkesel API key not configured yet.',
+              })
+            );
+          } else {
+            const smsRes = await sendArkeselSms({
+              apiKey: arkeselResolved.apiKey,
+              senderId: settings.smsSenderId,
+              recipients: [normalizedMsisdn],
+              message: messageBody,
+            });
+            if (smsRes.ok) {
+              deliveredToThisMember = true;
+            }
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                recipientPhone: phone,
+                channel: 'sms',
+                status: smsRes.ok ? 'sent' : 'failed',
+                messageBody,
+                provider: 'Arkesel SMS',
+                errorMessage: smsRes.ok ? undefined : smsRes.message,
+              })
+            );
+          }
+        }
+
+        if (wantsEmail && email) {
+          memberMessagesAttempted++;
+          if (explicitConsent && explicitConsent.email === false) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                recipientEmail: email,
+                channel: 'email',
+                status: 'skipped_opt_out',
+                messageBody,
+                provider: 'Resend Email',
+                errorMessage: 'Member opted out of Email notifications.',
+              })
+            );
+          } else if (!resendConfigured) {
+            if (!wantsSms) {
+              dispatches.push(
+                await this.recordPastoralCareDispatch(orgId, {
+                  dispatchType: 'absent_member_alert',
+                  serviceEventId: eventId,
+                  serviceName: eventName,
+                  memberId: String(member.id),
+                  memberName: fullName,
+                  recipientName: fullName,
+                  recipientRole: 'Member',
+                  recipientEmail: email,
+                  channel: 'email',
+                  status: 'skipped_unconfigured',
+                  messageBody,
+                  provider: 'Resend Email',
+                  errorMessage: 'Email gateway API key not configured.',
+                })
+              );
+            }
+          } else {
+            const emailRes = await sendResendEmail({
+              fromEmail: settings.emailFromAddress || undefined,
+              fromName: settings.emailSenderName || settings.churchName || undefined,
+              organizationName: settings.churchName || undefined,
+              to: [email],
+              subject: `We missed you at ${eventName} · ${churchDisplay}`,
+              text: messageBody,
+              replyTo: settings.contactEmail || undefined,
+            });
+            if (emailRes.ok) {
+              deliveredToThisMember = true;
+            }
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: 'absent_member_alert',
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: 'Member',
+                recipientEmail: email,
+                channel: 'email',
+                status: emailRes.ok ? 'sent' : 'failed',
+                messageBody,
+                provider: 'Resend Email',
+                errorMessage: emailRes.ok ? undefined : emailRes.message,
+              })
+            );
+          }
+        }
+
+        if (deliveredToThisMember) {
+          memberMessagesSent++;
+        }
+      }
+    }
+
+    // 3. Auto-assign follow-up tasks for absentees reaching threshold + dispatch leader reminders
+    const plan = buildAutoAssignAbsenteesPlan({
+      members: updatedMembers,
+      churchGroups,
+      existingTasks,
+      systemSettings: settings,
+      fallbackActorName: opts?.actorName || settings.seniorPastor || 'Pastoral Care Team',
+    });
+
+    const createdTasks: FollowupTask[] = [];
+    for (const item of plan) {
+      const leaderMember = updatedMembers.find(
+        (m) =>
+          (item.assignedToMemberId && String(m.id) === String(item.assignedToMemberId)) ||
+          getMemberFullName(m).toLowerCase() === normalizeSettingLabel(item.assignedToName).toLowerCase()
+      );
+      const leaderEmail = leaderMember?.email || undefined;
+      const created = await this.createFollowupTask(orgId, {
+        personId: item.personId,
+        personName: item.personName,
+        personPhone: item.personPhone,
+        personEmail: item.personEmail,
+        groupName: item.groupName,
+        reason: item.reason,
+        assignedToName: item.assignedToName,
+        assignedToMemberId: item.assignedToMemberId,
+        assignedToRole: item.assignedToRole,
+        assignedToPhone: item.assignedToPhone,
+        assignedToEmail: leaderEmail,
+        autoAssigned: true,
+        serviceEventId: eventId,
+        serviceName: eventName,
+        dueOn: item.dueOn,
+        notes: `${item.notes} Service: ${eventName}.`,
+      });
+      createdTasks.push(created);
+    }
+
+    let leaderRemindersSent = 0;
+    let leaderRemindersAttempted = 0;
+    if (settings.autoSendLeaderCareReminders !== false) {
+      const targetTaskIds = createdTasks.map((t) => t.id);
+      if (targetTaskIds.length > 0) {
+        const remRes = await this.sendPendingLeaderCareReminders(orgId, {
+          taskIds: targetTaskIds,
+          serviceEventId: eventId,
+          serviceName: eventName,
+          actorName: opts?.actorName || 'Pastoral Care Automation',
+        });
+        leaderRemindersSent = remRes.sentCount;
+        leaderRemindersAttempted = remRes.attemptedCount;
+        dispatches.push(...remRes.dispatches);
+      }
+    }
+
+    await this.markAbsenceEventProcessed(orgId, {
+      eventId,
+      eventName,
+      triggerSource: opts?.triggerSource || 'service_closed',
+      absentMembersCount: absentMembers.length,
+      memberMessagesSent,
+      tasksCreatedCount: createdTasks.length,
+      leaderRemindersSent,
+      triggeredBy: opts?.actorName,
+    });
+
+    const allTasks = await this.listFollowupTasks(orgId);
+    const summaryMsg =
+      absentMembers.length === 0
+        ? `Service "${eventName}" closed: all active members checked in.`
+        : `Service "${eventName}" absence care completed: ${absentMembers.length} absent member(s), ${memberMessagesSent} member alert(s) sent, ${createdTasks.length} care task(s) created, ${leaderRemindersSent} leader reminder(s) delivered.`;
+
+    return {
+      success: true,
+      eventId,
+      eventName,
+      absentMembersCount: absentMembers.length,
+      memberMessagesSent,
+      memberMessagesAttempted,
+      tasksCreatedCount: createdTasks.length,
+      leaderRemindersSent,
+      leaderRemindersAttempted,
+      dispatches,
+      allTasks,
+      message: summaryMsg,
+    };
+  }
+
+  public async sendPendingLeaderCareReminders(
+    organizationId: string,
+    opts?: {
+      taskId?: string;
+      taskIds?: string[];
+      leaderName?: string;
+      serviceEventId?: string;
+      serviceName?: string;
+      actorName?: string;
+    }
+  ): Promise<{
+    sentCount: number;
+    attemptedCount: number;
+    dispatches: PastoralCareDispatch[];
+    allTasks: FollowupTask[];
+  }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const [allTasks, orgMembers, churchGroups, settingsRes, arkeselResolved] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [] as ChurchGroup[]),
+      this.getSystemSettings(orgId),
+      this.getResolvedArkeselApiKey(orgId),
+    ]);
+
+    const settings = settingsRes.settings;
+    const resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
+    const arkeselConfigured = Boolean(arkeselResolved.apiKey);
+
+    let targetTasks = allTasks.filter((t) => t.status === 'open' || t.status === 'contacted');
+    if (opts?.taskId) {
+      targetTasks = targetTasks.filter((t) => t.id === opts.taskId);
+    } else if (Array.isArray(opts?.taskIds) && opts!.taskIds.length > 0) {
+      const idSet = new Set(opts!.taskIds);
+      targetTasks = targetTasks.filter((t) => idSet.has(t.id));
+    } else if (opts?.leaderName) {
+      const targetLeader = normalizeSettingLabel(opts.leaderName).toLowerCase();
+      targetTasks = targetTasks.filter(
+        (t) => normalizeSettingLabel(t.assignedToName).toLowerCase() === targetLeader
+      );
+    }
+
+    if (targetTasks.length === 0) {
+      return { sentCount: 0, attemptedCount: 0, dispatches: [], allTasks };
+    }
+
+    // Consolidate by assigned leader so a leader receives one crisp pastoral reminder covering all pending cases
+    const byLeader = new Map<string, FollowupTask[]>();
+    for (const t of targetTasks) {
+      const key = normalizeSettingLabel(t.assignedToName).toLowerCase() || 'pastoral_care_team';
+      const arr = byLeader.get(key) || [];
+      arr.push(t);
+      byLeader.set(key, arr);
+    }
+
+    const dispatches: PastoralCareDispatch[] = [];
+    let sentCount = 0;
+    let attemptedCount = 0;
+    const nowIso = new Date().toISOString();
+
+    for (const groupTasks of byLeader.values()) {
+      const primaryTask = groupTasks[0];
+      const leaderName = primaryTask.assignedToName || 'Pastoral Care Leader';
+      const leaderRole = primaryTask.assignedToRole || 'Leader in Charge';
+      const leaderMember = orgMembers.find(
+        (m) =>
+          (primaryTask.assignedToMemberId && String(m.id) === String(primaryTask.assignedToMemberId)) ||
+          `${String(m.firstName || '')} ${String(m.lastName || '')}`.trim().toLowerCase() ===
+            normalizeSettingLabel(leaderName).toLowerCase()
+      );
+      const leaderGroup = churchGroups.find(
+        (g) => normalizeSettingLabel(g.leaderName).toLowerCase() === normalizeSettingLabel(leaderName).toLowerCase()
+      );
+
+      const leaderPhone =
+        primaryTask.assignedToPhone ||
+        (leaderMember?.phoneE164 ? String(leaderMember.phoneE164) : undefined) ||
+        leaderGroup?.leaderPhone ||
+        undefined;
+      const leaderEmail =
+        primaryTask.assignedToEmail ||
+        (leaderMember?.email ? String(leaderMember.email) : undefined) ||
+        leaderGroup?.leaderEmail ||
+        undefined;
+
+      const memberSummaries = groupTasks
+        .slice(0, 5)
+        .map((t) => `${t.personName}${t.personPhone ? ` (${t.personPhone})` : ''}`)
+        .join(', ');
+      const extraCount = groupTasks.length > 5 ? ` +${groupTasks.length - 5} more` : '';
+      const churchLabel = settings.churchName || 'Ekklesphere Church';
+      const serviceCtx =
+        opts?.serviceName || primaryTask.serviceName
+          ? ` after ${opts?.serviceName || primaryTask.serviceName}`
+          : '';
+      const reminderMessage = `Pastoral Care Reminder (${churchLabel}): Dear ${leaderName}, please follow up with ${groupTasks.length} member${
+        groupTasks.length === 1 ? '' : 's'
+      } needing care${serviceCtx}: ${memberSummaries}${extraCount}. Due: ${primaryTask.dueOn}.`;
+
+      attemptedCount++;
+      let deliveredExternally = false;
+      const normalizedPhone = normalizeArkeselPhone(leaderPhone);
+
+      if (normalizedPhone) {
+        if (arkeselConfigured) {
+          const smsRes = await sendArkeselSms({
+            apiKey: arkeselResolved.apiKey,
+            senderId: settings.smsSenderId,
+            recipients: [normalizedPhone],
+            message: reminderMessage,
+          });
+          if (smsRes.ok) deliveredExternally = true;
+          dispatches.push(
+            await this.recordPastoralCareDispatch(orgId, {
+              dispatchType: 'leader_reminder',
+              serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+              serviceName: opts?.serviceName || primaryTask.serviceName,
+              followupTaskId: primaryTask.id,
+              memberId: primaryTask.personId,
+              memberName:
+                groupTasks.length === 1
+                  ? primaryTask.personName
+                  : `${groupTasks.length} Members`,
+              recipientName: leaderName,
+              recipientRole: leaderRole,
+              recipientPhone: leaderPhone,
+              recipientEmail: leaderEmail,
+              channel: 'sms',
+              status: smsRes.ok ? 'sent' : 'failed',
+              messageBody: reminderMessage,
+              provider: 'Arkesel SMS',
+              errorMessage: smsRes.ok ? undefined : smsRes.message,
+            })
+          );
+        } else {
+          dispatches.push(
+            await this.recordPastoralCareDispatch(orgId, {
+              dispatchType: 'leader_reminder',
+              serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+              serviceName: opts?.serviceName || primaryTask.serviceName,
+              followupTaskId: primaryTask.id,
+              memberId: primaryTask.personId,
+              memberName:
+                groupTasks.length === 1
+                  ? primaryTask.personName
+                  : `${groupTasks.length} Members`,
+              recipientName: leaderName,
+              recipientRole: leaderRole,
+              recipientPhone: leaderPhone,
+              channel: 'sms',
+              status: 'skipped_unconfigured',
+              messageBody: reminderMessage,
+              provider: 'Arkesel SMS',
+              errorMessage: 'Tenant Arkesel API key not configured; delivered in-app reminder.',
+            })
+          );
+        }
+      }
+
+      if (leaderEmail && resendConfigured) {
+        const emailRes = await sendResendEmail({
+          fromEmail: settings.emailFromAddress || undefined,
+          fromName: settings.emailSenderName || settings.churchName || undefined,
+          organizationName: settings.churchName || undefined,
+          to: [leaderEmail],
+          subject: `Pastoral Care Reminder: ${groupTasks.length} Member${
+            groupTasks.length === 1 ? '' : 's'
+          } Assigned (${churchLabel})`,
+          text: reminderMessage,
+          replyTo: settings.contactEmail || undefined,
+        });
+        if (emailRes.ok) deliveredExternally = true;
+        dispatches.push(
+          await this.recordPastoralCareDispatch(orgId, {
+            dispatchType: 'leader_reminder',
+            serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+            serviceName: opts?.serviceName || primaryTask.serviceName,
+            followupTaskId: primaryTask.id,
+            memberId: primaryTask.personId,
+            memberName:
+              groupTasks.length === 1
+                ? primaryTask.personName
+                : `${groupTasks.length} Members`,
+            recipientName: leaderName,
+            recipientRole: leaderRole,
+            recipientPhone: leaderPhone,
+            recipientEmail: leaderEmail,
+            channel: 'email',
+            status: emailRes.ok ? 'sent' : 'failed',
+            messageBody: reminderMessage,
+            provider: 'Resend Email',
+            errorMessage: emailRes.ok ? undefined : emailRes.message,
+          })
+        );
+      }
+
+      // Always post an in-app pastoral reminder notification for the leader's queue
+      dispatches.push(
+        await this.recordPastoralCareDispatch(orgId, {
+          dispatchType: 'leader_reminder',
+          serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+          serviceName: opts?.serviceName || primaryTask.serviceName,
+          followupTaskId: primaryTask.id,
+          memberId: primaryTask.personId,
+          memberName:
+            groupTasks.length === 1 ? primaryTask.personName : `${groupTasks.length} Members`,
+          recipientName: leaderName,
+          recipientRole: leaderRole,
+          recipientPhone: leaderPhone,
+          recipientEmail: leaderEmail,
+          channel: 'in_app',
+          status: 'sent',
+          messageBody: reminderMessage,
+          provider: deliveredExternally ? 'In-App + Gateway' : 'Ekklesphere Portal Alert',
+        })
+      );
+      sentCount++;
+
+      for (const task of groupTasks) {
+        await this.updateFollowupTask(orgId, task.id, {
+          lastReminderAt: nowIso,
+          reminderCount: (task.reminderCount || 0) + 1,
+        }).catch(() => {});
+      }
+    }
+
+    const refreshedTasks = await this.listFollowupTasks(orgId);
+    return {
+      sentCount,
+      attemptedCount,
+      dispatches,
+      allTasks: refreshedTasks,
+    };
+  }
+
+  public async acknowledgeLeaderCareTask(
+    organizationId: string,
+    taskId: string,
+    actor?: { name?: string; role?: string }
+  ): Promise<FollowupTask> {
+    const nowIso = new Date().toISOString();
+    const tasks = await this.listFollowupTasks(organizationId);
+    const current = tasks.find((t) => t.id === taskId);
+    if (!current) {
+      const err: any = new Error('Follow-up task not found.');
+      err.status = 404;
+      throw err;
+    }
+    const nextStatus: FollowupStatus = current.status === 'open' ? 'contacted' : current.status;
+    return this.updateFollowupTask(organizationId, taskId, {
+      status: nextStatus,
+      acknowledgedAt: nowIso,
+      outcome:
+        current.outcome ||
+        `Reminder acknowledged by ${actor?.name || current.assignedToName} (${new Date().toLocaleDateString()})`,
+    });
+  }
+
+  public async getPastoralCareMonitorSummary(
+    organizationId: string
+  ): Promise<PastoralCareMonitorSummary> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const [tasks, dispatches, processedEventIds, orgMembers, churchGroups] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.listPastoralCareDispatches(orgId, 200),
+      this.getProcessedAbsenceEventIds(orgId),
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [] as ChurchGroup[]),
+    ]);
+
+    const openTasksCount = tasks.filter((t) => t.status === 'open').length;
+    const contactedTasksCount = tasks.filter((t) => t.status === 'contacted').length;
+    const resolvedTasksCount = tasks.filter((t) => t.status === 'resolved').length;
+    const totalTrackable = openTasksCount + contactedTasksCount + resolvedTasksCount;
+    const resolutionRatePct =
+      totalTrackable > 0 ? Math.round((resolvedTasksCount / totalTrackable) * 100) : 100;
+
+    const absentMemberMessagesSent = dispatches.filter(
+      (d) => d.dispatchType === 'absent_member_alert' && d.status === 'sent'
+    ).length;
+    const leaderRemindersSent = dispatches.filter(
+      (d) => d.dispatchType === 'leader_reminder' && d.status === 'sent'
+    ).length;
+
+    const scorecardMap = new Map<string, LeaderAccountabilityRow>();
+    for (const task of tasks) {
+      const leaderName = (task.assignedToName || 'Pastoral Care Team').trim();
+      const key = leaderName.toLowerCase();
+      const leaderMember = orgMembers.find(
+        (m) =>
+          (task.assignedToMemberId && String(m.id) === String(task.assignedToMemberId)) ||
+          `${String(m.firstName || '')} ${String(m.lastName || '')}`.trim().toLowerCase() === key
+      );
+      const leaderGroup = churchGroups.find(
+        (g) => normalizeSettingLabel(g.leaderName).toLowerCase() === key
+      );
+      const existing = scorecardMap.get(key) || {
+        leaderName,
+        leaderMemberId:
+          task.assignedToMemberId || (leaderMember ? String(leaderMember.id) : undefined),
+        leaderRole:
+          task.assignedToRole ||
+          (leaderMember ? getMemberPortfolio(leaderMember as unknown as Person) : undefined) ||
+          (leaderGroup ? 'Group Leader' : 'Pastoral Care'),
+        leaderPhone:
+          task.assignedToPhone ||
+          (leaderMember?.phoneE164 ? String(leaderMember.phoneE164) : undefined) ||
+          leaderGroup?.leaderPhone ||
+          undefined,
+        leaderEmail:
+          task.assignedToEmail ||
+          (leaderMember?.email ? String(leaderMember.email) : undefined) ||
+          leaderGroup?.leaderEmail ||
+          undefined,
+        openCount: 0,
+        contactedCount: 0,
+        resolvedCount: 0,
+        totalAssigned: 0,
+        remindersSent: 0,
+        lastReminderAt: null,
+      };
+
+      if (task.status === 'open') existing.openCount += 1;
+      else if (task.status === 'contacted') existing.contactedCount += 1;
+      else if (task.status === 'resolved') existing.resolvedCount += 1;
+      existing.totalAssigned += 1;
+      existing.remindersSent += Number(task.reminderCount || 0);
+      if (
+        task.lastReminderAt &&
+        (!existing.lastReminderAt || task.lastReminderAt > existing.lastReminderAt)
+      ) {
+        existing.lastReminderAt = task.lastReminderAt;
+      }
+
+      scorecardMap.set(key, existing);
+    }
+
+    const leaderScorecard = Array.from(scorecardMap.values()).sort(
+      (a, b) =>
+        b.openCount + b.contactedCount - (a.openCount + a.contactedCount) ||
+        b.totalAssigned - a.totalAssigned
+    );
+
+    return {
+      tasks,
+      dispatches,
+      processedEventIds,
+      leaderScorecard,
+      stats: {
+        openTasksCount,
+        contactedTasksCount,
+        resolvedTasksCount,
+        resolutionRatePct,
+        absentMemberMessagesSent,
+        leaderRemindersSent,
+        totalDispatches: dispatches.length,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  public async listLeaderAssignedReminders(
+    organizationId: string,
+    actor: { userId?: string; name?: string; email?: string }
+  ): Promise<{ tasks: FollowupTask[]; dispatches: PastoralCareDispatch[] }> {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || '').trim().toLowerCase();
+    const [tasks, dispatches, profile] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.listPastoralCareDispatches(orgId, 100),
+      actor.userId
+        ? this.getMemberProfileForSession(orgId, actor.userId, actor.email).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    const targetIds = new Set<string>(
+      [actor.userId, profile?.id ? String(profile.id) : undefined].filter(Boolean) as string[]
+    );
+    const targetNames = new Set<string>(
+      [
+        actor.name,
+        profile ? `${String(profile.firstName || '')} ${String(profile.lastName || '')}`.trim() : undefined,
+      ]
+        .map((n) => normalizeSettingLabel(n).toLowerCase())
+        .filter(Boolean)
+    );
+    const cleanEmail = (actor.email || '').trim().toLowerCase();
+
+    const myTasks = tasks.filter((t) => {
+      if (t.assignedToMemberId && targetIds.has(String(t.assignedToMemberId))) return true;
+      if (cleanEmail && t.assignedToEmail?.toLowerCase() === cleanEmail) return true;
+      const assignedLower = normalizeSettingLabel(t.assignedToName).toLowerCase();
+      return Boolean(assignedLower && targetNames.has(assignedLower));
+    });
+
+    const myTaskIds = new Set(myTasks.map((t) => t.id));
+    const myDispatches = dispatches.filter(
+      (d) =>
+        d.dispatchType === 'leader_reminder' &&
+        ((d.followupTaskId && myTaskIds.has(d.followupTaskId)) ||
+          targetNames.has(normalizeSettingLabel(d.recipientName).toLowerCase()) ||
+          (cleanEmail && d.recipientEmail?.toLowerCase() === cleanEmail))
+    );
+
+    return { tasks: myTasks, dispatches: myDispatches };
   }
 
   // ===========================================================================
@@ -11937,6 +13813,12 @@ class PlatformStore {
       mustChangePassword: !suppliedPassword,
       passwordUpdatedAt: nowIso,
     });
+    if (params.designation && !this.supabase) {
+      const memCred = this.userCredentials.get(record.id);
+      if (memCred) {
+        this.userCredentials.set(record.id, { ...memCred, designation: params.designation });
+      }
+    }
 
     await this.recordAuthAuditEvent({
       organizationId: cleanOrgId,

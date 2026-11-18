@@ -45,6 +45,7 @@ export interface AuthUser {
   organization_id?: string;
   organizationName?: string;
   username?: string;
+  designation?: string;
   permissions: string[];
   token?: string;
   is_creator?: boolean;
@@ -334,13 +335,98 @@ export interface FollowupTask {
   assignedToMemberId?: string;
   assignedToRole?: string;
   assignedToPhone?: string;
+  assignedToEmail?: string;
   autoAssigned?: boolean;
+  lastReminderAt?: string;
+  reminderCount?: number;
+  serviceEventId?: string;
+  serviceName?: string;
+  acknowledgedAt?: string;
   status: FollowupStatus;
   dueOn: string;
   outcome?: string;
   notes?: string;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export type PastoralCareDispatchType = 'absent_member_alert' | 'leader_reminder';
+export type PastoralCareDispatchChannel = 'sms' | 'email' | 'push' | 'in_app';
+export type PastoralCareDispatchStatus =
+  | 'sent'
+  | 'queued'
+  | 'skipped_unconfigured'
+  | 'skipped_opt_out'
+  | 'skipped_no_contact'
+  | 'failed';
+
+export interface PastoralCareDispatch {
+  id: string;
+  organizationId: string;
+  dispatchType: PastoralCareDispatchType;
+  serviceEventId?: string;
+  serviceName?: string;
+  followupTaskId?: string;
+  memberId?: string;
+  memberName: string;
+  recipientName: string;
+  recipientRole?: string;
+  recipientPhone?: string;
+  recipientEmail?: string;
+  channel: PastoralCareDispatchChannel;
+  status: PastoralCareDispatchStatus;
+  messageBody: string;
+  provider?: string;
+  errorMessage?: string;
+  acknowledgedAt?: string;
+  createdAt: string;
+}
+
+export interface LeaderAccountabilityRow {
+  leaderName: string;
+  leaderMemberId?: string;
+  leaderRole?: string;
+  leaderPhone?: string;
+  leaderEmail?: string;
+  openCount: number;
+  contactedCount: number;
+  resolvedCount: number;
+  totalAssigned: number;
+  remindersSent: number;
+  lastReminderAt?: string | null;
+}
+
+export interface ServiceAbsenceSweepResult {
+  success: boolean;
+  alreadyProcessed?: boolean;
+  eventId: string;
+  eventName: string;
+  absentMembersCount: number;
+  memberMessagesSent: number;
+  memberMessagesAttempted: number;
+  tasksCreatedCount: number;
+  leaderRemindersSent: number;
+  leaderRemindersAttempted: number;
+  dispatches: PastoralCareDispatch[];
+  allTasks: FollowupTask[];
+  message: string;
+}
+
+export interface PastoralCareMonitorSummary {
+  tasks: FollowupTask[];
+  dispatches: PastoralCareDispatch[];
+  processedEventIds: string[];
+  leaderScorecard: LeaderAccountabilityRow[];
+  stats: {
+    openTasksCount: number;
+    contactedTasksCount: number;
+    resolvedTasksCount: number;
+    resolutionRatePct: number;
+    absentMemberMessagesSent: number;
+    leaderRemindersSent: number;
+    totalDispatches: number;
+  };
+  generatedAt: string;
 }
 
 export interface DonationFund {
@@ -361,6 +447,7 @@ export interface Donation {
   provider: 'MTN MoMo' | 'Telecel Cash' | 'Card' | 'Cash';
   status: 'pending' | 'paid' | 'failed';
   paidAt: string;
+  reference?: string;
 }
 
 export interface AuditLogItem {
@@ -395,6 +482,10 @@ export interface SystemSettings {
   absenteeThresholdServices: number;
   firstTimerFollowupHours: number;
   autoAssignCellLeaders: boolean;
+  autoMessageAbsentMembers?: boolean;
+  absentMemberMessageChannel?: 'sms_and_email' | 'sms' | 'email';
+  absentMemberMessageTemplate?: string;
+  autoSendLeaderCareReminders?: boolean;
   requireExplicitConsent: boolean;
   auditLogRetentionDays: number;
   sessionTimeoutMinutes?: number;
@@ -405,6 +496,18 @@ export interface SystemSettings {
   emailSenderName?: string;
   enablePushNotifications: boolean;
   customGroupCategories?: ChurchGroupCategoryDefinition[];
+}
+
+export interface TenantGatewayConfigSummary {
+  arkeselConfigured: boolean;
+  arkeselSource: 'tenant' | 'platform_env' | 'none';
+  arkeselKeyMasked: string | null;
+  paystackConfigured: boolean;
+  paystackSource: 'tenant' | 'platform_env' | 'none';
+  paystackPublicKey: string;
+  paystackSecretMasked: string | null;
+  paystackMode: 'live' | 'test' | 'unconfigured';
+  updatedAt?: string | null;
 }
 
 export type BuiltInChurchGroupCategory = 'ministry' | 'fellowship' | 'cell_group';

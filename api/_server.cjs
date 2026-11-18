@@ -31,7 +31,9 @@ var server_exports = {};
 __export(server_exports, {
   app: () => app,
   getClientIpKey: () => getClientIpKey,
-  requireAuthRole: () => requireAuthRole
+  requireAuthRole: () => requireAuthRole,
+  requireFollowupAccess: () => requireFollowupAccess,
+  requirePastoralOversight: () => requirePastoralOversight
 });
 module.exports = __toCommonJS(server_exports);
 
@@ -44,7 +46,7 @@ var import_express2 = __toESM(require("express"), 1);
 var import_http = require("http");
 var import_express_rate_limit2 = __toESM(require("express-rate-limit"), 1);
 var import_zod2 = require("zod");
-var import_crypto5 = require("crypto");
+var import_crypto6 = require("crypto");
 var import_path = __toESM(require("path"), 1);
 var import_url = require("url");
 
@@ -109,6 +111,70 @@ function getJwtSecret(env = process.env) {
     return (0, import_crypto.createHmac)("sha256", serviceRoleKey).update(`ekklesphere-jwt-signing-v1:${scopeUrl}`).digest("hex");
   }
   return RUNTIME_SECURE_SECRET;
+}
+function getTemporaryPasswordSealKey(env = process.env) {
+  return (0, import_crypto.createHash)("sha256").update(`ekklesphere-temp-pw-seal-v1:${getJwtSecret(env)}`).digest();
+}
+function sealTemporaryPassword(plaintext, env = process.env) {
+  const clean = String(plaintext || "");
+  if (!clean) return "";
+  const iv = (0, import_crypto.randomBytes)(12);
+  const cipher = (0, import_crypto.createCipheriv)("aes-256-gcm", getTemporaryPasswordSealKey(env), iv);
+  const encrypted = Buffer.concat([cipher.update(clean, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+function unsealTemporaryPassword(sealed, env = process.env) {
+  if (!sealed || typeof sealed !== "string") return void 0;
+  const parts = sealed.split(":");
+  if (parts.length !== 4 || parts[0] !== "v1") return void 0;
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const tag = Buffer.from(parts[2], "base64url");
+    const payload = Buffer.from(parts[3], "base64url");
+    const decipher = (0, import_crypto.createDecipheriv)("aes-256-gcm", getTemporaryPasswordSealKey(env), iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(payload), decipher.final()]).toString("utf8");
+    return decrypted || void 0;
+  } catch {
+    return void 0;
+  }
+}
+function getTenantSecretSealKey(env = process.env) {
+  const configured = (env.GATEWAY_SECRETS_KEY || "").trim();
+  const base = configured.length >= 16 ? configured : getJwtSecret(env);
+  return (0, import_crypto.createHash)("sha256").update(`ekklesphere-tenant-gateway-secret-v1:${base}`).digest();
+}
+function sealTenantSecret(plaintext, env = process.env) {
+  const clean = String(plaintext || "").trim();
+  if (!clean) return "";
+  const iv = (0, import_crypto.randomBytes)(12);
+  const cipher = (0, import_crypto.createCipheriv)("aes-256-gcm", getTenantSecretSealKey(env), iv);
+  const encrypted = Buffer.concat([cipher.update(clean, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `tgv1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+function unsealTenantSecret(sealed, env = process.env) {
+  if (!sealed || typeof sealed !== "string") return void 0;
+  const parts = sealed.split(":");
+  if (parts.length !== 4 || parts[0] !== "tgv1") return void 0;
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const tag = Buffer.from(parts[2], "base64url");
+    const payload = Buffer.from(parts[3], "base64url");
+    const decipher = (0, import_crypto.createDecipheriv)("aes-256-gcm", getTenantSecretSealKey(env), iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(payload), decipher.final()]).toString("utf8");
+    return decrypted || void 0;
+  } catch {
+    return void 0;
+  }
+}
+function maskSecretTail(plaintext) {
+  const clean = String(plaintext || "").trim();
+  if (!clean) return null;
+  if (clean.length <= 4) return "\u2022\u2022\u2022\u2022";
+  return `\u2022\u2022\u2022\u2022${clean.slice(-4)}`;
 }
 function createServiceQrToken(organizationId, serviceId) {
   const org = String(organizationId || "").trim().toLowerCase();
@@ -386,6 +452,18 @@ function requireRoles(...allowedRoles) {
     });
   };
 }
+function hasPastoralOversightAccess(user) {
+  if (!user) return false;
+  if (user.is_creator) return true;
+  if (user.role === "super_admin" || user.role === "creator" || user.role === "admin" || user.role === "pastor") {
+    return true;
+  }
+  const cleanDesignation = String(user.designation || "").trim().toLowerCase();
+  if (!cleanDesignation) return false;
+  return /\b(administrator|senior pastor|associate pastor|presiding elder|youth pastor|pastor|bishop|reverend)\b/i.test(
+    cleanDesignation
+  );
+}
 
 // src/middleware/organizationMiddleware.ts
 var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -614,11 +692,518 @@ function buildServiceQrCheckInPath(params) {
 
 // src/server/platformStore.ts
 var import_supabase_js2 = require("@supabase/supabase-js");
-var import_crypto3 = require("crypto");
+var import_crypto4 = require("crypto");
+
+// src/server/paystackService.ts
+var import_crypto2 = require("crypto");
+function detectPaystackMode(publicKey, secretKey) {
+  const pub = String(publicKey || "").trim().toLowerCase();
+  const sec = String(secretKey || "").trim().toLowerCase();
+  if (sec.startsWith("sk_live_") || pub.startsWith("pk_live_")) return "live";
+  if (sec.startsWith("sk_test_") || pub.startsWith("pk_test_")) return "test";
+  if (sec.length > 0 || pub.length > 0) return "test";
+  return "unconfigured";
+}
+function verifyPaystackWebhookSignature(params) {
+  const secret = (params.secretKey || "").trim();
+  const sig = String(params.signature || "").trim().toLowerCase();
+  if (!secret || !sig) return false;
+  const expected = (0, import_crypto2.createHmac)("sha512", secret).update(params.rawBody).digest("hex").toLowerCase();
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expBuf.length) return false;
+  return (0, import_crypto2.timingSafeEqual)(sigBuf, expBuf);
+}
+async function initializePaystackTransaction(params) {
+  const secretKey = String(params.secretKey || "").trim();
+  const mode = detectPaystackMode(params.publicKey, secretKey);
+  if (!secretKey) {
+    return {
+      ok: false,
+      configured: false,
+      reference: params.reference,
+      mode: "unconfigured",
+      message: "Paystack Secret Key is not configured for this church tenant. Add it in Admin Dashboard \u2192 System Settings \u2192 SMS & Paystack Gateways.",
+      error: "PAYSTACK_NOT_CONFIGURED"
+    };
+  }
+  const doFetch = params.fetchImpl || fetch;
+  try {
+    const resp = await doFetch("https://api.paystack.co/transaction/initialize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        email: params.email,
+        amount: Math.max(100, Math.round(params.amountMinor)),
+        currency: (params.currency || "GHS").toUpperCase(),
+        reference: params.reference,
+        ...params.callbackUrl ? { callback_url: params.callbackUrl } : {},
+        ...params.channels && params.channels.length > 0 ? { channels: params.channels } : {},
+        ...params.metadata ? { metadata: params.metadata } : {}
+      })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data?.status !== true || !data?.data?.authorization_url) {
+      return {
+        ok: false,
+        configured: true,
+        reference: params.reference,
+        mode,
+        message: data?.message || `Paystack initialization failed with HTTP ${resp.status}.`,
+        error: "PAYSTACK_INIT_FAILED"
+      };
+    }
+    return {
+      ok: true,
+      configured: true,
+      authorizationUrl: String(data.data.authorization_url),
+      accessCode: String(data.data.access_code || ""),
+      reference: String(data.data.reference || params.reference),
+      mode,
+      message: "Paystack checkout initialized."
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      reference: params.reference,
+      mode,
+      message: err?.message || "Network error reaching Paystack API.",
+      error: "PAYSTACK_NETWORK_ERROR"
+    };
+  }
+}
+async function verifyPaystackTransaction(params) {
+  const secretKey = String(params.secretKey || "").trim();
+  const reference = String(params.reference || "").trim();
+  if (!secretKey) {
+    return {
+      ok: false,
+      verified: false,
+      status: "pending",
+      reference,
+      message: "Paystack Secret Key is not configured for this church tenant.",
+      error: "PAYSTACK_NOT_CONFIGURED"
+    };
+  }
+  if (!reference) {
+    return {
+      ok: false,
+      verified: false,
+      status: "failed",
+      reference,
+      message: "Transaction reference is required for Paystack verification.",
+      error: "REFERENCE_REQUIRED"
+    };
+  }
+  const doFetch = params.fetchImpl || fetch;
+  try {
+    const resp = await doFetch(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${secretKey}`
+        }
+      }
+    );
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.status !== true || !payload?.data) {
+      return {
+        ok: false,
+        verified: false,
+        status: "pending",
+        reference,
+        message: payload?.message || `Paystack verification failed with HTTP ${resp.status}.`,
+        error: "PAYSTACK_VERIFY_FAILED"
+      };
+    }
+    const txStatus = String(payload.data.status || "").toLowerCase();
+    const mappedStatus = txStatus === "success" ? "paid" : txStatus === "failed" || txStatus === "abandoned" || txStatus === "reversed" ? "failed" : "pending";
+    return {
+      ok: true,
+      verified: mappedStatus === "paid",
+      status: mappedStatus,
+      reference: String(payload.data.reference || reference),
+      amountMinor: typeof payload.data.amount === "number" ? payload.data.amount : void 0,
+      currency: payload.data.currency ? String(payload.data.currency) : void 0,
+      channel: payload.data.channel ? String(payload.data.channel) : void 0,
+      paidAt: payload.data.paid_at ? String(payload.data.paid_at) : void 0,
+      gatewayResponse: payload.data.gateway_response ? String(payload.data.gateway_response) : void 0,
+      message: mappedStatus === "paid" ? "Payment verified with Paystack." : `Paystack transaction status is "${txStatus || "pending"}".`
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      verified: false,
+      status: "pending",
+      reference,
+      message: err?.message || "Network error reaching Paystack verify API.",
+      error: "PAYSTACK_NETWORK_ERROR"
+    };
+  }
+}
+async function testPaystackConnection(params) {
+  const secretKey = String(params.secretKey || "").trim();
+  const mode = detectPaystackMode(params.publicKey, secretKey);
+  if (!secretKey) {
+    return {
+      ok: false,
+      configured: false,
+      mode: "unconfigured",
+      message: "No Paystack Secret Key is configured for this church tenant.",
+      error: "PAYSTACK_NOT_CONFIGURED"
+    };
+  }
+  const doFetch = params.fetchImpl || fetch;
+  try {
+    const resp = await doFetch("https://api.paystack.co/transaction?perPage=1", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${secretKey}`
+      }
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data?.status !== true) {
+      return {
+        ok: false,
+        configured: true,
+        mode,
+        message: data?.message || `Paystack rejected the Secret Key (HTTP ${resp.status}). Verify your key in Paystack Dashboard.`,
+        error: "PAYSTACK_AUTH_FAILED"
+      };
+    }
+    return {
+      ok: true,
+      configured: true,
+      mode,
+      message: `Paystack ${mode === "live" ? "Live" : "Test"} API connection verified.`
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      mode,
+      message: err?.message || "Network error verifying Paystack connection.",
+      error: "PAYSTACK_NETWORK_ERROR"
+    };
+  }
+}
+
+// src/server/communicationsService.ts
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function buildHtmlFromPlainText(subject, text, orgName) {
+  const safeOrg = escapeHtml((orgName || "Ekklesphere Church").trim());
+  const safeSubject = escapeHtml(subject.trim());
+  const paragraphs = text.split(/\n{2,}/).map((block) => `<p style="margin:0 0 12px 0;line-height:1.6;">${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`).join("");
+  return `<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:24px;background:#F6F7FC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1D1B3A;">
+  <div style="max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E9EBF5;border-radius:16px;padding:24px;">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#6D5CF2;margin-bottom:8px;">${safeOrg}</div>
+    <h2 style="margin:0 0 16px 0;font-size:18px;line-height:1.3;color:#1D1B3A;">${safeSubject}</h2>
+    <div style="font-size:14px;color:#3E4259;">${paragraphs}</div>
+    <hr style="border:none;border-top:1px solid #E9EBF5;margin:20px 0 12px 0;" />
+    <div style="font-size:11px;color:#666A86;">Sent via ${safeOrg} pastoral &amp; congregational communications.</div>
+  </div>
+</body>
+</html>`;
+}
+function normalizeArkeselPhone(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  let digits = value.replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("00")) {
+    digits = digits.slice(2);
+  }
+  if (digits.startsWith("0") && digits.length === 10) {
+    digits = `233${digits.slice(1)}`;
+  }
+  if (digits.length < 9 || digits.length > 15) {
+    return null;
+  }
+  return digits;
+}
+function getCommunicationGatewayStatus() {
+  const arkeselKey = (process.env.ARKESEL_API_KEY || "").trim();
+  const resendKey = (process.env.RESEND_API_KEY || "").trim();
+  const defaultSmsSenderId = ((process.env.ARKESEL_SENDER_ID || "EKKLESPHERE").trim() || "EKKLESPHERE").replace(/[^A-Za-z0-9 ]/g, "").toUpperCase().slice(0, 11);
+  const defaultFromEmail = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim() || "onboarding@resend.dev";
+  const defaultFromName = (process.env.RESEND_FROM_NAME || "Ekklesphere Church").trim() || "Ekklesphere Church";
+  return {
+    arkeselConfigured: Boolean(arkeselKey),
+    resendConfigured: Boolean(resendKey),
+    defaultSmsSenderId,
+    defaultFromEmail,
+    defaultFromName
+  };
+}
+async function sendArkeselSms(params) {
+  const status = getCommunicationGatewayStatus();
+  const apiKey = (params.apiKey ?? process.env.ARKESEL_API_KEY ?? "").trim();
+  const cleanSenderId = (params.senderId || status.defaultSmsSenderId || "EKKLESPHERE").trim().replace(/[^A-Za-z0-9 ]/g, "").toUpperCase().slice(0, 11);
+  const uniqueRecipients = /* @__PURE__ */ new Set();
+  let invalidCount = 0;
+  for (const raw of params.recipients) {
+    const normalized = normalizeArkeselPhone(raw);
+    if (normalized) {
+      uniqueRecipients.add(normalized);
+    } else if (String(raw || "").trim()) {
+      invalidCount++;
+    }
+  }
+  const recipients = Array.from(uniqueRecipients);
+  if (recipients.length === 0) {
+    return {
+      ok: false,
+      configured: Boolean(apiKey),
+      provider: "Arkesel SMS",
+      senderId: cleanSenderId,
+      sentCount: 0,
+      invalidCount,
+      recipients: [],
+      message: "No valid recipient phone numbers were found to send SMS.",
+      error: "NO_VALID_RECIPIENTS"
+    };
+  }
+  if (!apiKey) {
+    return {
+      ok: false,
+      configured: false,
+      provider: "Arkesel SMS",
+      senderId: cleanSenderId,
+      sentCount: 0,
+      invalidCount,
+      recipients,
+      message: "Arkesel API key is not configured on the server (set ARKESEL_API_KEY in environment secrets).",
+      error: "ARKESEL_NOT_CONFIGURED"
+    };
+  }
+  const doFetch = params.fetchImpl || fetch;
+  const bodyPayload = {
+    sender: cleanSenderId,
+    message: params.message,
+    recipients
+  };
+  if (params.sandbox) {
+    bodyPayload.sandbox = true;
+  }
+  try {
+    const resp = await doFetch("https://sms.arkesel.com/api/v2/sms/send", {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify(bodyPayload)
+    });
+    const data = await resp.json().catch(() => ({}));
+    const apiOk = resp.ok && (data?.status === "success" || data?.code === "200" || data?.data !== void 0 || !data?.status);
+    if (!apiOk) {
+      const errMsg = data?.message || data?.error || `Arkesel SMS request failed with HTTP ${resp.status}.`;
+      return {
+        ok: false,
+        configured: true,
+        provider: "Arkesel SMS",
+        senderId: cleanSenderId,
+        sentCount: 0,
+        invalidCount,
+        recipients,
+        message: errMsg,
+        providerResponse: data,
+        error: "ARKESEL_API_ERROR"
+      };
+    }
+    return {
+      ok: true,
+      configured: true,
+      provider: "Arkesel SMS",
+      senderId: cleanSenderId,
+      sentCount: recipients.length,
+      invalidCount,
+      recipients,
+      message: `SMS delivered via Arkesel to ${recipients.length} recipient${recipients.length === 1 ? "" : "s"} (Sender ID: ${cleanSenderId}).`,
+      providerResponse: data
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      provider: "Arkesel SMS",
+      senderId: cleanSenderId,
+      sentCount: 0,
+      invalidCount,
+      recipients,
+      message: err?.message || "Network error reaching Arkesel SMS API.",
+      error: "ARKESEL_NETWORK_ERROR"
+    };
+  }
+}
+async function sendResendEmail(params) {
+  const status = getCommunicationGatewayStatus();
+  const apiKey = (params.apiKey ?? process.env.RESEND_API_KEY ?? "").trim();
+  const cleanFromEmail = (params.fromEmail || status.defaultFromEmail || "onboarding@resend.dev").trim();
+  const cleanFromName = (params.fromName || params.organizationName || status.defaultFromName).trim();
+  const fromHeader = cleanFromName ? `${cleanFromName} <${cleanFromEmail}>` : cleanFromEmail;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const recipients = Array.from(
+    new Set(
+      params.to.map((e) => String(e || "").trim().toLowerCase()).filter((e) => emailRegex.test(e))
+    )
+  );
+  if (recipients.length === 0) {
+    return {
+      ok: false,
+      configured: Boolean(apiKey),
+      provider: "Resend Email",
+      from: fromHeader,
+      sentCount: 0,
+      failedCount: 0,
+      emailIds: [],
+      message: "No valid recipient email addresses were found.",
+      error: "NO_VALID_EMAIL_RECIPIENTS"
+    };
+  }
+  if (!apiKey) {
+    return {
+      ok: false,
+      configured: false,
+      provider: "Resend Email",
+      from: fromHeader,
+      sentCount: 0,
+      failedCount: recipients.length,
+      emailIds: [],
+      message: "Resend API key is not configured on the server (set RESEND_API_KEY in environment secrets).",
+      error: "RESEND_NOT_CONFIGURED"
+    };
+  }
+  const doFetch = params.fetchImpl || fetch;
+  const htmlBody = params.html || buildHtmlFromPlainText(params.subject, params.text, params.organizationName);
+  const emailIds = [];
+  let failedCount = 0;
+  let lastError = "";
+  try {
+    if (recipients.length === 1) {
+      const resp = await doFetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({
+          from: fromHeader,
+          to: [recipients[0]],
+          subject: params.subject,
+          text: params.text,
+          html: htmlBody,
+          ...params.replyTo ? { reply_to: params.replyTo } : {}
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        return {
+          ok: false,
+          configured: true,
+          provider: "Resend Email",
+          from: fromHeader,
+          sentCount: 0,
+          failedCount: 1,
+          emailIds: [],
+          message: data?.message || data?.error || `Resend Email failed with HTTP ${resp.status}.`,
+          error: "RESEND_API_ERROR"
+        };
+      }
+      if (data?.id) emailIds.push(String(data.id));
+      return {
+        ok: true,
+        configured: true,
+        provider: "Resend Email",
+        from: fromHeader,
+        sentCount: 1,
+        failedCount: 0,
+        emailIds,
+        message: `Email sent via Resend to ${recipients[0]}.`
+      };
+    }
+    const chunkSize = 50;
+    for (let i = 0; i < recipients.length; i += chunkSize) {
+      const batch = recipients.slice(i, i + chunkSize).map((addr) => ({
+        from: fromHeader,
+        to: [addr],
+        subject: params.subject,
+        text: params.text,
+        html: htmlBody,
+        ...params.replyTo ? { reply_to: params.replyTo } : {}
+      }));
+      const resp = await doFetch("https://api.resend.com/emails/batch", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(batch)
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        failedCount += batch.length;
+        lastError = data?.message || data?.error || `Resend batch HTTP ${resp.status}`;
+      } else if (Array.isArray(data?.data)) {
+        for (const item of data.data) {
+          if (item?.id) emailIds.push(String(item.id));
+        }
+      }
+    }
+    const sentCount = recipients.length - failedCount;
+    if (sentCount <= 0) {
+      return {
+        ok: false,
+        configured: true,
+        provider: "Resend Email",
+        from: fromHeader,
+        sentCount: 0,
+        failedCount,
+        emailIds,
+        message: lastError || "Resend could not deliver the broadcast emails.",
+        error: "RESEND_API_ERROR"
+      };
+    }
+    return {
+      ok: true,
+      configured: true,
+      provider: "Resend Email",
+      from: fromHeader,
+      sentCount,
+      failedCount,
+      emailIds,
+      message: `Email dispatched via Resend to ${sentCount} recipient${sentCount === 1 ? "" : "s"}${failedCount > 0 ? ` (${failedCount} failed)` : ""}.`
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      provider: "Resend Email",
+      from: fromHeader,
+      sentCount: 0,
+      failedCount: recipients.length,
+      emailIds: [],
+      message: err?.message || "Network error reaching Resend Email API.",
+      error: "RESEND_NETWORK_ERROR"
+    };
+  }
+}
 
 // src/server/churchWallStore.ts
 var import_supabase_js = require("@supabase/supabase-js");
-var import_crypto2 = require("crypto");
+var import_crypto3 = require("crypto");
 function buildServiceClient() {
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
   const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "").trim();
@@ -700,7 +1285,7 @@ var ChurchWallStore = class {
     this.assertDatabaseReady();
     const cleanName = input.authorName.trim() || "Church Member";
     const post = {
-      id: (0, import_crypto2.randomUUID)(),
+      id: (0, import_crypto3.randomUUID)(),
       organizationId,
       authorId: input.authorId,
       authorName: cleanName,
@@ -2003,7 +2588,7 @@ var TRIAL_DURATION_DAYS = 14;
 var DAY_MS = 24 * 60 * 60 * 1e3;
 function toDeterministicUuid(rawId) {
   if (UUID_REGEX2.test(rawId)) return rawId.toLowerCase();
-  const hex = (0, import_crypto3.createHash)("sha256").update(`ekklesphere:${rawId}`).digest("hex");
+  const hex = (0, import_crypto4.createHash)("sha256").update(`ekklesphere:${rawId}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 function normalizePhone(rawPhone) {
@@ -2018,14 +2603,14 @@ function normalizePhone(rawPhone) {
   return digits ? `+${digits}` : "";
 }
 function hashPassword(password, existingSalt) {
-  const salt = existingSalt || (0, import_crypto3.randomBytes)(16).toString("hex");
-  const hash = (0, import_crypto3.scryptSync)(password, salt, 64).toString("hex");
+  const salt = existingSalt || (0, import_crypto4.randomBytes)(16).toString("hex");
+  const hash = (0, import_crypto4.scryptSync)(password, salt, 64).toString("hex");
   return { hash, salt };
 }
 function verifyPassword(password, hash, salt) {
   try {
-    const calculated = (0, import_crypto3.scryptSync)(password, salt, 64).toString("hex");
-    return (0, import_crypto3.timingSafeEqual)(Buffer.from(calculated, "hex"), Buffer.from(hash, "hex"));
+    const calculated = (0, import_crypto4.scryptSync)(password, salt, 64).toString("hex");
+    return (0, import_crypto4.timingSafeEqual)(Buffer.from(calculated, "hex"), Buffer.from(hash, "hex"));
   } catch {
     return false;
   }
@@ -2048,6 +2633,7 @@ var DEFAULT_LANDING_CMS = {
     networkUptime: "99.98%"
   }
 };
+var DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE = "Hello {{firstName}}, we missed you at {{serviceName}} ({{churchName}}) today. You are dearly loved and prayed for. Need prayer or support? Reply or call {{contactPhone}}.";
 var DEFAULT_ORG_SYSTEM_SETTINGS = {
   churchName: "",
   campusName: "",
@@ -2071,6 +2657,10 @@ var DEFAULT_ORG_SYSTEM_SETTINGS = {
   absenteeThresholdServices: 2,
   firstTimerFollowupHours: 24,
   autoAssignCellLeaders: true,
+  autoMessageAbsentMembers: true,
+  absentMemberMessageChannel: "sms_and_email",
+  absentMemberMessageTemplate: DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+  autoSendLeaderCareReminders: true,
   requireExplicitConsent: true,
   auditLogRetentionDays: 90,
   sessionTimeoutMinutes: DEFAULT_IDLE_SESSION_TIMEOUT_MINUTES,
@@ -2162,7 +2752,7 @@ function enabledFeatureLabelsFromFlags(flags) {
 }
 function generateLicenseKey(orgName, prefixType = "LIC") {
   const prefix = orgName.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() || "EKKLE";
-  const rand = (0, import_crypto3.randomUUID)().replace(/-/g, "").slice(0, 8).toUpperCase();
+  const rand = (0, import_crypto4.randomUUID)().replace(/-/g, "").slice(0, 8).toUpperCase();
   return `${prefixType}-${prefix}-${rand}`;
 }
 function mapSupabaseRoleToChurchRole(rawRole) {
@@ -2214,10 +2804,14 @@ var PlatformStore = class {
     this.pushSubsByOrg = /* @__PURE__ */ new Map();
     this.donationsByOrg = /* @__PURE__ */ new Map();
     this.followupTasksByOrg = /* @__PURE__ */ new Map();
+    this.dispatchesByOrg = /* @__PURE__ */ new Map();
+    this.absenceRunsByOrg = /* @__PURE__ */ new Map();
     this.memberConsentsByOrg = /* @__PURE__ */ new Map();
     this.eventRsvpsByOrg = /* @__PURE__ */ new Map();
     this.legacyTenantsForDryRun = [];
     this.userCredentials = /* @__PURE__ */ new Map();
+    this.tempPasswordByCredId = /* @__PURE__ */ new Map();
+    this.gatewaySecretsByOrg = /* @__PURE__ */ new Map();
     this.createOrganization = this.createOrganisation.bind(this);
     this.getOrganizationById = this.getOrganisationById.bind(this);
     this.listOrganizations = this.listOrganisations.bind(this);
@@ -2291,10 +2885,14 @@ var PlatformStore = class {
     this.pushSubsByOrg.clear();
     this.donationsByOrg.clear();
     this.followupTasksByOrg.clear();
+    this.dispatchesByOrg.clear();
+    this.absenceRunsByOrg.clear();
     this.memberConsentsByOrg.clear();
     this.eventRsvpsByOrg.clear();
     this.legacyTenantsForDryRun = [];
     this.userCredentials.clear();
+    this.tempPasswordByCredId.clear();
+    this.gatewaySecretsByOrg.clear();
     this.customSupabaseClientOverride = null;
     this.customSupabaseAuthVerifier = null;
     this.landingLeads.clear();
@@ -2655,8 +3253,8 @@ var PlatformStore = class {
     };
   }
   async recordAuthAuditEvent(params) {
-    const identifierHash = (0, import_crypto3.createHash)("sha256").update(params.identifier.trim().toLowerCase() || "anonymous").digest("hex").slice(0, 24);
-    const hashedIp = params.ipAddress ? `ip:${(0, import_crypto3.createHash)("sha256").update(params.ipAddress.trim()).digest("hex").slice(0, 16)}` : null;
+    const identifierHash = (0, import_crypto4.createHash)("sha256").update(params.identifier.trim().toLowerCase() || "anonymous").digest("hex").slice(0, 24);
+    const hashedIp = params.ipAddress ? `ip:${(0, import_crypto4.createHash)("sha256").update(params.ipAddress.trim()).digest("hex").slice(0, 16)}` : null;
     if (this.supabase) {
       await this.supabase.from("auth_audit_events").insert({
         organization_id: params.organizationId && UUID_REGEX2.test(params.organizationId) ? params.organizationId.toLowerCase() : null,
@@ -2862,8 +3460,13 @@ var PlatformStore = class {
       firstErr.message || ""
     )) {
       const stripped = { ...payload };
-      delete stripped.must_change_password;
-      delete stripped.password_updated_at;
+      if (/temp_password_encrypted/i.test(firstErr.message || "") && !/must_change_password|password_updated_at/i.test(firstErr.message || "")) {
+        delete stripped.temp_password_encrypted;
+      } else {
+        delete stripped.must_change_password;
+        delete stripped.password_updated_at;
+        delete stripped.temp_password_encrypted;
+      }
       const retry = await sb.from("account_credentials").upsert(stripped, { onConflict: "id" });
       if (!retry.error) return;
       if (/null value in column "password_(?:hash|salt)"|23502/i.test(retry.error.message || "") && legacyHashFallback) {
@@ -2899,7 +3502,7 @@ var PlatformStore = class {
   async provisionCredentialRecord(params) {
     this.assertDatabaseAvailable();
     const { hash, salt } = hashPassword(params.password);
-    const requestedId = params.id || (0, import_crypto3.randomUUID)();
+    const requestedId = params.id || (0, import_crypto4.randomUUID)();
     const normalizedEmail = params.email ? params.email.trim().toLowerCase() : void 0;
     const normalizedUsername = params.username ? params.username.trim().toLowerCase() : void 0;
     const normalizedPhone = params.phoneE164 ? normalizePhone(params.phoneE164) : void 0;
@@ -2930,6 +3533,8 @@ var PlatformStore = class {
         memberId: params.memberId && UUID_REGEX2.test(params.memberId) ? params.memberId : void 0
       });
       const omitStoredHashes = Boolean(authUserId && this.canVerifyViaSupabaseAuth);
+      const isTempPassword2 = Boolean(params.mustChangePassword) && !params.isCreator;
+      const sealedTempPassword = isTempPassword2 ? sealTemporaryPassword(params.password) : null;
       const payload = {
         id: resolvedId,
         member_id: params.memberId && UUID_REGEX2.test(params.memberId) ? params.memberId : null,
@@ -2948,9 +3553,15 @@ var PlatformStore = class {
         locked_until: null,
         must_change_password: Boolean(params.mustChangePassword),
         password_updated_at: params.passwordUpdatedAt ?? null,
+        temp_password_encrypted: sealedTempPassword,
         ...authUserId ? { auth_user_id: authUserId } : {}
       };
       await this.upsertAccountCredentialsRow(sb, payload, { hash, salt });
+      if (isTempPassword2) {
+        this.tempPasswordByCredId.set(resolvedId, params.password);
+      } else {
+        this.tempPasswordByCredId.delete(resolvedId);
+      }
       return {
         id: resolvedId,
         memberId: params.memberId,
@@ -2966,12 +3577,14 @@ var PlatformStore = class {
         passwordSalt: authUserId ? "" : salt,
         status: "active",
         mustChangePassword: Boolean(params.mustChangePassword),
+        ...isTempPassword2 ? { temporaryPassword: params.password } : {},
         passwordUpdatedAt: params.passwordUpdatedAt ?? null,
         failedAttempts: 0,
         lockedUntil: null,
         createdAt: (/* @__PURE__ */ new Date()).toISOString()
       };
     }
+    const isTempPassword = Boolean(params.mustChangePassword) && !params.isCreator;
     const record = {
       id: requestedId,
       memberId: params.memberId,
@@ -2986,6 +3599,7 @@ var PlatformStore = class {
       passwordSalt: salt,
       status: "active",
       mustChangePassword: Boolean(params.mustChangePassword),
+      ...isTempPassword ? { temporaryPassword: params.password } : {},
       passwordUpdatedAt: params.passwordUpdatedAt ?? null,
       failedAttempts: 0,
       lockedUntil: null,
@@ -2999,9 +3613,15 @@ var PlatformStore = class {
       const samePhone = Boolean(record.phoneE164 && existing.phoneE164 && existing.phoneE164 === record.phoneE164);
       if (existingKey === record.id || sameEmail || sameUsername || samePhone) {
         this.userCredentials.delete(existingKey);
+        this.tempPasswordByCredId.delete(existingKey);
       }
     }
     this.userCredentials.set(record.id, record);
+    if (isTempPassword) {
+      this.tempPasswordByCredId.set(record.id, params.password);
+    } else {
+      this.tempPasswordByCredId.delete(record.id);
+    }
     return record;
   }
   async findCredentialByContactOrMember(params) {
@@ -3098,7 +3718,7 @@ var PlatformStore = class {
     }
     const temporaryPassword = params.initialPassword && params.initialPassword.trim().length >= 8 ? params.initialPassword.trim() : this.getGenericOnboardingPassword();
     const fullName = `${params.firstName || ""} ${params.lastName || ""}`.trim() || "Congregation Member";
-    const credId = UUID_REGEX2.test(params.memberId) ? params.memberId : (0, import_crypto3.randomUUID)();
+    const credId = UUID_REGEX2.test(params.memberId) ? params.memberId : (0, import_crypto4.randomUUID)();
     try {
       const createdCred = await this.provisionCredentialRecord({
         id: credId,
@@ -3242,6 +3862,7 @@ var PlatformStore = class {
         updated_at: nowIso,
         must_change_password: false,
         password_updated_at: nowIso,
+        temp_password_encrypted: null,
         ...syncedAuthUserId ? { auth_user_id: syncedAuthUserId } : {}
       };
       const { error: updateErr } = await sb.from("account_credentials").update(baseUpdate).eq("id", cred.id);
@@ -3258,8 +3879,13 @@ var PlatformStore = class {
         updateErr.message || ""
       )) {
         const stripped = { ...baseUpdate };
-        delete stripped.must_change_password;
-        delete stripped.password_updated_at;
+        if (/temp_password_encrypted/i.test(updateErr.message || "") && !/must_change_password|password_updated_at/i.test(updateErr.message || "")) {
+          delete stripped.temp_password_encrypted;
+        } else {
+          delete stripped.must_change_password;
+          delete stripped.password_updated_at;
+          delete stripped.temp_password_encrypted;
+        }
         const retry = await sb.from("account_credentials").update(stripped).eq("id", cred.id);
         if (retry.error) {
           throw new Error(`Failed to update password in Supabase: ${retry.error.message}`);
@@ -3272,11 +3898,13 @@ var PlatformStore = class {
       cred.passwordHash = hash;
       cred.passwordSalt = salt;
       cred.mustChangePassword = false;
+      cred.temporaryPassword = void 0;
       cred.passwordUpdatedAt = nowIso;
       cred.failedAttempts = 0;
       cred.lockedUntil = null;
       this.userCredentials.set(cred.id, cred);
     }
+    this.tempPasswordByCredId.delete(cred.id);
     await this.resetDistributedAuthRateLimit(`login:${cred.id}`);
     await this.recordAuthAuditEvent({
       organizationId: cred.organizationId,
@@ -3462,7 +4090,7 @@ var PlatformStore = class {
         targetMemberId = String(createdMember.id);
       }
     }
-    const credId = matchingSameOrg?.id || (UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto3.randomUUID)());
+    const credId = matchingSameOrg?.id || (UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto4.randomUUID)());
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const record = await this.provisionCredentialRecord({
       id: credId,
@@ -3993,6 +4621,12 @@ var PlatformStore = class {
     const sessionTimeoutMinutes = await this.getOrganizationSessionTimeoutMinutes(
       foundCred.organizationId
     );
+    const resolvedDesignation = await this.resolveUserDesignation(
+      foundCred.organizationId,
+      foundCred.memberId || foundCred.id,
+      foundCred.email,
+      foundCred.designation
+    );
     const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
       {
         id: foundCred.memberId || foundCred.id,
@@ -4001,6 +4635,7 @@ var PlatformStore = class {
         organization_id: foundCred.organizationId,
         tenant_id: foundCred.organizationId,
         name: foundCred.name,
+        ...resolvedDesignation ? { designation: resolvedDesignation } : {},
         is_creator: foundCred.isCreator
       },
       sessionTimeoutMinutes
@@ -4012,6 +4647,7 @@ var PlatformStore = class {
         username: foundCred.username,
         phoneE164: foundCred.phoneE164,
         name: foundCred.name,
+        ...resolvedDesignation ? { designation: resolvedDesignation } : {},
         role: foundCred.role,
         organizationId: foundCred.organizationId,
         isCreator: foundCred.isCreator,
@@ -4117,7 +4753,7 @@ var PlatformStore = class {
       },
       { skipAutoCredentials: true }
     );
-    const memberId = String(member.id || (0, import_crypto3.randomUUID)());
+    const memberId = String(member.id || (0, import_crypto4.randomUUID)());
     const fullName = `${firstName} ${lastName}`.trim();
     const newCred = await this.provisionCredentialRecord({
       id: memberId,
@@ -4260,7 +4896,7 @@ var PlatformStore = class {
       },
       { skipAutoCredentials: true }
     );
-    const memberId = String(adminMember.id || (0, import_crypto3.randomUUID)());
+    const memberId = String(adminMember.id || (0, import_crypto4.randomUUID)());
     const newCred = await this.provisionCredentialRecord({
       id: memberId,
       memberId,
@@ -4549,7 +5185,7 @@ var PlatformStore = class {
     const orgId = organizationId.toLowerCase();
     this.assertDatabaseAvailable();
     const existingSites = await this.getSitesForOrg(orgId);
-    const targetSiteId = params.siteId || existingSites[0]?.id || (0, import_crypto3.randomUUID)();
+    const targetSiteId = params.siteId || existingSites[0]?.id || (0, import_crypto4.randomUUID)();
     const isNewSite = !existingSites.some((s) => s.id === targetSiteId);
     if (isNewSite) {
       const evalRes = await this.evaluateOrganizationLicense(orgId);
@@ -4828,6 +5464,10 @@ var PlatformStore = class {
             raw.first_timer_followup_hours ?? DEFAULT_ORG_SYSTEM_SETTINGS.firstTimerFollowupHours
           ),
           autoAssignCellLeaders: typeof raw.auto_assign_cell_leaders === "boolean" ? raw.auto_assign_cell_leaders : DEFAULT_ORG_SYSTEM_SETTINGS.autoAssignCellLeaders,
+          autoMessageAbsentMembers: typeof raw.auto_message_absent_members === "boolean" ? raw.auto_message_absent_members : DEFAULT_ORG_SYSTEM_SETTINGS.autoMessageAbsentMembers,
+          absentMemberMessageChannel: raw.absent_member_message_channel === "sms" || raw.absent_member_message_channel === "email" || raw.absent_member_message_channel === "sms_and_email" ? raw.absent_member_message_channel : DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageChannel,
+          absentMemberMessageTemplate: typeof raw.absent_member_message_template === "string" && raw.absent_member_message_template.trim() ? raw.absent_member_message_template : DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageTemplate,
+          autoSendLeaderCareReminders: typeof raw.auto_send_leader_care_reminders === "boolean" ? raw.auto_send_leader_care_reminders : DEFAULT_ORG_SYSTEM_SETTINGS.autoSendLeaderCareReminders,
           requireExplicitConsent: typeof raw.require_explicit_consent === "boolean" ? raw.require_explicit_consent : DEFAULT_ORG_SYSTEM_SETTINGS.requireExplicitConsent,
           auditLogRetentionDays: Number(
             raw.audit_log_retention_days ?? DEFAULT_ORG_SYSTEM_SETTINGS.auditLogRetentionDays
@@ -4985,6 +5625,16 @@ var PlatformStore = class {
       emailSenderName: String(patch.emailSenderName ?? current.emailSenderName ?? "").trim(),
       driveByProtection: Boolean(patch.driveByProtection ?? current.driveByProtection),
       autoAssignCellLeaders: Boolean(patch.autoAssignCellLeaders ?? current.autoAssignCellLeaders),
+      autoMessageAbsentMembers: Boolean(
+        patch.autoMessageAbsentMembers ?? current.autoMessageAbsentMembers ?? DEFAULT_ORG_SYSTEM_SETTINGS.autoMessageAbsentMembers
+      ),
+      absentMemberMessageChannel: patch.absentMemberMessageChannel === "sms" || patch.absentMemberMessageChannel === "email" || patch.absentMemberMessageChannel === "sms_and_email" ? patch.absentMemberMessageChannel : current.absentMemberMessageChannel || DEFAULT_ORG_SYSTEM_SETTINGS.absentMemberMessageChannel,
+      absentMemberMessageTemplate: String(
+        patch.absentMemberMessageTemplate ?? current.absentMemberMessageTemplate ?? DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE
+      ).trim() || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+      autoSendLeaderCareReminders: Boolean(
+        patch.autoSendLeaderCareReminders ?? current.autoSendLeaderCareReminders ?? DEFAULT_ORG_SYSTEM_SETTINGS.autoSendLeaderCareReminders
+      ),
       requireExplicitConsent: Boolean(patch.requireExplicitConsent ?? current.requireExplicitConsent),
       enablePushNotifications: Boolean(patch.enablePushNotifications ?? current.enablePushNotifications),
       customGroupCategories: patch.customGroupCategories !== void 0 ? sanitizeCustomGroupCategories(patch.customGroupCategories) : sanitizeCustomGroupCategories(current.customGroupCategories)
@@ -5040,6 +5690,10 @@ var PlatformStore = class {
         absentee_threshold_services: merged.absenteeThresholdServices,
         first_timer_followup_hours: merged.firstTimerFollowupHours,
         auto_assign_cell_leaders: merged.autoAssignCellLeaders,
+        auto_message_absent_members: merged.autoMessageAbsentMembers,
+        absent_member_message_channel: merged.absentMemberMessageChannel,
+        absent_member_message_template: merged.absentMemberMessageTemplate,
+        auto_send_leader_care_reminders: merged.autoSendLeaderCareReminders,
         require_explicit_consent: merged.requireExplicitConsent,
         audit_log_retention_days: merged.auditLogRetentionDays,
         session_timeout_minutes: merged.sessionTimeoutMinutes,
@@ -5224,6 +5878,233 @@ var PlatformStore = class {
     });
     return this.getSystemSettings(orgId);
   }
+  isMissingTenantGatewaySecretsTableError(err) {
+    if (!err) return false;
+    const msg = `${err.code || ""} ${err.message || ""}`;
+    return /tenant_gateway_secrets/i.test(msg) && /does not exist|schema cache|42P01|PGRST205/i.test(msg);
+  }
+  async readEncryptedGatewayRow(organizationId) {
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId) return {};
+    const sb = this.activeSupabase;
+    if (sb) {
+      if (!UUID_REGEX2.test(orgId)) return {};
+      const { data, error } = await sb.from("tenant_gateway_secrets").select("*").eq("organization_id", orgId).maybeSingle();
+      if (!error && data) {
+        return {
+          arkeselApiKeyEnc: data.arkesel_api_key_enc || null,
+          arkeselApiKeyMasked: data.arkesel_api_key_masked || null,
+          paystackPublicKey: data.paystack_public_key || null,
+          paystackSecretKeyEnc: data.paystack_secret_key_enc || null,
+          paystackSecretKeyMasked: data.paystack_secret_key_masked || null,
+          updatedBy: data.updated_by || null,
+          updatedAt: data.updated_at ? String(data.updated_at) : null
+        };
+      }
+      if (error && !this.isMissingTenantGatewaySecretsTableError(error)) {
+        throw new Error(`Failed to read tenant gateway keys: ${error.message}`);
+      }
+      const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+      const rawSettings = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+      const embedded = rawSettings._encrypted_gateway_secrets;
+      if (embedded && typeof embedded === "object") {
+        return {
+          arkeselApiKeyEnc: embedded.arkesel_api_key_enc || null,
+          arkeselApiKeyMasked: embedded.arkesel_api_key_masked || null,
+          paystackPublicKey: embedded.paystack_public_key || null,
+          paystackSecretKeyEnc: embedded.paystack_secret_key_enc || null,
+          paystackSecretKeyMasked: embedded.paystack_secret_key_masked || null,
+          updatedBy: embedded.updated_by || null,
+          updatedAt: embedded.updated_at ? String(embedded.updated_at) : null
+        };
+      }
+      return {};
+    }
+    return this.gatewaySecretsByOrg.get(orgId) || {};
+  }
+  async getTenantGatewayConfigSummary(organizationId) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const row = orgId ? await this.readEncryptedGatewayRow(orgId) : {};
+    const tenantArkesel = unsealTenantSecret(row.arkeselApiKeyEnc);
+    const envArkesel = (process.env.ARKESEL_API_KEY || "").trim();
+    const arkeselSource = tenantArkesel ? "tenant" : envArkesel ? "platform_env" : "none";
+    const tenantPaystackSecret = unsealTenantSecret(row.paystackSecretKeyEnc);
+    const tenantPaystackPublic = String(row.paystackPublicKey || "").trim();
+    const envPaystackSecret = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+    const envPaystackPublic = (process.env.PAYSTACK_PUBLIC_KEY || "").trim();
+    const paystackSource = tenantPaystackSecret ? "tenant" : envPaystackSecret ? "platform_env" : "none";
+    const effectivePublicKey = tenantPaystackPublic || envPaystackPublic || "";
+    const effectiveSecret = tenantPaystackSecret || envPaystackSecret || "";
+    return {
+      arkeselConfigured: arkeselSource !== "none",
+      arkeselSource,
+      arkeselKeyMasked: tenantArkesel ? row.arkeselApiKeyMasked || maskSecretTail(tenantArkesel) : envArkesel ? maskSecretTail(envArkesel) : null,
+      paystackConfigured: paystackSource !== "none",
+      paystackSource,
+      paystackPublicKey: effectivePublicKey,
+      paystackSecretMasked: tenantPaystackSecret ? row.paystackSecretKeyMasked || maskSecretTail(tenantPaystackSecret) : envPaystackSecret ? maskSecretTail(envPaystackSecret) : null,
+      paystackMode: detectPaystackMode(effectivePublicKey, effectiveSecret),
+      updatedAt: row.updatedAt || null
+    };
+  }
+  async getResolvedArkeselApiKey(organizationId) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (orgId) {
+      const row = await this.readEncryptedGatewayRow(orgId);
+      const tenantKey = unsealTenantSecret(row.arkeselApiKeyEnc);
+      if (tenantKey) {
+        return { apiKey: tenantKey, source: "tenant" };
+      }
+    }
+    const envKey = (process.env.ARKESEL_API_KEY || "").trim();
+    if (envKey) {
+      return { apiKey: envKey, source: "platform_env" };
+    }
+    return { apiKey: "", source: "none" };
+  }
+  async getResolvedPaystackKeys(organizationId) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (orgId) {
+      const row = await this.readEncryptedGatewayRow(orgId);
+      const tenantSecret = unsealTenantSecret(row.paystackSecretKeyEnc);
+      const tenantPublic = String(row.paystackPublicKey || "").trim();
+      if (tenantSecret) {
+        return {
+          publicKey: tenantPublic,
+          secretKey: tenantSecret,
+          source: "tenant"
+        };
+      }
+    }
+    const envSecret = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+    const envPublic = (process.env.PAYSTACK_PUBLIC_KEY || "").trim();
+    if (envSecret) {
+      return {
+        publicKey: envPublic,
+        secretKey: envSecret,
+        source: "platform_env"
+      };
+    }
+    return { publicKey: "", secretKey: "", source: "none" };
+  }
+  async saveTenantGatewayKeys(organizationId, patch, actor) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId) {
+      throw new Error("Organization ID is required to save gateway API keys.");
+    }
+    const existing = await this.readEncryptedGatewayRow(orgId);
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    let nextArkeselEnc = existing.arkeselApiKeyEnc || null;
+    let nextArkeselMasked = existing.arkeselApiKeyMasked || null;
+    if (patch.clearArkeselApiKey) {
+      nextArkeselEnc = null;
+      nextArkeselMasked = null;
+    } else if (typeof patch.arkeselApiKey === "string" && patch.arkeselApiKey.trim()) {
+      const clean = patch.arkeselApiKey.trim();
+      nextArkeselEnc = sealTenantSecret(clean);
+      nextArkeselMasked = maskSecretTail(clean);
+    }
+    let nextPaystackPublic = existing.paystackPublicKey || null;
+    let nextPaystackSecretEnc = existing.paystackSecretKeyEnc || null;
+    let nextPaystackSecretMasked = existing.paystackSecretKeyMasked || null;
+    if (patch.clearPaystackKeys) {
+      nextPaystackPublic = null;
+      nextPaystackSecretEnc = null;
+      nextPaystackSecretMasked = null;
+    } else {
+      if (typeof patch.paystackPublicKey === "string") {
+        const cleanPub = patch.paystackPublicKey.trim();
+        nextPaystackPublic = cleanPub || null;
+      }
+      if (typeof patch.paystackSecretKey === "string" && patch.paystackSecretKey.trim()) {
+        const cleanSec = patch.paystackSecretKey.trim();
+        nextPaystackSecretEnc = sealTenantSecret(cleanSec);
+        nextPaystackSecretMasked = maskSecretTail(cleanSec);
+      }
+    }
+    const updatedBy = actor?.email || actor?.name || "Administrator";
+    const sb = this.activeSupabase;
+    if (sb) {
+      if (!UUID_REGEX2.test(orgId)) {
+        throw new Error("Valid organization UUID is required.");
+      }
+      const { error } = await sb.from("tenant_gateway_secrets").upsert(
+        {
+          organization_id: orgId,
+          arkesel_api_key_enc: nextArkeselEnc,
+          arkesel_api_key_masked: nextArkeselMasked,
+          paystack_public_key: nextPaystackPublic,
+          paystack_secret_key_enc: nextPaystackSecretEnc,
+          paystack_secret_key_masked: nextPaystackSecretMasked,
+          updated_by: updatedBy,
+          updated_at: nowIso
+        },
+        { onConflict: "organization_id" }
+      );
+      if (error) {
+        if (!this.isMissingTenantGatewaySecretsTableError(error)) {
+          throw new Error(`Failed to persist tenant gateway keys in Supabase: ${error.message}`);
+        }
+        const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+        const rawSettings = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+        const nextSettings = {
+          ...rawSettings,
+          _encrypted_gateway_secrets: {
+            arkesel_api_key_enc: nextArkeselEnc,
+            arkesel_api_key_masked: nextArkeselMasked,
+            paystack_public_key: nextPaystackPublic,
+            paystack_secret_key_enc: nextPaystackSecretEnc,
+            paystack_secret_key_masked: nextPaystackSecretMasked,
+            updated_by: updatedBy,
+            updated_at: nowIso
+          }
+        };
+        const { error: orgErr } = await sb.from("organizations").update({ settings: nextSettings, sms_configured: Boolean(nextArkeselEnc), updated_at: nowIso }).eq("id", orgId);
+        if (orgErr) {
+          throw new Error(`Failed to save gateway keys on organization: ${orgErr.message}`);
+        }
+      } else {
+        await sb.from("organizations").update({ sms_configured: Boolean(nextArkeselEnc), updated_at: nowIso }).eq("id", orgId);
+      }
+    } else {
+      this.gatewaySecretsByOrg.set(orgId, {
+        arkeselApiKeyEnc: nextArkeselEnc,
+        arkeselApiKeyMasked: nextArkeselMasked,
+        paystackPublicKey: nextPaystackPublic,
+        paystackSecretKeyEnc: nextPaystackSecretEnc,
+        paystackSecretKeyMasked: nextPaystackSecretMasked,
+        updatedBy,
+        updatedAt: nowIso
+      });
+      const memOrg = this.orgs.get(orgId);
+      if (memOrg) {
+        memOrg.smsConfigured = Boolean(nextArkeselEnc);
+      }
+    }
+    await this.appendAuditLog({
+      organizationId: orgId,
+      actorId: actor?.id || null,
+      actorEmail: actor?.email || "admin@ekklesphere.church",
+      actorRole: actor?.role || "admin",
+      action: "gateways.keys_updated",
+      targetType: "tenant_gateway_secrets",
+      targetId: orgId,
+      metadata: {
+        arkeselUpdated: Boolean(patch.arkeselApiKey || patch.clearArkeselApiKey),
+        arkeselCleared: Boolean(patch.clearArkeselApiKey),
+        paystackUpdated: Boolean(
+          patch.paystackPublicKey !== void 0 || patch.paystackSecretKey || patch.clearPaystackKeys
+        ),
+        paystackCleared: Boolean(patch.clearPaystackKeys)
+      },
+      ipAddress: actor?.ipAddress || null
+    });
+    return this.getTenantGatewayConfigSummary(orgId);
+  }
   mapSupabaseChurchGroupRow(row) {
     return {
       id: String(row.id),
@@ -5272,7 +6153,7 @@ var PlatformStore = class {
     const groupName = meta.groupName;
     if (!groupId || !groupName) return null;
     return {
-      id: String(row.id || (0, import_crypto3.randomUUID)()),
+      id: String(row.id || (0, import_crypto4.randomUUID)()),
       organizationId: row.organization_id ? String(row.organization_id) : void 0,
       groupId: String(groupId),
       groupName: String(groupName),
@@ -5403,7 +6284,7 @@ var PlatformStore = class {
     const baseMs = Date.now();
     const sb = this.activeSupabase;
     const normalizedEntries = entries.map((e, index) => ({
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       organizationId: orgId,
       groupId: String(e.groupId),
       groupName: String(e.groupName),
@@ -5613,7 +6494,7 @@ var PlatformStore = class {
       }
     } else {
       created = {
-        id: (0, import_crypto3.randomUUID)(),
+        id: (0, import_crypto4.randomUUID)(),
         name: payload.name.trim(),
         category: normalizedCategory,
         leaderName: payload.leaderName.trim(),
@@ -6114,6 +6995,8 @@ var PlatformStore = class {
       if (error) {
         throw new Error(`Failed to record live check-in in Supabase: ${error.message}`);
       }
+      await this.resetMemberAbsenceStreakOnCheckin(orgId, fullRecord.personId).catch(() => {
+      });
       return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
     }
     const orgEvents = this.eventsByOrg.get(orgId) || [];
@@ -6169,6 +7052,8 @@ var PlatformStore = class {
     if (org) {
       org.lastActivityAt = fullRecord.checkedInIso;
     }
+    await this.resetMemberAbsenceStreakOnCheckin(orgId, fullRecord.personId).catch(() => {
+    });
     return { record: fullRecord, liveCheckins: await this.getLiveCheckins(orgId) };
   }
   async deleteLiveCheckin(organizationId, personId, serviceId) {
@@ -6596,7 +7481,7 @@ var PlatformStore = class {
     } else {
       const newMember = {
         ...normalizedCreatePayload,
-        id: payload.id || (0, import_crypto3.randomUUID)(),
+        id: payload.id || (0, import_crypto4.randomUUID)(),
         tenantId: orgId,
         firstName,
         lastName,
@@ -7320,7 +8205,7 @@ var PlatformStore = class {
       }
     }
     const created = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       organization_id: orgId,
       name: eventData.name,
       date: eventData.date,
@@ -7742,7 +8627,7 @@ var PlatformStore = class {
   // ===========================================================================
   async appendAuditLog(entry) {
     const record = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       actorId: entry.actorId || null,
       actorEmail: entry.actorEmail,
       actorRole: entry.actorRole,
@@ -7997,7 +8882,7 @@ var PlatformStore = class {
   }
   async createOrganisation(params) {
     this.assertDatabaseAvailable();
-    const id = (params.id && UUID_REGEX2.test(params.id) ? params.id : (0, import_crypto3.randomUUID)()).toLowerCase();
+    const id = (params.id && UUID_REGEX2.test(params.id) ? params.id : (0, import_crypto4.randomUUID)()).toLowerCase();
     let baseSlug = (params.slug || params.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `org-${id.slice(0, 6)}`;
     const planTier = params.initialPlan || "grace_starter";
     const plan = await this.getPlan(planTier) || DEFAULT_PLANS.grace_starter;
@@ -8530,7 +9415,7 @@ var PlatformStore = class {
       }
     }
     const newLic = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       key,
       tier: params.tier,
       tenantId: orgId,
@@ -8789,7 +9674,7 @@ var PlatformStore = class {
       };
     }
     const payment = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       licenseId: params.licenseId,
       organizationId: orgId,
       organizationName: lic.tenantName,
@@ -8970,7 +9855,7 @@ var PlatformStore = class {
     const existing = this.alerts.get(params.dedupeKey);
     if (existing && existing.status === "resolved") return;
     this.alerts.set(params.dedupeKey, {
-      id: existing?.id || (0, import_crypto3.randomUUID)(),
+      id: existing?.id || (0, import_crypto4.randomUUID)(),
       organizationId: params.organizationId,
       organizationName: params.organizationName,
       alertType: params.alertType,
@@ -9135,7 +10020,7 @@ var PlatformStore = class {
       };
     }
     const item = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       title: params.title,
       body: params.body,
       severity: params.severity,
@@ -9287,7 +10172,7 @@ var PlatformStore = class {
       };
     }
     const reqItem = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       organizationId: orgId,
       organizationName: org.name,
       requestType: params.requestType,
@@ -9365,7 +10250,7 @@ var PlatformStore = class {
       };
     }
     const grant = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       organizationId: orgId,
       organizationName: org.name,
       creatorUserId: params.creatorUserId,
@@ -9522,7 +10407,7 @@ var PlatformStore = class {
   async createLandingLead(input) {
     this.assertDatabaseAvailable();
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const id = (0, import_crypto3.randomUUID)();
+    const id = (0, import_crypto4.randomUUID)();
     const cleanEmail = input.email.trim().toLowerCase();
     const cleanChurch = input.churchName.trim() || "Prospective Church";
     const record = {
@@ -9980,7 +10865,8 @@ var PlatformStore = class {
       method,
       provider,
       status,
-      paidAt: paidIso.slice(0, 10)
+      paidAt: paidIso.slice(0, 10),
+      ...row.reference ? { reference: String(row.reference) } : {}
     };
   }
   async listDonations(organizationId, filters) {
@@ -10016,13 +10902,14 @@ var PlatformStore = class {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const paidAtIso = input.paidAt ? new Date(input.paidAt).toISOString() : nowIso;
     const amountMinor = Math.max(1, Math.round(Number(input.amountMinor || 0)));
+    const reference = input.reference ? String(input.reference).trim() : void 0;
     if (this.supabase) {
       if (!UUID_REGEX2.test(orgId)) {
         throw new Error("Valid organisation ID is required to record donations.");
       }
       const memberUuid = input.personId && UUID_REGEX2.test(input.personId) ? input.personId : null;
       const insertRow = {
-        id: (0, import_crypto3.randomUUID)(),
+        id: (0, import_crypto4.randomUUID)(),
         organization_id: orgId,
         member_id: memberUuid,
         person_name: input.personName || "Member",
@@ -10033,16 +10920,30 @@ var PlatformStore = class {
         method: input.method,
         provider: input.provider,
         status: input.status || "paid",
-        paid_at: paidAtIso
+        paid_at: paidAtIso,
+        ...reference ? { reference } : {},
+        ...input.gatewayProvider ? { gateway_provider: input.gatewayProvider } : {}
       };
-      const { data, error } = await this.supabase.from("donations").insert(insertRow).select("*").single();
+      let { data, error } = await this.supabase.from("donations").insert(insertRow).select("*").single();
+      for (let attempt = 0; attempt < 2 && error; attempt++) {
+        const msg = error.message || "";
+        const colMatch = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (colMatch && colMatch[1] && Object.prototype.hasOwnProperty.call(insertRow, colMatch[1])) {
+          delete insertRow[colMatch[1]];
+          const retry = await this.supabase.from("donations").insert(insertRow).select("*").single();
+          data = retry.data;
+          error = retry.error;
+          continue;
+        }
+        break;
+      }
       if (error) {
         throw new Error(`Failed to record donation in Supabase: ${error.message}`);
       }
       return this.mapSupabaseDonationRow(data);
     }
     const created = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       personId: input.personId,
       personName: input.personName || "Member",
       fundId: cleanFundKey,
@@ -10052,11 +10953,43 @@ var PlatformStore = class {
       method: input.method,
       provider: input.provider,
       status: input.status || "paid",
-      paidAt: paidAtIso.slice(0, 10)
+      paidAt: paidAtIso.slice(0, 10),
+      ...reference ? { reference } : {}
     };
     const existing = this.donationsByOrg.get(orgId) || [];
     this.donationsByOrg.set(orgId, [created, ...existing]);
     return created;
+  }
+  async updateDonationStatusByReference(organizationId, reference, status, meta) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const cleanRef = (reference || "").trim();
+    if (!orgId || !cleanRef) return null;
+    if (this.supabase) {
+      if (!UUID_REGEX2.test(orgId)) return null;
+      const updatePayload = {
+        status,
+        ...meta?.paidAt ? { paid_at: meta.paidAt } : {},
+        ...meta?.gatewayMetadata ? { gateway_metadata: meta.gatewayMetadata } : {}
+      };
+      const { data, error } = await this.supabase.from("donations").update(updatePayload).eq("organization_id", orgId).eq("reference", cleanRef).select("*").maybeSingle();
+      if (error || !data) {
+        return null;
+      }
+      return this.mapSupabaseDonationRow(data);
+    }
+    const existing = this.donationsByOrg.get(orgId) || [];
+    const idx = existing.findIndex((d) => d.reference === cleanRef);
+    if (idx < 0) return null;
+    const updated = {
+      ...existing[idx],
+      status,
+      ...meta?.paidAt ? { paidAt: meta.paidAt.slice(0, 10) } : {}
+    };
+    const next = [...existing];
+    next[idx] = updated;
+    this.donationsByOrg.set(orgId, next);
+    return updated;
   }
   // ===========================================================================
   // PASTORAL CARE FOLLOW-UP TASKS (ORG-SCOPED)
@@ -10079,7 +11012,13 @@ var PlatformStore = class {
       assignedToMemberId: row.assigned_to_member_id ? String(row.assigned_to_member_id) : void 0,
       assignedToRole: row.assigned_to_role ? String(row.assigned_to_role) : void 0,
       assignedToPhone: row.assigned_to_phone ? String(row.assigned_to_phone) : void 0,
+      assignedToEmail: row.assigned_to_email ? String(row.assigned_to_email) : void 0,
       autoAssigned: typeof row.auto_assigned === "boolean" ? row.auto_assigned : void 0,
+      lastReminderAt: row.last_reminder_at ? String(row.last_reminder_at) : void 0,
+      reminderCount: typeof row.reminder_count === "number" ? row.reminder_count : 0,
+      serviceEventId: row.service_event_id ? String(row.service_event_id) : void 0,
+      serviceName: row.service_name ? String(row.service_name) : void 0,
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : void 0,
       status,
       dueOn: String(row.due_label || row.due_on || "In 3 days"),
       outcome: row.outcome ? String(row.outcome) : void 0,
@@ -10088,7 +11027,7 @@ var PlatformStore = class {
       resolvedAt: row.resolved_at ? String(row.resolved_at) : void 0
     };
   }
-  enrichFollowupTasksWithMembers(tasks, orgMembers) {
+  enrichFollowupTasksWithMembers(tasks, orgMembers, churchGroups = []) {
     const byId = /* @__PURE__ */ new Map();
     const byName = /* @__PURE__ */ new Map();
     for (const m of orgMembers) {
@@ -10096,16 +11035,23 @@ var PlatformStore = class {
       const fullName = `${String(m.firstName || "").trim()} ${String(m.lastName || "").trim()}`.trim().toLowerCase();
       if (fullName) byName.set(fullName, m);
     }
+    const groupByLeader = /* @__PURE__ */ new Map();
+    for (const g of churchGroups) {
+      const k = normalizeSettingLabel(g.leaderName).toLowerCase();
+      if (k && !groupByLeader.has(k)) groupByLeader.set(k, g);
+    }
     return tasks.map((t) => {
       const targetMember = byId.get(String(t.personId));
-      const assigneeMember = (t.assignedToMemberId ? byId.get(t.assignedToMemberId) : void 0) || byName.get(String(t.assignedToName || "").trim().toLowerCase());
+      const assigneeMember = (t.assignedToMemberId ? byId.get(t.assignedToMemberId) : void 0) || byName.get(normalizeSettingLabel(t.assignedToName).toLowerCase());
+      const matchedGroup = groupByLeader.get(normalizeSettingLabel(t.assignedToName).toLowerCase());
       return {
         ...t,
         personPhone: t.personPhone || (targetMember?.phoneE164 ? String(targetMember.phoneE164) : void 0) || (targetMember?.phoneNumber ? String(targetMember.phoneNumber) : void 0),
         personEmail: t.personEmail || (targetMember?.email ? String(targetMember.email) : void 0),
-        assignedToMemberId: t.assignedToMemberId || (assigneeMember ? String(assigneeMember.id) : void 0),
-        assignedToRole: t.assignedToRole || (assigneeMember?.officerName || assigneeMember?.designation ? String(assigneeMember.officerName || assigneeMember.designation) : void 0),
-        assignedToPhone: t.assignedToPhone || (assigneeMember?.phoneE164 ? String(assigneeMember.phoneE164) : void 0)
+        assignedToMemberId: t.assignedToMemberId || (assigneeMember ? String(assigneeMember.id) : void 0) || matchedGroup?.leaderMemberId || void 0,
+        assignedToRole: t.assignedToRole || (assigneeMember?.officerName || assigneeMember?.designation ? String(assigneeMember.officerName || assigneeMember.designation) : matchedGroup ? matchedGroup.category === "cell_group" ? "Cell Leader" : "Ministry Leader" : void 0),
+        assignedToPhone: t.assignedToPhone || (assigneeMember?.phoneE164 ? String(assigneeMember.phoneE164) : void 0) || matchedGroup?.leaderPhone || void 0,
+        assignedToEmail: t.assignedToEmail || (assigneeMember?.email ? String(assigneeMember.email) : void 0) || matchedGroup?.leaderEmail || void 0
       };
     });
   }
@@ -10113,7 +11059,10 @@ var PlatformStore = class {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || "").trim().toLowerCase();
     if (!orgId) return [];
-    const orgMembers = await this.getMembers(orgId);
+    const [orgMembers, churchGroups] = await Promise.all([
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [])
+    ]);
     if (this.supabase) {
       if (!UUID_REGEX2.test(orgId)) return [];
       const { data, error } = await this.supabase.from("followup_tasks").select("*").or(`organization_id.eq.${orgId},tenant_id.eq.${orgId}`).order("created_at", { ascending: false }).limit(200);
@@ -10124,15 +11073,18 @@ var PlatformStore = class {
         throw new Error(`Failed to fetch follow-up tasks from Supabase: ${error.message}`);
       }
       const mapped = (data || []).map((row) => this.mapSupabaseFollowupRow(row));
-      return this.enrichFollowupTasksWithMembers(mapped, orgMembers);
+      return this.enrichFollowupTasksWithMembers(mapped, orgMembers, churchGroups);
     }
     const memTasks = [...this.followupTasksByOrg.get(orgId) || []];
-    return this.enrichFollowupTasksWithMembers(memTasks, orgMembers);
+    return this.enrichFollowupTasksWithMembers(memTasks, orgMembers, churchGroups);
   }
   async createFollowupTask(organizationId, input) {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || "").trim().toLowerCase();
-    const orgMembers = await this.getMembers(orgId);
+    const [orgMembers, churchGroups] = await Promise.all([
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [])
+    ]);
     const matchedMember = orgMembers.find((m) => String(m.id) === input.personId);
     const resolvedPersonName = (input.personName || "").trim() || (matchedMember ? `${matchedMember.firstName} ${matchedMember.lastName}`.trim() : "Member");
     const resolvedGroupName = (input.groupName || "").trim() || matchedMember?.homeCellGroup || matchedMember?.groupName || "General";
@@ -10145,19 +11097,44 @@ var PlatformStore = class {
         throw new Error("Valid organisation ID is required for follow-up tasks.");
       }
       const memberUuid = UUID_REGEX2.test(input.personId) ? input.personId : null;
-      const insertRow = {
-        id: (0, import_crypto3.randomUUID)(),
+      const assigneeMemberUuid = input.assignedToMemberId && UUID_REGEX2.test(input.assignedToMemberId) ? input.assignedToMemberId : null;
+      const serviceEventUuid = input.serviceEventId && UUID_REGEX2.test(input.serviceEventId) ? input.serviceEventId : null;
+      let insertRow = {
+        id: (0, import_crypto4.randomUUID)(),
         organization_id: orgId,
         member_id: memberUuid,
         person_name: resolvedPersonName,
         group_name: resolvedGroupName,
         reason: input.reason,
         assigned_to_name: resolvedAssignee,
+        assigned_to_member_id: assigneeMemberUuid,
+        assigned_to_role: input.assignedToRole || null,
+        assigned_to_phone: input.assignedToPhone || null,
+        assigned_to_email: input.assignedToEmail || null,
+        auto_assigned: Boolean(input.autoAssigned),
+        service_event_id: serviceEventUuid,
+        service_name: input.serviceName || null,
+        reminder_count: 0,
         status: "open",
         due_label: resolvedDueLabel,
         notes: input.notes || null
       };
-      const { data, error } = await this.supabase.from("followup_tasks").insert(insertRow).select("*").single();
+      let { data, error } = await this.supabase.from("followup_tasks").insert(insertRow).select("*").single();
+      for (let attempt = 0; attempt < 8 && error; attempt++) {
+        const msg = error.message || "";
+        const colMatch = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (!colMatch) break;
+        const badCol = colMatch[1];
+        if (badCol in insertRow) {
+          const { [badCol]: _omitted, ...rest } = insertRow;
+          insertRow = rest;
+          const retry = await this.supabase.from("followup_tasks").insert(insertRow).select("*").single();
+          data = retry.data;
+          error = retry.error;
+        } else {
+          break;
+        }
+      }
       if (error) {
         throw new Error(`Failed to create follow-up task in Supabase: ${error.message}`);
       }
@@ -10169,14 +11146,18 @@ var PlatformStore = class {
             ...input.assignedToMemberId ? { assignedToMemberId: input.assignedToMemberId } : {},
             ...input.assignedToRole ? { assignedToRole: input.assignedToRole } : {},
             ...input.assignedToPhone ? { assignedToPhone: input.assignedToPhone } : {},
-            ...input.autoAssigned !== void 0 ? { autoAssigned: input.autoAssigned } : {}
+            ...input.assignedToEmail ? { assignedToEmail: input.assignedToEmail } : {},
+            ...input.autoAssigned !== void 0 ? { autoAssigned: input.autoAssigned } : {},
+            ...input.serviceEventId ? { serviceEventId: input.serviceEventId } : {},
+            ...input.serviceName ? { serviceName: input.serviceName } : {}
           }
         ],
-        orgMembers
+        orgMembers,
+        churchGroups
       )[0];
     }
     const created = {
-      id: (0, import_crypto3.randomUUID)(),
+      id: (0, import_crypto4.randomUUID)(),
       personId: input.personId,
       personName: resolvedPersonName,
       personPhone: resolvedPersonPhone,
@@ -10187,7 +11168,11 @@ var PlatformStore = class {
       assignedToMemberId: input.assignedToMemberId,
       assignedToRole: input.assignedToRole,
       assignedToPhone: input.assignedToPhone,
+      assignedToEmail: input.assignedToEmail,
       autoAssigned: input.autoAssigned,
+      serviceEventId: input.serviceEventId,
+      serviceName: input.serviceName,
+      reminderCount: 0,
       status: "open",
       dueOn: resolvedDueLabel,
       notes: input.notes || void 0,
@@ -10195,13 +11180,19 @@ var PlatformStore = class {
     };
     const existing = this.followupTasksByOrg.get(orgId) || [];
     this.followupTasksByOrg.set(orgId, [created, ...existing]);
-    return this.enrichFollowupTasksWithMembers([created], orgMembers)[0];
+    return this.enrichFollowupTasksWithMembers([created], orgMembers, churchGroups)[0];
   }
   async autoAssignAbsenteeFollowupTasks(organizationId, opts) {
     this.assertDatabaseAvailable();
     const orgId = (organizationId || "").trim().toLowerCase();
     if (!orgId) {
-      return { assignedCount: 0, skippedExistingCount: 0, tasks: [], allTasks: [] };
+      return {
+        assignedCount: 0,
+        skippedExistingCount: 0,
+        tasks: [],
+        allTasks: [],
+        leaderRemindersSent: 0
+      };
     }
     const [membersRaw, churchGroups, existingTasks, settingsRes] = await Promise.all([
       this.getMembers(orgId),
@@ -10233,10 +11224,21 @@ var PlatformStore = class {
         assignedToRole: item.assignedToRole,
         assignedToPhone: item.assignedToPhone,
         autoAssigned: true,
+        serviceEventId: opts?.serviceEventId,
+        serviceName: opts?.serviceName,
         dueOn: item.dueOn,
         notes: item.notes
       });
       createdTasks.push(created);
+    }
+    let leaderRemindersSent = 0;
+    const shouldNotifyLeaders = opts?.sendLeaderReminders ?? settingsRes.settings.autoSendLeaderCareReminders !== false;
+    if (shouldNotifyLeaders && createdTasks.length > 0) {
+      const reminderRes = await this.sendPendingLeaderCareReminders(orgId, {
+        taskIds: createdTasks.map((t) => t.id),
+        actorName: opts?.fallbackActorName || "Pastoral Care Automation"
+      });
+      leaderRemindersSent = reminderRes.sentCount;
     }
     const allTasks = await this.listFollowupTasks(orgId);
     const activeOpenIds = existingTasks.filter(
@@ -10246,7 +11248,8 @@ var PlatformStore = class {
       assignedCount: createdTasks.length,
       skippedExistingCount: activeOpenIds,
       tasks: createdTasks,
-      allTasks
+      allTasks,
+      leaderRemindersSent
     };
   }
   async updateFollowupTask(organizationId, taskId, patch) {
@@ -10259,7 +11262,7 @@ var PlatformStore = class {
         err.status = 404;
         throw err;
       }
-      const updateFields = {};
+      let updateFields = {};
       if (patch.status !== void 0) {
         updateFields.status = patch.status;
         if (patch.status === "resolved" || patch.status === "dismissed") {
@@ -10269,7 +11272,31 @@ var PlatformStore = class {
       if (patch.outcome !== void 0) updateFields.outcome = patch.outcome;
       if (patch.assignedToName !== void 0) updateFields.assigned_to_name = patch.assignedToName;
       if (patch.notes !== void 0) updateFields.notes = patch.notes;
-      const { data, error } = await this.supabase.from("followup_tasks").update(updateFields).eq("organization_id", orgId).eq("id", taskId).select("*").maybeSingle();
+      if (patch.lastReminderAt !== void 0) updateFields.last_reminder_at = patch.lastReminderAt;
+      if (patch.reminderCount !== void 0) updateFields.reminder_count = patch.reminderCount;
+      if (patch.acknowledgedAt !== void 0) updateFields.acknowledged_at = patch.acknowledgedAt;
+      let { data, error } = await this.supabase.from("followup_tasks").update(updateFields).eq("organization_id", orgId).eq("id", taskId).select("*").maybeSingle();
+      for (let attempt = 0; attempt < 6 && error; attempt++) {
+        const msg = error.message || "";
+        const colMatch = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column "([^"]+)"(?: of relation "[^"]+")? does not exist/i);
+        if (!colMatch) break;
+        const badCol = colMatch[1];
+        if (badCol in updateFields) {
+          const { [badCol]: _omitted, ...rest } = updateFields;
+          updateFields = rest;
+          if (Object.keys(updateFields).length === 0) {
+            const existing = await this.supabase.from("followup_tasks").select("*").eq("organization_id", orgId).eq("id", taskId).maybeSingle();
+            data = existing.data;
+            error = existing.error;
+            break;
+          }
+          const retry = await this.supabase.from("followup_tasks").update(updateFields).eq("organization_id", orgId).eq("id", taskId).select("*").maybeSingle();
+          data = retry.data;
+          error = retry.error;
+        } else {
+          break;
+        }
+      }
       if (error) {
         throw new Error(`Failed to update follow-up task in Supabase: ${error.message}`);
       }
@@ -10278,7 +11305,15 @@ var PlatformStore = class {
         err.status = 404;
         throw err;
       }
-      return this.mapSupabaseFollowupRow(data);
+      const [orgMembers, churchGroups] = await Promise.all([
+        this.getMembers(orgId),
+        this.listChurchGroups(orgId).catch(() => [])
+      ]);
+      return this.enrichFollowupTasksWithMembers(
+        [this.mapSupabaseFollowupRow(data)],
+        orgMembers,
+        churchGroups
+      )[0];
     }
     const list = this.followupTasksByOrg.get(orgId) || [];
     const idx = list.findIndex((t) => t.id === taskId);
@@ -10292,6 +11327,10 @@ var PlatformStore = class {
       ...patch.status !== void 0 ? { status: patch.status } : {},
       ...patch.outcome !== void 0 ? { outcome: patch.outcome } : {},
       ...patch.assignedToName !== void 0 ? { assignedToName: patch.assignedToName } : {},
+      ...patch.notes !== void 0 ? { notes: patch.notes } : {},
+      ...patch.lastReminderAt !== void 0 ? { lastReminderAt: patch.lastReminderAt } : {},
+      ...patch.reminderCount !== void 0 ? { reminderCount: patch.reminderCount } : {},
+      ...patch.acknowledgedAt !== void 0 ? { acknowledgedAt: patch.acknowledgedAt } : {},
       ...patch.status === "resolved" || patch.status === "dismissed" ? { resolvedAt: nowIso } : {}
     };
     list[idx] = updated;
@@ -10328,6 +11367,904 @@ var PlatformStore = class {
       orgId,
       list.filter((t) => t.id !== taskId)
     );
+  }
+  // ===========================================================================
+  // AUTOMATED ABSENTEE OUTREACH, LEADER CARE REMINDERS & OVERSIGHT MONITOR
+  // ===========================================================================
+  async resolveUserDesignation(organizationId, userId, email, explicitDesignation) {
+    if (explicitDesignation && explicitDesignation.trim()) {
+      return explicitDesignation.trim();
+    }
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId || !userId) return void 0;
+    try {
+      const profile = await this.getMemberProfileForSession(orgId, userId, email);
+      const raw = profile?.designation || profile?.officerName;
+      return raw ? String(raw).trim() || void 0 : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  async resetMemberAbsenceStreakOnCheckin(organizationId, personId) {
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId || !personId) return;
+    const members = await this.getMembers(orgId);
+    const member = members.find((m) => String(m.id) === String(personId));
+    if (member && Number(member.consecutiveAbsences || 0) > 0) {
+      await this.updateMember(orgId, String(member.id), {
+        consecutiveAbsences: 0
+      }).catch(() => {
+      });
+    }
+    const tasks = await this.listFollowupTasks(orgId);
+    const activeAbsentTasks = tasks.filter(
+      (t) => String(t.personId) === String(personId) && (t.status === "open" || t.status === "contacted") && (t.reason === "absent_2" || t.reason === "absent_3")
+    );
+    for (const task of activeAbsentTasks) {
+      await this.updateFollowupTask(orgId, task.id, {
+        status: "resolved",
+        outcome: "Returned and checked in for service"
+      }).catch(() => {
+      });
+    }
+  }
+  async getExplicitMemberConsentRecord(organizationId, memberId, email) {
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId || !memberId) return null;
+    if (this.supabase) {
+      if (!UUID_REGEX2.test(orgId)) return null;
+      const orClauses = [`user_id.eq.${memberId}`];
+      if (UUID_REGEX2.test(memberId)) {
+        orClauses.push(`member_id.eq.${memberId}`);
+      }
+      const { data, error } = await this.supabase.from("member_consents").select("*").eq("organization_id", orgId).or(orClauses.join(",")).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      if (error || !data) return null;
+      return {
+        autoCheckin: Boolean(data.auto_checkin),
+        push: Boolean(data.push),
+        sms: Boolean(data.sms),
+        email: Boolean(data.email)
+      };
+    }
+    const byOrg = this.memberConsentsByOrg.get(orgId) || {};
+    if (byOrg[memberId]) {
+      const c = byOrg[memberId];
+      return { autoCheckin: c.autoCheckin, push: c.push, sms: c.sms, email: c.email };
+    }
+    const matched = Object.values(byOrg).find(
+      (c) => c.memberId === memberId || email && c.email === email
+    );
+    if (matched) {
+      return {
+        autoCheckin: matched.autoCheckin,
+        push: matched.push,
+        sms: matched.sms,
+        email: matched.email
+      };
+    }
+    return null;
+  }
+  renderAbsentMemberMessage(template, vars) {
+    const base = (template || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE).trim();
+    return base.replace(/\{\{\s*firstName\s*\}\}/gi, vars.firstName || "Friend").replace(/\{\{\s*fullName\s*\}\}/gi, vars.fullName || "Beloved Member").replace(/\{\{\s*serviceName\s*\}\}/gi, vars.serviceName || "today\u2019s service").replace(/\{\{\s*churchName\s*\}\}/gi, vars.churchName || "your church family").replace(/\{\{\s*missedCount\s*\}\}/gi, String(vars.missedCount || 1)).replace(/\{\{\s*contactPhone\s*\}\}/gi, vars.contactPhone || "our church office");
+  }
+  isMissingPastoralAutomationTableError(error) {
+    if (!error) return false;
+    const code = String(error.code || "").toUpperCase();
+    const msg = String(error.message || "");
+    return code === "PGRST205" || code === "42P01" || /pastoral_care_dispatches|service_absence_runs|schema cache|does not exist|could not find the table/i.test(
+      msg
+    );
+  }
+  mapSupabaseDispatchRow(row) {
+    return {
+      id: String(row.id),
+      organizationId: String(row.organization_id || "").toLowerCase(),
+      dispatchType: row.dispatch_type === "leader_reminder" ? "leader_reminder" : "absent_member_alert",
+      serviceEventId: row.service_event_id ? String(row.service_event_id) : void 0,
+      serviceName: row.service_name ? String(row.service_name) : void 0,
+      followupTaskId: row.followup_task_id ? String(row.followup_task_id) : void 0,
+      memberId: row.member_id ? String(row.member_id) : void 0,
+      memberName: String(row.member_name || "Member"),
+      recipientName: String(row.recipient_name || "Recipient"),
+      recipientRole: row.recipient_role ? String(row.recipient_role) : void 0,
+      recipientPhone: row.recipient_phone ? String(row.recipient_phone) : void 0,
+      recipientEmail: row.recipient_email ? String(row.recipient_email) : void 0,
+      channel: row.channel === "email" || row.channel === "push" || row.channel === "in_app" ? row.channel : "sms",
+      status: row.status === "sent" || row.status === "queued" || row.status === "skipped_unconfigured" || row.status === "skipped_opt_out" || row.status === "skipped_no_contact" || row.status === "failed" ? row.status : "queued",
+      messageBody: String(row.message_body || ""),
+      provider: row.provider ? String(row.provider) : void 0,
+      errorMessage: row.error_message ? String(row.error_message) : void 0,
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : void 0,
+      createdAt: String(row.created_at || (/* @__PURE__ */ new Date()).toISOString())
+    };
+  }
+  async recordPastoralCareDispatch(organizationId, input) {
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const record = {
+      id: (0, import_crypto4.randomUUID)(),
+      organizationId: orgId,
+      dispatchType: input.dispatchType,
+      serviceEventId: input.serviceEventId,
+      serviceName: input.serviceName,
+      followupTaskId: input.followupTaskId,
+      memberId: input.memberId,
+      memberName: input.memberName,
+      recipientName: input.recipientName,
+      recipientRole: input.recipientRole,
+      recipientPhone: input.recipientPhone,
+      recipientEmail: input.recipientEmail,
+      channel: input.channel,
+      status: input.status,
+      messageBody: input.messageBody,
+      provider: input.provider,
+      errorMessage: input.errorMessage,
+      createdAt: nowIso
+    };
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX2.test(orgId)) {
+      const insertRow = {
+        id: record.id,
+        organization_id: orgId,
+        dispatch_type: record.dispatchType,
+        service_event_id: record.serviceEventId && UUID_REGEX2.test(record.serviceEventId) ? record.serviceEventId : null,
+        service_name: record.serviceName || null,
+        followup_task_id: record.followupTaskId && UUID_REGEX2.test(record.followupTaskId) ? record.followupTaskId : null,
+        member_id: record.memberId && UUID_REGEX2.test(record.memberId) ? record.memberId : null,
+        member_name: record.memberName,
+        recipient_name: record.recipientName,
+        recipient_role: record.recipientRole || null,
+        recipient_phone: record.recipientPhone || null,
+        recipient_email: record.recipientEmail || null,
+        channel: record.channel,
+        status: record.status,
+        message_body: record.messageBody,
+        provider: record.provider || null,
+        error_message: record.errorMessage || null,
+        created_at: nowIso
+      };
+      const { data, error } = await sb.from("pastoral_care_dispatches").insert(insertRow).select("*").single();
+      if (!error && data) {
+        return this.mapSupabaseDispatchRow(data);
+      }
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+        const existingSettings = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+        const prevList = Array.isArray(existingSettings._pastoral_dispatches) ? existingSettings._pastoral_dispatches : [];
+        const nextList = [record, ...prevList].slice(0, 250);
+        await sb.from("organizations").update({
+          settings: { ...existingSettings, _pastoral_dispatches: nextList },
+          updated_at: nowIso
+        }).eq("id", orgId);
+        return record;
+      }
+    }
+    const memList = this.dispatchesByOrg.get(orgId) || [];
+    this.dispatchesByOrg.set(orgId, [record, ...memList].slice(0, 250));
+    return record;
+  }
+  async listPastoralCareDispatches(organizationId, limit = 150) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    if (!orgId) return [];
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX2.test(orgId)) {
+      const { data, error } = await sb.from("pastoral_care_dispatches").select("*").eq("organization_id", orgId).order("created_at", { ascending: false }).limit(limit);
+      if (!error && Array.isArray(data)) {
+        return data.map((r) => this.mapSupabaseDispatchRow(r));
+      }
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+        const raw = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+        const list = Array.isArray(raw._pastoral_dispatches) ? raw._pastoral_dispatches : [];
+        return list.slice(0, limit);
+      }
+    }
+    return (this.dispatchesByOrg.get(orgId) || []).slice(0, limit);
+  }
+  async getProcessedAbsenceEventIds(orgId) {
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX2.test(orgId)) {
+      const { data, error } = await sb.from("service_absence_runs").select("event_id").eq("organization_id", orgId).order("created_at", { ascending: false }).limit(200);
+      if (!error && Array.isArray(data)) {
+        return data.map((r) => String(r.event_id));
+      }
+      if (error && this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+        const raw = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+        return Array.isArray(raw._processed_absence_events) ? raw._processed_absence_events.map(String) : [];
+      }
+    }
+    const memMap = this.absenceRunsByOrg.get(orgId);
+    return memMap ? Array.from(memMap.keys()) : [];
+  }
+  async markAbsenceEventProcessed(orgId, summary) {
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const sb = this.activeSupabase;
+    if (sb && UUID_REGEX2.test(orgId) && UUID_REGEX2.test(summary.eventId)) {
+      const { error } = await sb.from("service_absence_runs").upsert(
+        {
+          organization_id: orgId,
+          event_id: summary.eventId,
+          event_name: summary.eventName,
+          trigger_source: summary.triggerSource,
+          absent_members_count: summary.absentMembersCount,
+          member_messages_sent: summary.memberMessagesSent,
+          tasks_created_count: summary.tasksCreatedCount,
+          leader_reminders_sent: summary.leaderRemindersSent,
+          triggered_by: summary.triggeredBy || null,
+          created_at: nowIso
+        },
+        { onConflict: "organization_id,event_id" }
+      );
+      if (!error) return;
+      if (this.isMissingPastoralAutomationTableError(error)) {
+        const { data: orgRow } = await sb.from("organizations").select("settings").eq("id", orgId).maybeSingle();
+        const existingSettings = orgRow?.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
+        const prev = Array.isArray(existingSettings._processed_absence_events) ? existingSettings._processed_absence_events.map(String) : [];
+        const next = Array.from(/* @__PURE__ */ new Set([summary.eventId, ...prev])).slice(0, 200);
+        await sb.from("organizations").update({
+          settings: { ...existingSettings, _processed_absence_events: next },
+          updated_at: nowIso
+        }).eq("id", orgId);
+        return;
+      }
+    }
+    const memMap = this.absenceRunsByOrg.get(orgId) || /* @__PURE__ */ new Map();
+    memMap.set(summary.eventId, {
+      eventId: summary.eventId,
+      eventName: summary.eventName,
+      processedAt: nowIso
+    });
+    this.absenceRunsByOrg.set(orgId, memMap);
+  }
+  async processServiceAbsenceSweep(organizationId, opts) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const events = await this.getEvents(orgId);
+    const targetEvent = opts?.eventId ? events.find((e) => String(e.id) === String(opts.eventId)) : events.find((e) => {
+      const st = String(e.status || "").toLowerCase();
+      return st === "closed" || st === "completed";
+    }) || events[0];
+    if (!targetEvent) {
+      const allTasks2 = await this.listFollowupTasks(orgId);
+      return {
+        success: true,
+        eventId: "",
+        eventName: "No service scheduled",
+        absentMembersCount: 0,
+        memberMessagesSent: 0,
+        memberMessagesAttempted: 0,
+        tasksCreatedCount: 0,
+        leaderRemindersSent: 0,
+        leaderRemindersAttempted: 0,
+        dispatches: [],
+        allTasks: allTasks2,
+        message: "No worship service found to evaluate absences."
+      };
+    }
+    const eventId = String(targetEvent.id);
+    const eventName = String(targetEvent.name || "Worship Service");
+    const processedIds = await this.getProcessedAbsenceEventIds(orgId);
+    if (!opts?.force && processedIds.includes(eventId)) {
+      const [allTasks2, existingDispatches] = await Promise.all([
+        this.listFollowupTasks(orgId),
+        this.listPastoralCareDispatches(orgId, 60)
+      ]);
+      return {
+        success: true,
+        alreadyProcessed: true,
+        eventId,
+        eventName,
+        absentMembersCount: 0,
+        memberMessagesSent: 0,
+        memberMessagesAttempted: 0,
+        tasksCreatedCount: 0,
+        leaderRemindersSent: 0,
+        leaderRemindersAttempted: 0,
+        dispatches: existingDispatches.filter((d) => d.serviceEventId === eventId),
+        allTasks: allTasks2,
+        message: `Absence sweep already completed for "${eventName}".`
+      };
+    }
+    const [membersRaw, checkins, settingsRes, churchGroups, existingTasks, arkeselResolved] = await Promise.all([
+      this.getMembers(orgId),
+      this.getLiveCheckins(orgId, eventId),
+      this.getSystemSettings(orgId),
+      this.listChurchGroups(orgId),
+      this.listFollowupTasks(orgId),
+      this.getResolvedArkeselApiKey(orgId)
+    ]);
+    const settings = settingsRes.settings;
+    const presentIds = new Set(checkins.map((c) => String(c.personId)));
+    const updatedMembers = [];
+    const absentMembers = [];
+    for (const raw of membersRaw) {
+      const m = raw;
+      const status = String(m.status || "member").toLowerCase();
+      if (status === "inactive" || status === "transferred" || status === "deceased" || status === "visitor") {
+        updatedMembers.push(m);
+        continue;
+      }
+      if (presentIds.has(String(m.id))) {
+        if (Number(m.consecutiveAbsences || 0) > 0) {
+          await this.updateMember(orgId, String(m.id), { consecutiveAbsences: 0 }).catch(() => {
+          });
+        }
+        updatedMembers.push({ ...m, consecutiveAbsences: 0 });
+      } else {
+        const nextStreak = (Number(m.consecutiveAbsences || 0) || 0) + 1;
+        await this.updateMember(orgId, String(m.id), { consecutiveAbsences: nextStreak }).catch(() => {
+        });
+        const updated = { ...m, consecutiveAbsences: nextStreak };
+        updatedMembers.push(updated);
+        absentMembers.push({ member: updated, newStreak: nextStreak });
+      }
+    }
+    const dispatches = [];
+    let memberMessagesSent = 0;
+    let memberMessagesAttempted = 0;
+    if (settings.autoMessageAbsentMembers !== false && absentMembers.length > 0) {
+      const channelPref = settings.absentMemberMessageChannel || "sms_and_email";
+      const resendConfigured = Boolean((process.env.RESEND_API_KEY || "").trim());
+      const arkeselConfigured = Boolean(arkeselResolved.apiKey);
+      const churchDisplay = settings.churchName || "Your Church Family";
+      const churchContactPhone = settings.contactPhone || "our pastoral desk";
+      for (const { member, newStreak } of absentMembers) {
+        const fullName = getMemberFullName(member) || "Beloved Member";
+        const messageBody = this.renderAbsentMemberMessage(
+          settings.absentMemberMessageTemplate || DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE,
+          {
+            firstName: member.firstName || fullName.split(" ")[0] || "Friend",
+            fullName,
+            serviceName: eventName,
+            churchName: churchDisplay,
+            missedCount: newStreak,
+            contactPhone: churchContactPhone
+          }
+        );
+        const explicitConsent = await this.getExplicitMemberConsentRecord(
+          orgId,
+          String(member.id),
+          member.email
+        );
+        const wantsSms = channelPref === "sms" || channelPref === "sms_and_email";
+        const wantsEmail = channelPref === "email" || channelPref === "sms_and_email";
+        const phone = member.phoneE164 || member.phoneNumber || "";
+        const normalizedMsisdn = normalizeArkeselPhone(phone);
+        const email = (member.email || "").trim().toLowerCase();
+        let deliveredToThisMember = false;
+        if (wantsSms) {
+          memberMessagesAttempted++;
+          if (explicitConsent && explicitConsent.sms === false) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                recipientPhone: phone || void 0,
+                channel: "sms",
+                status: "skipped_opt_out",
+                messageBody,
+                provider: "Arkesel SMS",
+                errorMessage: "Member opted out of SMS notifications."
+              })
+            );
+          } else if (!normalizedMsisdn) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                channel: "sms",
+                status: "skipped_no_contact",
+                messageBody,
+                provider: "Arkesel SMS",
+                errorMessage: "No valid mobile phone number on member profile."
+              })
+            );
+          } else if (!arkeselConfigured) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                recipientPhone: phone,
+                channel: "sms",
+                status: "skipped_unconfigured",
+                messageBody,
+                provider: "Arkesel SMS",
+                errorMessage: "Tenant Arkesel API key not configured yet."
+              })
+            );
+          } else {
+            const smsRes = await sendArkeselSms({
+              apiKey: arkeselResolved.apiKey,
+              senderId: settings.smsSenderId,
+              recipients: [normalizedMsisdn],
+              message: messageBody
+            });
+            if (smsRes.ok) {
+              deliveredToThisMember = true;
+            }
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                recipientPhone: phone,
+                channel: "sms",
+                status: smsRes.ok ? "sent" : "failed",
+                messageBody,
+                provider: "Arkesel SMS",
+                errorMessage: smsRes.ok ? void 0 : smsRes.message
+              })
+            );
+          }
+        }
+        if (wantsEmail && email) {
+          memberMessagesAttempted++;
+          if (explicitConsent && explicitConsent.email === false) {
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                recipientEmail: email,
+                channel: "email",
+                status: "skipped_opt_out",
+                messageBody,
+                provider: "Resend Email",
+                errorMessage: "Member opted out of Email notifications."
+              })
+            );
+          } else if (!resendConfigured) {
+            if (!wantsSms) {
+              dispatches.push(
+                await this.recordPastoralCareDispatch(orgId, {
+                  dispatchType: "absent_member_alert",
+                  serviceEventId: eventId,
+                  serviceName: eventName,
+                  memberId: String(member.id),
+                  memberName: fullName,
+                  recipientName: fullName,
+                  recipientRole: "Member",
+                  recipientEmail: email,
+                  channel: "email",
+                  status: "skipped_unconfigured",
+                  messageBody,
+                  provider: "Resend Email",
+                  errorMessage: "Email gateway API key not configured."
+                })
+              );
+            }
+          } else {
+            const emailRes = await sendResendEmail({
+              fromEmail: settings.emailFromAddress || void 0,
+              fromName: settings.emailSenderName || settings.churchName || void 0,
+              organizationName: settings.churchName || void 0,
+              to: [email],
+              subject: `We missed you at ${eventName} \xB7 ${churchDisplay}`,
+              text: messageBody,
+              replyTo: settings.contactEmail || void 0
+            });
+            if (emailRes.ok) {
+              deliveredToThisMember = true;
+            }
+            dispatches.push(
+              await this.recordPastoralCareDispatch(orgId, {
+                dispatchType: "absent_member_alert",
+                serviceEventId: eventId,
+                serviceName: eventName,
+                memberId: String(member.id),
+                memberName: fullName,
+                recipientName: fullName,
+                recipientRole: "Member",
+                recipientEmail: email,
+                channel: "email",
+                status: emailRes.ok ? "sent" : "failed",
+                messageBody,
+                provider: "Resend Email",
+                errorMessage: emailRes.ok ? void 0 : emailRes.message
+              })
+            );
+          }
+        }
+        if (deliveredToThisMember) {
+          memberMessagesSent++;
+        }
+      }
+    }
+    const plan = buildAutoAssignAbsenteesPlan({
+      members: updatedMembers,
+      churchGroups,
+      existingTasks,
+      systemSettings: settings,
+      fallbackActorName: opts?.actorName || settings.seniorPastor || "Pastoral Care Team"
+    });
+    const createdTasks = [];
+    for (const item of plan) {
+      const leaderMember = updatedMembers.find(
+        (m) => item.assignedToMemberId && String(m.id) === String(item.assignedToMemberId) || getMemberFullName(m).toLowerCase() === normalizeSettingLabel(item.assignedToName).toLowerCase()
+      );
+      const leaderEmail = leaderMember?.email || void 0;
+      const created = await this.createFollowupTask(orgId, {
+        personId: item.personId,
+        personName: item.personName,
+        personPhone: item.personPhone,
+        personEmail: item.personEmail,
+        groupName: item.groupName,
+        reason: item.reason,
+        assignedToName: item.assignedToName,
+        assignedToMemberId: item.assignedToMemberId,
+        assignedToRole: item.assignedToRole,
+        assignedToPhone: item.assignedToPhone,
+        assignedToEmail: leaderEmail,
+        autoAssigned: true,
+        serviceEventId: eventId,
+        serviceName: eventName,
+        dueOn: item.dueOn,
+        notes: `${item.notes} Service: ${eventName}.`
+      });
+      createdTasks.push(created);
+    }
+    let leaderRemindersSent = 0;
+    let leaderRemindersAttempted = 0;
+    if (settings.autoSendLeaderCareReminders !== false) {
+      const targetTaskIds = createdTasks.map((t) => t.id);
+      if (targetTaskIds.length > 0) {
+        const remRes = await this.sendPendingLeaderCareReminders(orgId, {
+          taskIds: targetTaskIds,
+          serviceEventId: eventId,
+          serviceName: eventName,
+          actorName: opts?.actorName || "Pastoral Care Automation"
+        });
+        leaderRemindersSent = remRes.sentCount;
+        leaderRemindersAttempted = remRes.attemptedCount;
+        dispatches.push(...remRes.dispatches);
+      }
+    }
+    await this.markAbsenceEventProcessed(orgId, {
+      eventId,
+      eventName,
+      triggerSource: opts?.triggerSource || "service_closed",
+      absentMembersCount: absentMembers.length,
+      memberMessagesSent,
+      tasksCreatedCount: createdTasks.length,
+      leaderRemindersSent,
+      triggeredBy: opts?.actorName
+    });
+    const allTasks = await this.listFollowupTasks(orgId);
+    const summaryMsg = absentMembers.length === 0 ? `Service "${eventName}" closed: all active members checked in.` : `Service "${eventName}" absence care completed: ${absentMembers.length} absent member(s), ${memberMessagesSent} member alert(s) sent, ${createdTasks.length} care task(s) created, ${leaderRemindersSent} leader reminder(s) delivered.`;
+    return {
+      success: true,
+      eventId,
+      eventName,
+      absentMembersCount: absentMembers.length,
+      memberMessagesSent,
+      memberMessagesAttempted,
+      tasksCreatedCount: createdTasks.length,
+      leaderRemindersSent,
+      leaderRemindersAttempted,
+      dispatches,
+      allTasks,
+      message: summaryMsg
+    };
+  }
+  async sendPendingLeaderCareReminders(organizationId, opts) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const [allTasks, orgMembers, churchGroups, settingsRes, arkeselResolved] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => []),
+      this.getSystemSettings(orgId),
+      this.getResolvedArkeselApiKey(orgId)
+    ]);
+    const settings = settingsRes.settings;
+    const resendConfigured = Boolean((process.env.RESEND_API_KEY || "").trim());
+    const arkeselConfigured = Boolean(arkeselResolved.apiKey);
+    let targetTasks = allTasks.filter((t) => t.status === "open" || t.status === "contacted");
+    if (opts?.taskId) {
+      targetTasks = targetTasks.filter((t) => t.id === opts.taskId);
+    } else if (Array.isArray(opts?.taskIds) && opts.taskIds.length > 0) {
+      const idSet = new Set(opts.taskIds);
+      targetTasks = targetTasks.filter((t) => idSet.has(t.id));
+    } else if (opts?.leaderName) {
+      const targetLeader = normalizeSettingLabel(opts.leaderName).toLowerCase();
+      targetTasks = targetTasks.filter(
+        (t) => normalizeSettingLabel(t.assignedToName).toLowerCase() === targetLeader
+      );
+    }
+    if (targetTasks.length === 0) {
+      return { sentCount: 0, attemptedCount: 0, dispatches: [], allTasks };
+    }
+    const byLeader = /* @__PURE__ */ new Map();
+    for (const t of targetTasks) {
+      const key = normalizeSettingLabel(t.assignedToName).toLowerCase() || "pastoral_care_team";
+      const arr = byLeader.get(key) || [];
+      arr.push(t);
+      byLeader.set(key, arr);
+    }
+    const dispatches = [];
+    let sentCount = 0;
+    let attemptedCount = 0;
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    for (const groupTasks of byLeader.values()) {
+      const primaryTask = groupTasks[0];
+      const leaderName = primaryTask.assignedToName || "Pastoral Care Leader";
+      const leaderRole = primaryTask.assignedToRole || "Leader in Charge";
+      const leaderMember = orgMembers.find(
+        (m) => primaryTask.assignedToMemberId && String(m.id) === String(primaryTask.assignedToMemberId) || `${String(m.firstName || "")} ${String(m.lastName || "")}`.trim().toLowerCase() === normalizeSettingLabel(leaderName).toLowerCase()
+      );
+      const leaderGroup = churchGroups.find(
+        (g) => normalizeSettingLabel(g.leaderName).toLowerCase() === normalizeSettingLabel(leaderName).toLowerCase()
+      );
+      const leaderPhone = primaryTask.assignedToPhone || (leaderMember?.phoneE164 ? String(leaderMember.phoneE164) : void 0) || leaderGroup?.leaderPhone || void 0;
+      const leaderEmail = primaryTask.assignedToEmail || (leaderMember?.email ? String(leaderMember.email) : void 0) || leaderGroup?.leaderEmail || void 0;
+      const memberSummaries = groupTasks.slice(0, 5).map((t) => `${t.personName}${t.personPhone ? ` (${t.personPhone})` : ""}`).join(", ");
+      const extraCount = groupTasks.length > 5 ? ` +${groupTasks.length - 5} more` : "";
+      const churchLabel = settings.churchName || "Ekklesphere Church";
+      const serviceCtx = opts?.serviceName || primaryTask.serviceName ? ` after ${opts?.serviceName || primaryTask.serviceName}` : "";
+      const reminderMessage = `Pastoral Care Reminder (${churchLabel}): Dear ${leaderName}, please follow up with ${groupTasks.length} member${groupTasks.length === 1 ? "" : "s"} needing care${serviceCtx}: ${memberSummaries}${extraCount}. Due: ${primaryTask.dueOn}.`;
+      attemptedCount++;
+      let deliveredExternally = false;
+      const normalizedPhone = normalizeArkeselPhone(leaderPhone);
+      if (normalizedPhone) {
+        if (arkeselConfigured) {
+          const smsRes = await sendArkeselSms({
+            apiKey: arkeselResolved.apiKey,
+            senderId: settings.smsSenderId,
+            recipients: [normalizedPhone],
+            message: reminderMessage
+          });
+          if (smsRes.ok) deliveredExternally = true;
+          dispatches.push(
+            await this.recordPastoralCareDispatch(orgId, {
+              dispatchType: "leader_reminder",
+              serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+              serviceName: opts?.serviceName || primaryTask.serviceName,
+              followupTaskId: primaryTask.id,
+              memberId: primaryTask.personId,
+              memberName: groupTasks.length === 1 ? primaryTask.personName : `${groupTasks.length} Members`,
+              recipientName: leaderName,
+              recipientRole: leaderRole,
+              recipientPhone: leaderPhone,
+              recipientEmail: leaderEmail,
+              channel: "sms",
+              status: smsRes.ok ? "sent" : "failed",
+              messageBody: reminderMessage,
+              provider: "Arkesel SMS",
+              errorMessage: smsRes.ok ? void 0 : smsRes.message
+            })
+          );
+        } else {
+          dispatches.push(
+            await this.recordPastoralCareDispatch(orgId, {
+              dispatchType: "leader_reminder",
+              serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+              serviceName: opts?.serviceName || primaryTask.serviceName,
+              followupTaskId: primaryTask.id,
+              memberId: primaryTask.personId,
+              memberName: groupTasks.length === 1 ? primaryTask.personName : `${groupTasks.length} Members`,
+              recipientName: leaderName,
+              recipientRole: leaderRole,
+              recipientPhone: leaderPhone,
+              channel: "sms",
+              status: "skipped_unconfigured",
+              messageBody: reminderMessage,
+              provider: "Arkesel SMS",
+              errorMessage: "Tenant Arkesel API key not configured; delivered in-app reminder."
+            })
+          );
+        }
+      }
+      if (leaderEmail && resendConfigured) {
+        const emailRes = await sendResendEmail({
+          fromEmail: settings.emailFromAddress || void 0,
+          fromName: settings.emailSenderName || settings.churchName || void 0,
+          organizationName: settings.churchName || void 0,
+          to: [leaderEmail],
+          subject: `Pastoral Care Reminder: ${groupTasks.length} Member${groupTasks.length === 1 ? "" : "s"} Assigned (${churchLabel})`,
+          text: reminderMessage,
+          replyTo: settings.contactEmail || void 0
+        });
+        if (emailRes.ok) deliveredExternally = true;
+        dispatches.push(
+          await this.recordPastoralCareDispatch(orgId, {
+            dispatchType: "leader_reminder",
+            serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+            serviceName: opts?.serviceName || primaryTask.serviceName,
+            followupTaskId: primaryTask.id,
+            memberId: primaryTask.personId,
+            memberName: groupTasks.length === 1 ? primaryTask.personName : `${groupTasks.length} Members`,
+            recipientName: leaderName,
+            recipientRole: leaderRole,
+            recipientPhone: leaderPhone,
+            recipientEmail: leaderEmail,
+            channel: "email",
+            status: emailRes.ok ? "sent" : "failed",
+            messageBody: reminderMessage,
+            provider: "Resend Email",
+            errorMessage: emailRes.ok ? void 0 : emailRes.message
+          })
+        );
+      }
+      dispatches.push(
+        await this.recordPastoralCareDispatch(orgId, {
+          dispatchType: "leader_reminder",
+          serviceEventId: opts?.serviceEventId || primaryTask.serviceEventId,
+          serviceName: opts?.serviceName || primaryTask.serviceName,
+          followupTaskId: primaryTask.id,
+          memberId: primaryTask.personId,
+          memberName: groupTasks.length === 1 ? primaryTask.personName : `${groupTasks.length} Members`,
+          recipientName: leaderName,
+          recipientRole: leaderRole,
+          recipientPhone: leaderPhone,
+          recipientEmail: leaderEmail,
+          channel: "in_app",
+          status: "sent",
+          messageBody: reminderMessage,
+          provider: deliveredExternally ? "In-App + Gateway" : "Ekklesphere Portal Alert"
+        })
+      );
+      sentCount++;
+      for (const task of groupTasks) {
+        await this.updateFollowupTask(orgId, task.id, {
+          lastReminderAt: nowIso,
+          reminderCount: (task.reminderCount || 0) + 1
+        }).catch(() => {
+        });
+      }
+    }
+    const refreshedTasks = await this.listFollowupTasks(orgId);
+    return {
+      sentCount,
+      attemptedCount,
+      dispatches,
+      allTasks: refreshedTasks
+    };
+  }
+  async acknowledgeLeaderCareTask(organizationId, taskId, actor) {
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const tasks = await this.listFollowupTasks(organizationId);
+    const current = tasks.find((t) => t.id === taskId);
+    if (!current) {
+      const err = new Error("Follow-up task not found.");
+      err.status = 404;
+      throw err;
+    }
+    const nextStatus = current.status === "open" ? "contacted" : current.status;
+    return this.updateFollowupTask(organizationId, taskId, {
+      status: nextStatus,
+      acknowledgedAt: nowIso,
+      outcome: current.outcome || `Reminder acknowledged by ${actor?.name || current.assignedToName} (${(/* @__PURE__ */ new Date()).toLocaleDateString()})`
+    });
+  }
+  async getPastoralCareMonitorSummary(organizationId) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const [tasks, dispatches, processedEventIds, orgMembers, churchGroups] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.listPastoralCareDispatches(orgId, 200),
+      this.getProcessedAbsenceEventIds(orgId),
+      this.getMembers(orgId),
+      this.listChurchGroups(orgId).catch(() => [])
+    ]);
+    const openTasksCount = tasks.filter((t) => t.status === "open").length;
+    const contactedTasksCount = tasks.filter((t) => t.status === "contacted").length;
+    const resolvedTasksCount = tasks.filter((t) => t.status === "resolved").length;
+    const totalTrackable = openTasksCount + contactedTasksCount + resolvedTasksCount;
+    const resolutionRatePct = totalTrackable > 0 ? Math.round(resolvedTasksCount / totalTrackable * 100) : 100;
+    const absentMemberMessagesSent = dispatches.filter(
+      (d) => d.dispatchType === "absent_member_alert" && d.status === "sent"
+    ).length;
+    const leaderRemindersSent = dispatches.filter(
+      (d) => d.dispatchType === "leader_reminder" && d.status === "sent"
+    ).length;
+    const scorecardMap = /* @__PURE__ */ new Map();
+    for (const task of tasks) {
+      const leaderName = (task.assignedToName || "Pastoral Care Team").trim();
+      const key = leaderName.toLowerCase();
+      const leaderMember = orgMembers.find(
+        (m) => task.assignedToMemberId && String(m.id) === String(task.assignedToMemberId) || `${String(m.firstName || "")} ${String(m.lastName || "")}`.trim().toLowerCase() === key
+      );
+      const leaderGroup = churchGroups.find(
+        (g) => normalizeSettingLabel(g.leaderName).toLowerCase() === key
+      );
+      const existing = scorecardMap.get(key) || {
+        leaderName,
+        leaderMemberId: task.assignedToMemberId || (leaderMember ? String(leaderMember.id) : void 0),
+        leaderRole: task.assignedToRole || (leaderMember ? getMemberPortfolio(leaderMember) : void 0) || (leaderGroup ? "Group Leader" : "Pastoral Care"),
+        leaderPhone: task.assignedToPhone || (leaderMember?.phoneE164 ? String(leaderMember.phoneE164) : void 0) || leaderGroup?.leaderPhone || void 0,
+        leaderEmail: task.assignedToEmail || (leaderMember?.email ? String(leaderMember.email) : void 0) || leaderGroup?.leaderEmail || void 0,
+        openCount: 0,
+        contactedCount: 0,
+        resolvedCount: 0,
+        totalAssigned: 0,
+        remindersSent: 0,
+        lastReminderAt: null
+      };
+      if (task.status === "open") existing.openCount += 1;
+      else if (task.status === "contacted") existing.contactedCount += 1;
+      else if (task.status === "resolved") existing.resolvedCount += 1;
+      existing.totalAssigned += 1;
+      existing.remindersSent += Number(task.reminderCount || 0);
+      if (task.lastReminderAt && (!existing.lastReminderAt || task.lastReminderAt > existing.lastReminderAt)) {
+        existing.lastReminderAt = task.lastReminderAt;
+      }
+      scorecardMap.set(key, existing);
+    }
+    const leaderScorecard = Array.from(scorecardMap.values()).sort(
+      (a, b) => b.openCount + b.contactedCount - (a.openCount + a.contactedCount) || b.totalAssigned - a.totalAssigned
+    );
+    return {
+      tasks,
+      dispatches,
+      processedEventIds,
+      leaderScorecard,
+      stats: {
+        openTasksCount,
+        contactedTasksCount,
+        resolvedTasksCount,
+        resolutionRatePct,
+        absentMemberMessagesSent,
+        leaderRemindersSent,
+        totalDispatches: dispatches.length
+      },
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  async listLeaderAssignedReminders(organizationId, actor) {
+    this.assertDatabaseAvailable();
+    const orgId = (organizationId || "").trim().toLowerCase();
+    const [tasks, dispatches, profile] = await Promise.all([
+      this.listFollowupTasks(orgId),
+      this.listPastoralCareDispatches(orgId, 100),
+      actor.userId ? this.getMemberProfileForSession(orgId, actor.userId, actor.email).catch(() => null) : Promise.resolve(null)
+    ]);
+    const targetIds = new Set(
+      [actor.userId, profile?.id ? String(profile.id) : void 0].filter(Boolean)
+    );
+    const targetNames = new Set(
+      [
+        actor.name,
+        profile ? `${String(profile.firstName || "")} ${String(profile.lastName || "")}`.trim() : void 0
+      ].map((n) => normalizeSettingLabel(n).toLowerCase()).filter(Boolean)
+    );
+    const cleanEmail = (actor.email || "").trim().toLowerCase();
+    const myTasks = tasks.filter((t) => {
+      if (t.assignedToMemberId && targetIds.has(String(t.assignedToMemberId))) return true;
+      if (cleanEmail && t.assignedToEmail?.toLowerCase() === cleanEmail) return true;
+      const assignedLower = normalizeSettingLabel(t.assignedToName).toLowerCase();
+      return Boolean(assignedLower && targetNames.has(assignedLower));
+    });
+    const myTaskIds = new Set(myTasks.map((t) => t.id));
+    const myDispatches = dispatches.filter(
+      (d) => d.dispatchType === "leader_reminder" && (d.followupTaskId && myTaskIds.has(d.followupTaskId) || targetNames.has(normalizeSettingLabel(d.recipientName).toLowerCase()) || cleanEmail && d.recipientEmail?.toLowerCase() === cleanEmail)
+    );
+    return { tasks: myTasks, dispatches: myDispatches };
   }
   // ===========================================================================
   // MEMBER CONSENTS & EVENT RSVPS (ORG + USER SCOPED)
@@ -10582,7 +12519,7 @@ var PlatformStore = class {
       err.status = 400;
       throw err;
     }
-    const generatedTempPassword = suppliedPassword ? void 0 : `Ek!${(0, import_crypto3.randomBytes)(6).toString("base64url")}9`;
+    const generatedTempPassword = suppliedPassword ? void 0 : `Ek!${(0, import_crypto4.randomBytes)(6).toString("base64url")}9`;
     const effectivePassword = suppliedPassword || generatedTempPassword;
     let existingSameOrg;
     if (this.supabase) {
@@ -10680,7 +12617,7 @@ var PlatformStore = class {
       }).catch(() => {
       });
     }
-    const credId = existingSameOrg?.id || (UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto3.randomUUID)());
+    const credId = existingSameOrg?.id || (UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto4.randomUUID)());
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const record = await this.provisionCredentialRecord({
       id: credId,
@@ -10695,6 +12632,12 @@ var PlatformStore = class {
       mustChangePassword: !suppliedPassword,
       passwordUpdatedAt: nowIso
     });
+    if (params.designation && !this.supabase) {
+      const memCred = this.userCredentials.get(record.id);
+      if (memCred) {
+        this.userCredentials.set(record.id, { ...memCred, designation: params.designation });
+      }
+    }
     await this.recordAuthAuditEvent({
       organizationId: cleanOrgId,
       accountId: record.id,
@@ -10720,12 +12663,13 @@ var PlatformStore = class {
       resetExisting: Boolean(existingSameOrg)
     };
   }
-  async listOrganizationUsers(organizationId) {
+  async listOrganizationUsers(organizationId, options) {
     this.assertDatabaseAvailable();
     const cleanOrgId = (organizationId || "").trim().toLowerCase();
     if (!cleanOrgId) return [];
     const sb = this.activeSupabase;
     const orgMembers = await this.getMembers(cleanOrgId);
+    const includeTemporaryPasswords = Boolean(options?.includeTemporaryPasswords);
     const resolveCredentialStatus = (status, mustChangePassword, lockedUntil) => {
       if (status === "suspended") return "suspended";
       if (status === "locked" || lockedUntil && !Number.isNaN(Date.parse(lockedUntil)) && Date.parse(lockedUntil) > Date.now()) {
@@ -10736,13 +12680,20 @@ var PlatformStore = class {
     const credRows = [];
     if (sb) {
       if (UUID_REGEX2.test(cleanOrgId)) {
-        const { data, error } = await sb.from("account_credentials").select(
-          "id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password"
+        let queryRes = await sb.from("account_credentials").select(
+          "id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password, password_updated_at, temp_password_encrypted"
         ).eq("organization_id", cleanOrgId).eq("is_creator", false).order("created_at", { ascending: false });
-        if (error) {
-          throw new Error(`Failed to load organisation user accounts: ${error.message}`);
+        if (queryRes.error && /column .* does not exist|Could not find the '[^']+' column|schema cache/i.test(
+          queryRes.error.message || ""
+        )) {
+          queryRes = await sb.from("account_credentials").select(
+            "id, member_id, organization_id, email, username, phone_e164, full_name, role, is_creator, status, locked_until, last_login_at, created_at, must_change_password"
+          ).eq("organization_id", cleanOrgId).eq("is_creator", false).order("created_at", { ascending: false });
         }
-        for (const row of data || []) {
+        if (queryRes.error) {
+          throw new Error(`Failed to load organisation user accounts: ${queryRes.error.message}`);
+        }
+        for (const row of queryRes.data || []) {
           credRows.push({
             id: String(row.id),
             memberId: row.member_id ? String(row.member_id) : void 0,
@@ -10753,6 +12704,8 @@ var PlatformStore = class {
             role: String(row.role || "").toLowerCase() === "super_admin" ? "super_admin" : mapSupabaseRoleToChurchRole(row.role),
             status: String(row.status || "active"),
             mustChangePassword: Boolean(row.must_change_password),
+            tempPasswordEncrypted: row.temp_password_encrypted ? String(row.temp_password_encrypted) : null,
+            passwordUpdatedAt: row.password_updated_at ? String(row.password_updated_at) : null,
             lockedUntil: row.locked_until ? String(row.locked_until) : null,
             lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
             createdAt: row.created_at ? String(row.created_at) : void 0
@@ -10772,6 +12725,8 @@ var PlatformStore = class {
             role: c.role,
             status: c.status,
             mustChangePassword: Boolean(c.mustChangePassword),
+            temporaryPassword: c.temporaryPassword,
+            passwordUpdatedAt: c.passwordUpdatedAt ?? null,
             lockedUntil: c.lockedUntil || null,
             lastLoginAt: null,
             createdAt: c.createdAt
@@ -10803,6 +12758,7 @@ var PlatformStore = class {
       }
       const memberDisplayName = linkedMember ? `${String(linkedMember.firstName || "").trim()} ${String(linkedMember.lastName || "").trim()}`.trim() : "";
       const role = c.role;
+      const resolvedTemporaryPassword = includeTemporaryPasswords && c.mustChangePassword && role !== "super_admin" && role !== "creator" ? unsealTemporaryPassword(c.tempPasswordEncrypted) || this.tempPasswordByCredId.get(c.id) || c.temporaryPassword || (role === "member" && !c.passwordUpdatedAt ? this.getGenericOnboardingPassword() : void 0) : void 0;
       results.push({
         id: c.id,
         memberId: linkedMember ? String(linkedMember.id) : c.memberId,
@@ -10818,6 +12774,7 @@ var PlatformStore = class {
         credentialStatus: resolveCredentialStatus(c.status, c.mustChangePassword, c.lockedUntil),
         status: c.status === "suspended" ? "suspended" : "active",
         mustChangePassword: Boolean(c.mustChangePassword),
+        ...resolvedTemporaryPassword ? { temporaryPassword: resolvedTemporaryPassword } : {},
         lastLoginAt: c.lastLoginAt,
         createdAt: c.createdAt,
         homeCellGroup: linkedMember?.homeCellGroup || linkedMember?.groupName || void 0,
@@ -10916,7 +12873,7 @@ var PlatformStore = class {
       err.status = 400;
       throw err;
     }
-    const generatedTempPassword = suppliedPassword ? void 0 : `Ek!${(0, import_crypto3.randomBytes)(6).toString("base64url")}9`;
+    const generatedTempPassword = suppliedPassword ? void 0 : `Ek!${(0, import_crypto4.randomBytes)(6).toString("base64url")}9`;
     const effectivePassword = suppliedPassword || generatedTempPassword;
     const mustChangePassword = suppliedPassword ? Boolean(params.requirePasswordChange) : params.requirePasswordChange !== false;
     const sb = this.activeSupabase;
@@ -11022,7 +12979,7 @@ var PlatformStore = class {
       targetMember = createdMember;
       targetMemberId = String(createdMember.id);
     }
-    const credId = existingSameOrg?.id || (resolvedCredFromLookup?.id ? String(resolvedCredFromLookup.id) : void 0) || (targetMemberId && UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto3.randomUUID)());
+    const credId = existingSameOrg?.id || (resolvedCredFromLookup?.id ? String(resolvedCredFromLookup.id) : void 0) || (targetMemberId && UUID_REGEX2.test(targetMemberId) ? targetMemberId : (0, import_crypto4.randomUUID)());
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const record = await this.provisionCredentialRecord({
       id: credId,
@@ -11080,6 +13037,7 @@ var PlatformStore = class {
         credentialStatus: record.mustChangePassword ? "temp_password" : "active",
         status: "active",
         mustChangePassword: Boolean(record.mustChangePassword),
+        ...record.mustChangePassword ? { temporaryPassword: effectivePassword } : {},
         lastLoginAt: null,
         createdAt: record.createdAt || nowIso,
         homeCellGroup: targetMember?.homeCellGroup || targetMember?.groupName || void 0,
@@ -11323,7 +13281,9 @@ var PlatformStore = class {
       },
       ipAddress: params.ipAddress || null
     });
-    const refreshed = await this.listOrganizationUsers(cleanOrgId);
+    const refreshed = await this.listOrganizationUsers(cleanOrgId, {
+      includeTemporaryPasswords: true
+    });
     const updatedUser = refreshed.find((u) => u.id === targetId || u.memberId === targetId);
     if (!updatedUser) {
       const err = new Error("Updated user account could not be loaded.");
@@ -11379,6 +13339,7 @@ var PlatformStore = class {
           throw new Error(`Failed deleting user credentials in Supabase: ${delErr.message}`);
         }
         deletedCredentialId = String(credRow.id);
+        this.tempPasswordByCredId.delete(deletedCredentialId);
         const linkedMemberId = credRow.member_id ? String(credRow.member_id) : void 0;
         if (linkedMemberId) {
           await this.deleteMember(cleanOrgId, linkedMemberId).catch(() => {
@@ -11421,6 +13382,7 @@ var PlatformStore = class {
           throw err;
         }
         this.userCredentials.delete(credKey);
+        this.tempPasswordByCredId.delete(cred.id);
         deletedCredentialId = cred.id;
         if (cred.memberId) {
           await this.deleteMember(cleanOrgId, cred.memberId).catch(() => {
@@ -11514,316 +13476,6 @@ var import_express = __toESM(require("express"), 1);
 var import_express_rate_limit = __toESM(require("express-rate-limit"), 1);
 var import_papaparse = __toESM(require("papaparse"), 1);
 var import_zod = require("zod");
-
-// src/server/communicationsService.ts
-function escapeHtml(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-function buildHtmlFromPlainText(subject, text, orgName) {
-  const safeOrg = escapeHtml((orgName || "Ekklesphere Church").trim());
-  const safeSubject = escapeHtml(subject.trim());
-  const paragraphs = text.split(/\n{2,}/).map((block) => `<p style="margin:0 0 12px 0;line-height:1.6;">${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`).join("");
-  return `<!DOCTYPE html>
-<html>
-<body style="margin:0;padding:24px;background:#F6F7FC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1D1B3A;">
-  <div style="max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E9EBF5;border-radius:16px;padding:24px;">
-    <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#6D5CF2;margin-bottom:8px;">${safeOrg}</div>
-    <h2 style="margin:0 0 16px 0;font-size:18px;line-height:1.3;color:#1D1B3A;">${safeSubject}</h2>
-    <div style="font-size:14px;color:#3E4259;">${paragraphs}</div>
-    <hr style="border:none;border-top:1px solid #E9EBF5;margin:20px 0 12px 0;" />
-    <div style="font-size:11px;color:#666A86;">Sent via ${safeOrg} pastoral &amp; congregational communications.</div>
-  </div>
-</body>
-</html>`;
-}
-function normalizeArkeselPhone(raw) {
-  const value = String(raw || "").trim();
-  if (!value) return null;
-  let digits = value.replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.startsWith("00")) {
-    digits = digits.slice(2);
-  }
-  if (digits.startsWith("0") && digits.length === 10) {
-    digits = `233${digits.slice(1)}`;
-  }
-  if (digits.length < 9 || digits.length > 15) {
-    return null;
-  }
-  return digits;
-}
-function getCommunicationGatewayStatus() {
-  const arkeselKey = (process.env.ARKESEL_API_KEY || "").trim();
-  const resendKey = (process.env.RESEND_API_KEY || "").trim();
-  const defaultSmsSenderId = ((process.env.ARKESEL_SENDER_ID || "EKKLESPHERE").trim() || "EKKLESPHERE").replace(/[^A-Za-z0-9 ]/g, "").toUpperCase().slice(0, 11);
-  const defaultFromEmail = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim() || "onboarding@resend.dev";
-  const defaultFromName = (process.env.RESEND_FROM_NAME || "Ekklesphere Church").trim() || "Ekklesphere Church";
-  return {
-    arkeselConfigured: Boolean(arkeselKey),
-    resendConfigured: Boolean(resendKey),
-    defaultSmsSenderId,
-    defaultFromEmail,
-    defaultFromName
-  };
-}
-async function sendArkeselSms(params) {
-  const status = getCommunicationGatewayStatus();
-  const apiKey = (params.apiKey ?? process.env.ARKESEL_API_KEY ?? "").trim();
-  const cleanSenderId = (params.senderId || status.defaultSmsSenderId || "EKKLESPHERE").trim().replace(/[^A-Za-z0-9 ]/g, "").toUpperCase().slice(0, 11);
-  const uniqueRecipients = /* @__PURE__ */ new Set();
-  let invalidCount = 0;
-  for (const raw of params.recipients) {
-    const normalized = normalizeArkeselPhone(raw);
-    if (normalized) {
-      uniqueRecipients.add(normalized);
-    } else if (String(raw || "").trim()) {
-      invalidCount++;
-    }
-  }
-  const recipients = Array.from(uniqueRecipients);
-  if (recipients.length === 0) {
-    return {
-      ok: false,
-      configured: Boolean(apiKey),
-      provider: "Arkesel SMS",
-      senderId: cleanSenderId,
-      sentCount: 0,
-      invalidCount,
-      recipients: [],
-      message: "No valid recipient phone numbers were found to send SMS.",
-      error: "NO_VALID_RECIPIENTS"
-    };
-  }
-  if (!apiKey) {
-    return {
-      ok: false,
-      configured: false,
-      provider: "Arkesel SMS",
-      senderId: cleanSenderId,
-      sentCount: 0,
-      invalidCount,
-      recipients,
-      message: "Arkesel API key is not configured on the server (set ARKESEL_API_KEY in environment secrets).",
-      error: "ARKESEL_NOT_CONFIGURED"
-    };
-  }
-  const doFetch = params.fetchImpl || fetch;
-  const bodyPayload = {
-    sender: cleanSenderId,
-    message: params.message,
-    recipients
-  };
-  if (params.sandbox) {
-    bodyPayload.sandbox = true;
-  }
-  try {
-    const resp = await doFetch("https://sms.arkesel.com/api/v2/sms/send", {
-      method: "POST",
-      headers: {
-        "api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "application/json"
-      },
-      body: JSON.stringify(bodyPayload)
-    });
-    const data = await resp.json().catch(() => ({}));
-    const apiOk = resp.ok && (data?.status === "success" || data?.code === "200" || data?.data !== void 0 || !data?.status);
-    if (!apiOk) {
-      const errMsg = data?.message || data?.error || `Arkesel SMS request failed with HTTP ${resp.status}.`;
-      return {
-        ok: false,
-        configured: true,
-        provider: "Arkesel SMS",
-        senderId: cleanSenderId,
-        sentCount: 0,
-        invalidCount,
-        recipients,
-        message: errMsg,
-        providerResponse: data,
-        error: "ARKESEL_API_ERROR"
-      };
-    }
-    return {
-      ok: true,
-      configured: true,
-      provider: "Arkesel SMS",
-      senderId: cleanSenderId,
-      sentCount: recipients.length,
-      invalidCount,
-      recipients,
-      message: `SMS delivered via Arkesel to ${recipients.length} recipient${recipients.length === 1 ? "" : "s"} (Sender ID: ${cleanSenderId}).`,
-      providerResponse: data
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      configured: true,
-      provider: "Arkesel SMS",
-      senderId: cleanSenderId,
-      sentCount: 0,
-      invalidCount,
-      recipients,
-      message: err?.message || "Network error reaching Arkesel SMS API.",
-      error: "ARKESEL_NETWORK_ERROR"
-    };
-  }
-}
-async function sendResendEmail(params) {
-  const status = getCommunicationGatewayStatus();
-  const apiKey = (params.apiKey ?? process.env.RESEND_API_KEY ?? "").trim();
-  const cleanFromEmail = (params.fromEmail || status.defaultFromEmail || "onboarding@resend.dev").trim();
-  const cleanFromName = (params.fromName || params.organizationName || status.defaultFromName).trim();
-  const fromHeader = cleanFromName ? `${cleanFromName} <${cleanFromEmail}>` : cleanFromEmail;
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const recipients = Array.from(
-    new Set(
-      params.to.map((e) => String(e || "").trim().toLowerCase()).filter((e) => emailRegex.test(e))
-    )
-  );
-  if (recipients.length === 0) {
-    return {
-      ok: false,
-      configured: Boolean(apiKey),
-      provider: "Resend Email",
-      from: fromHeader,
-      sentCount: 0,
-      failedCount: 0,
-      emailIds: [],
-      message: "No valid recipient email addresses were found.",
-      error: "NO_VALID_EMAIL_RECIPIENTS"
-    };
-  }
-  if (!apiKey) {
-    return {
-      ok: false,
-      configured: false,
-      provider: "Resend Email",
-      from: fromHeader,
-      sentCount: 0,
-      failedCount: recipients.length,
-      emailIds: [],
-      message: "Resend API key is not configured on the server (set RESEND_API_KEY in environment secrets).",
-      error: "RESEND_NOT_CONFIGURED"
-    };
-  }
-  const doFetch = params.fetchImpl || fetch;
-  const htmlBody = params.html || buildHtmlFromPlainText(params.subject, params.text, params.organizationName);
-  const emailIds = [];
-  let failedCount = 0;
-  let lastError = "";
-  try {
-    if (recipients.length === 1) {
-      const resp = await doFetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
-        body: JSON.stringify({
-          from: fromHeader,
-          to: [recipients[0]],
-          subject: params.subject,
-          text: params.text,
-          html: htmlBody,
-          ...params.replyTo ? { reply_to: params.replyTo } : {}
-        })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        return {
-          ok: false,
-          configured: true,
-          provider: "Resend Email",
-          from: fromHeader,
-          sentCount: 0,
-          failedCount: 1,
-          emailIds: [],
-          message: data?.message || data?.error || `Resend Email failed with HTTP ${resp.status}.`,
-          error: "RESEND_API_ERROR"
-        };
-      }
-      if (data?.id) emailIds.push(String(data.id));
-      return {
-        ok: true,
-        configured: true,
-        provider: "Resend Email",
-        from: fromHeader,
-        sentCount: 1,
-        failedCount: 0,
-        emailIds,
-        message: `Email sent via Resend to ${recipients[0]}.`
-      };
-    }
-    const chunkSize = 50;
-    for (let i = 0; i < recipients.length; i += chunkSize) {
-      const batch = recipients.slice(i, i + chunkSize).map((addr) => ({
-        from: fromHeader,
-        to: [addr],
-        subject: params.subject,
-        text: params.text,
-        html: htmlBody,
-        ...params.replyTo ? { reply_to: params.replyTo } : {}
-      }));
-      const resp = await doFetch("https://api.resend.com/emails/batch", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
-        body: JSON.stringify(batch)
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        failedCount += batch.length;
-        lastError = data?.message || data?.error || `Resend batch HTTP ${resp.status}`;
-      } else if (Array.isArray(data?.data)) {
-        for (const item of data.data) {
-          if (item?.id) emailIds.push(String(item.id));
-        }
-      }
-    }
-    const sentCount = recipients.length - failedCount;
-    if (sentCount <= 0) {
-      return {
-        ok: false,
-        configured: true,
-        provider: "Resend Email",
-        from: fromHeader,
-        sentCount: 0,
-        failedCount,
-        emailIds,
-        message: lastError || "Resend could not deliver the broadcast emails.",
-        error: "RESEND_API_ERROR"
-      };
-    }
-    return {
-      ok: true,
-      configured: true,
-      provider: "Resend Email",
-      from: fromHeader,
-      sentCount,
-      failedCount,
-      emailIds,
-      message: `Email dispatched via Resend to ${sentCount} recipient${sentCount === 1 ? "" : "s"}${failedCount > 0 ? ` (${failedCount} failed)` : ""}.`
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      configured: true,
-      provider: "Resend Email",
-      from: fromHeader,
-      sentCount: 0,
-      failedCount: recipients.length,
-      emailIds: [],
-      message: err?.message || "Network error reaching Resend Email API.",
-      error: "RESEND_NETWORK_ERROR"
-    };
-  }
-}
-
-// src/server/consoleRouter.ts
 var consoleRouter = import_express.default.Router();
 function clientIp(req) {
   const xff = req.headers["x-forwarded-for"];
@@ -13046,7 +14698,7 @@ consoleRouter.patch("/profile/credentials", async (req, res) => {
 });
 
 // src/server/mediaProxy.ts
-var import_crypto4 = require("crypto");
+var import_crypto5 = require("crypto");
 var import_promises = __toESM(require("dns/promises"), 1);
 var import_net = __toESM(require("net"), 1);
 
@@ -13443,7 +15095,7 @@ async function optimizeProxiedImageBuffer(buffer, contentType, options) {
   }
 }
 function computeEtag(buffer) {
-  const hash = (0, import_crypto4.createHash)("sha1").update(buffer).digest("hex").slice(0, 20);
+  const hash = (0, import_crypto5.createHash)("sha1").update(buffer).digest("hex").slice(0, 20);
   return `"${hash}"`;
 }
 async function proxyExternalImage(rawUrl, options = {}) {
@@ -13558,7 +15210,14 @@ var __dirname = import_path.default.dirname(__filename);
 var PORT = 3e3;
 var app = (0, import_express2.default)();
 app.set("trust proxy", 1);
-app.use(import_express2.default.json({ limit: "2mb" }));
+app.use(
+  import_express2.default.json({
+    limit: "2mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
 app.use(expressOrganizationMiddleware);
 app.use("/api/console", consoleRouter);
 function getClientIpKey(req) {
@@ -13720,6 +15379,64 @@ function requireAuthRole(...allowedRoles) {
       });
     });
   };
+}
+async function resolveRequestOversightAccess(req) {
+  if (!req.user) return false;
+  if (hasPastoralOversightAccess(req.user)) return true;
+  if (!req.user.designation && req.organizationId) {
+    const resolved = await platformStore.resolveUserDesignation(
+      req.organizationId,
+      req.user.id,
+      req.user.email
+    );
+    if (resolved) {
+      req.user.designation = resolved;
+      return hasPastoralOversightAccess(req.user);
+    }
+  }
+  return false;
+}
+async function requirePastoralOversight(req, res, next) {
+  await requireUser(req, res, async () => {
+    await enforceOrganizationScope(req, res, async () => {
+      const allowed = await resolveRequestOversightAccess(req);
+      if (!allowed) {
+        res.status(403).json({
+          error: "forbidden",
+          message: "Access denied. Pastoral Care Monitor is restricted to Administrator, Pastor, Presiding Elder, and Associate Pastor."
+        });
+        return;
+      }
+      next();
+    });
+  });
+}
+async function requireFollowupAccess(req, res, next) {
+  await requireUser(req, res, async () => {
+    await enforceOrganizationScope(req, res, async () => {
+      const baseAllowed = [
+        "admin",
+        "pastor",
+        "usher",
+        "group_leader",
+        "super_admin",
+        "creator"
+      ];
+      if (isCreatorClaim(req.user) || baseAllowed.includes(req.user.role)) {
+        next();
+        return;
+      }
+      const oversightAllowed = await resolveRequestOversightAccess(req);
+      if (oversightAllowed) {
+        next();
+        return;
+      }
+      res.status(403).json({
+        error: "forbidden",
+        message: `Access denied. Role '${req.user.role}' does not possess pastoral follow-up permissions.`
+      });
+    });
+  });
 }
 app.all("/api/dev/preview-session", (_req, res) => {
   return res.status(404).json({
@@ -14130,7 +15847,7 @@ app.post(
     const providedSecret = ((typeof headerSecretRaw === "string" ? headerSecretRaw : "") || parsed.data.bootstrapSecret || "").trim();
     const expectedBuf = Buffer.from(expectedSecret, "utf8");
     const providedBuf = Buffer.from(providedSecret, "utf8");
-    const matches = providedBuf.length === expectedBuf.length && (0, import_crypto5.timingSafeEqual)(providedBuf, expectedBuf);
+    const matches = providedBuf.length === expectedBuf.length && (0, import_crypto6.timingSafeEqual)(providedBuf, expectedBuf);
     if (!matches) {
       return res.status(403).json({
         error: "forbidden",
@@ -14661,6 +16378,10 @@ var SystemSettingsPatchSchema = import_zod2.z.object({
   absenteeThresholdServices: import_zod2.z.number().min(1).max(12).optional(),
   firstTimerFollowupHours: import_zod2.z.number().min(1).max(336).optional(),
   autoAssignCellLeaders: import_zod2.z.boolean().optional(),
+  autoMessageAbsentMembers: import_zod2.z.boolean().optional(),
+  absentMemberMessageChannel: import_zod2.z.enum(["sms", "email", "sms_and_email"]).optional(),
+  absentMemberMessageTemplate: import_zod2.z.string().trim().max(1e3).optional(),
+  autoSendLeaderCareReminders: import_zod2.z.boolean().optional(),
   requireExplicitConsent: import_zod2.z.boolean().optional(),
   auditLogRetentionDays: import_zod2.z.number().min(7).max(3650).optional(),
   sessionTimeoutMinutes: import_zod2.z.number().min(0).max(480).optional(),
@@ -14858,6 +16579,123 @@ app.post(
     }
   }
 );
+var TenantGatewayKeysPatchSchema = import_zod2.z.object({
+  arkeselApiKey: import_zod2.z.string().trim().max(300).optional(),
+  clearArkeselApiKey: import_zod2.z.boolean().optional(),
+  paystackPublicKey: import_zod2.z.string().trim().max(300).refine(
+    (val) => !val || /^pk_(live|test)_[a-zA-Z0-9]+$/.test(val) || val.length >= 8,
+    "Paystack Public Key should start with pk_live_ or pk_test_."
+  ).optional(),
+  paystackSecretKey: import_zod2.z.string().trim().max(300).refine(
+    (val) => !val || /^sk_(live|test)_[a-zA-Z0-9]+$/.test(val) || val.length >= 8,
+    "Paystack Secret Key should start with sk_live_ or sk_test_."
+  ).optional(),
+  clearPaystackKeys: import_zod2.z.boolean().optional()
+});
+app.get(
+  "/api/system-settings/gateways",
+  requireAuthRole("admin", "finance", "super_admin", "creator"),
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const summary = await platformStore.getTenantGatewayConfigSummary(req.organizationId);
+      return res.status(200).json({
+        success: true,
+        gateways: summary
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "gateways_fetch_failed",
+        message: err?.message || "Failed to load tenant gateway configuration."
+      });
+    }
+  }
+);
+app.put(
+  "/api/system-settings/gateways",
+  requireAuthRole("admin", "super_admin", "creator"),
+  requireActiveLicense,
+  async (req, res) => {
+    const parsed = TenantGatewayKeysPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: parsed.error.issues[0]?.message || "Invalid gateway API key payload."
+      });
+    }
+    try {
+      const summary = await platformStore.saveTenantGatewayKeys(req.organizationId, parsed.data, {
+        id: req.user?.id,
+        email: req.user?.email,
+        role: req.user?.role,
+        name: req.user?.name,
+        ipAddress: getClientIpKey(req)
+      });
+      return res.status(200).json({
+        success: true,
+        gateways: summary,
+        message: "Encrypted tenant gateway credentials saved successfully."
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "gateways_save_failed",
+        message: err?.message || "Failed to save tenant gateway credentials."
+      });
+    }
+  }
+);
+app.post(
+  "/api/system-settings/test-paystack",
+  requireAuthRole("admin", "finance", "super_admin", "creator"),
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const resolved = await platformStore.getResolvedPaystackKeys(req.organizationId);
+      const result = await testPaystackConnection({
+        secretKey: resolved.secretKey,
+        publicKey: resolved.publicKey
+      });
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || "admin@ekklesphere.church",
+        actorRole: req.user?.role || "admin",
+        action: result.ok ? "paystack.connection_verified" : "paystack.connection_failed",
+        targetType: "payment_gateway",
+        targetId: req.organizationId,
+        metadata: {
+          mode: result.mode,
+          source: resolved.source,
+          ok: result.ok
+        },
+        ipAddress: getClientIpKey(req)
+      });
+      if (!result.ok) {
+        return res.status(result.configured ? 502 : 400).json({
+          success: false,
+          configured: result.configured,
+          mode: result.mode,
+          source: resolved.source,
+          error: result.error || "paystack_test_failed",
+          message: result.message
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        mode: result.mode,
+        source: resolved.source,
+        message: result.message
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.code || "paystack_test_error",
+        message: err?.message || "Could not verify Paystack connection."
+      });
+    }
+  }
+);
 app.post(
   "/api/system-settings/test-sms",
   requireAuthRole("admin", "pastor", "super_admin", "creator"),
@@ -14872,7 +16710,8 @@ app.post(
     }
     const senderId = parsed.data.senderId.toUpperCase();
     const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
-    const gatewayStatus = getCommunicationGatewayStatus();
+    const resolvedArkesel = await platformStore.getResolvedArkeselApiKey(req.organizationId);
+    const arkeselConfigured = Boolean(resolvedArkesel.apiKey);
     const recipientPhone = parsed.data.recipientPhone?.trim();
     const isArkesel = parsed.data.provider.toLowerCase().includes("arkesel");
     let liveResult = null;
@@ -14880,6 +16719,7 @@ app.post(
       const settingsRes = await platformStore.getSystemSettings(req.organizationId).catch(() => null);
       const churchLabel = settingsRes?.settings?.churchName || "Ekklesphere Church";
       liveResult = await sendArkeselSms({
+        apiKey: resolvedArkesel.apiKey,
         senderId,
         recipients: [recipientPhone],
         message: parsed.data.message || `Test SMS from ${churchLabel} via Arkesel (${senderId}) confirmed at ${dispatchedAt.slice(11, 16)} UTC.`
@@ -14906,7 +16746,8 @@ app.post(
       metadata: {
         provider: parsed.data.provider,
         senderId,
-        arkeselConfigured: gatewayStatus.arkeselConfigured,
+        arkeselConfigured,
+        arkeselSource: resolvedArkesel.source,
         recipientCount: liveResult ? liveResult.sentCount : 0,
         dispatchedAt
       },
@@ -14915,11 +16756,12 @@ app.post(
     return res.status(200).json({
       success: true,
       mode: liveResult?.ok ? "live" : "validated",
-      configured: gatewayStatus.arkeselConfigured,
+      configured: arkeselConfigured,
+      source: resolvedArkesel.source,
       provider: parsed.data.provider,
       senderId,
       dispatchedAt,
-      message: liveResult?.ok ? liveResult.message : `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).${isArkesel && !gatewayStatus.arkeselConfigured ? " Set ARKESEL_API_KEY on the server to transmit live SMS." : ""}`
+      message: liveResult?.ok ? liveResult.message : `Test SMS payload validated via ${parsed.data.provider} (Sender ID: ${senderId}).${isArkesel && !arkeselConfigured ? " Save your church Arkesel API key in SMS & Paystack Gateways to transmit live SMS." : ""}`
     });
   }
 );
@@ -14991,12 +16833,23 @@ ${churchName}`;
 );
 app.get(
   "/api/communications/status",
-  requireAuthRole("admin", "pastor", "usher", "group_leader", "super_admin", "creator"),
+  requireAuthRole("admin", "pastor", "usher", "member", "group_leader", "finance", "super_admin", "creator"),
   requireActiveLicense,
-  async (_req, res) => {
+  async (req, res) => {
+    const baseStatus = getCommunicationGatewayStatus();
+    const tenantSummary = await platformStore.getTenantGatewayConfigSummary(req.organizationId);
+    const isAdminOrFinance = ["admin", "finance", "super_admin", "creator"].includes(req.user.role);
     return res.status(200).json({
       success: true,
-      ...getCommunicationGatewayStatus()
+      ...baseStatus,
+      arkeselConfigured: tenantSummary.arkeselConfigured,
+      arkeselSource: tenantSummary.arkeselSource,
+      arkeselKeyMasked: isAdminOrFinance ? tenantSummary.arkeselKeyMasked : null,
+      paystackConfigured: tenantSummary.paystackConfigured,
+      paystackSource: tenantSummary.paystackSource,
+      paystackPublicKey: tenantSummary.paystackPublicKey,
+      paystackSecretMasked: isAdminOrFinance ? tenantSummary.paystackSecretMasked : null,
+      paystackMode: tenantSummary.paystackMode
     });
   }
 );
@@ -15014,9 +16867,10 @@ app.post(
     }
     try {
       const orgId = req.organizationId;
-      const [orgMembers, settingsRes] = await Promise.all([
+      const [orgMembers, settingsRes, resolvedArkesel] = await Promise.all([
         platformStore.getMembers(orgId),
-        platformStore.getSystemSettings(orgId)
+        platformStore.getSystemSettings(orgId),
+        platformStore.getResolvedArkeselApiKey(orgId)
       ]);
       const settings = settingsRes.settings;
       const threshold = Math.max(1, Number(settings.absenteeThresholdServices) || 2);
@@ -15037,6 +16891,7 @@ app.post(
         const phones = targetMembers.map((m) => String(m.phoneE164 || m.phoneNumber || "").trim()).filter(Boolean);
         const smsText = subject && !body.startsWith(subject) ? `${subject}: ${body}` : body;
         const smsResult = await sendArkeselSms({
+          apiKey: resolvedArkesel.apiKey,
           senderId: settings.smsSenderId || "EKKLESPHERE",
           recipients: phones,
           message: smsText
@@ -15062,6 +16917,7 @@ app.post(
           metadata: {
             provider: "Arkesel SMS",
             senderId: smsResult.senderId,
+            keySource: resolvedArkesel.source,
             audience,
             sentCount: smsResult.sentCount,
             invalidCount: smsResult.invalidCount
@@ -16387,7 +18243,22 @@ var handleUpdateEvent = async (req, res) => {
   }
   try {
     const updated = await platformStore.updateEvent(req.organizationId, req.params.id, updates);
-    return res.status(200).json(normalizeEventRow(updated));
+    let absenceSweep = null;
+    if (updates.status === "closed") {
+      try {
+        absenceSweep = await platformStore.processServiceAbsenceSweep(req.organizationId, {
+          eventId: req.params.id,
+          triggerSource: "service_closed",
+          actorName: req.user?.name
+        });
+      } catch (sweepErr) {
+        console.warn("[Ekklesphere Pastoral Care] Service close absence sweep warning:", sweepErr?.message || sweepErr);
+      }
+    }
+    return res.status(200).json({
+      ...normalizeEventRow(updated),
+      ...absenceSweep ? { absenceSweep } : {}
+    });
   } catch (err) {
     return res.status(err?.status || 500).json({
       error: err?.code || "event_update_failed",
@@ -17108,9 +18979,11 @@ app.get("/api/auth/me", requireUser, enforceOrganizationScope, async (req, res) 
     const sessionTimeoutMinutes = await platformStore.getOrganizationSessionTimeoutMinutes(
       req.organizationId
     );
+    const resolvedDesignation = req.user.designation || (memberProfile?.designation || memberProfile?.officerName ? String(memberProfile.designation || memberProfile.officerName).trim() : void 0) || (req.organizationId ? await platformStore.resolveUserDesignation(req.organizationId, req.user.id, req.user.email) : void 0);
     return res.status(200).json({
       user: {
         ...req.user,
+        ...resolvedDesignation ? { designation: resolvedDesignation } : {},
         organizationName: org?.name || void 0,
         avatar: memberProfile?.imageUrl || void 0,
         mustChangePassword: credStatus.mustChangePassword
@@ -17252,6 +19125,233 @@ app.post(
     }
   }
 );
+var PaystackInitializeSchema = import_zod2.z.object({
+  amountGhs: import_zod2.z.number().positive("Amount must be greater than zero."),
+  fundName: import_zod2.z.string().trim().min(1).max(120).default("Tithe"),
+  fundId: import_zod2.z.string().trim().max(120).optional(),
+  provider: import_zod2.z.enum(["MTN MoMo", "Telecel Cash", "Card"]).default("MTN MoMo"),
+  email: import_zod2.z.string().trim().email().optional(),
+  callbackUrl: import_zod2.z.string().trim().url().optional()
+});
+var PaystackVerifySchema = import_zod2.z.object({
+  reference: import_zod2.z.string().trim().min(3, "Transaction reference is required.").max(140)
+});
+app.get(
+  "/api/giving/paystack/config",
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const [summary, settingsRes] = await Promise.all([
+        platformStore.getTenantGatewayConfigSummary(req.organizationId),
+        platformStore.getSystemSettings(req.organizationId).catch(() => null)
+      ]);
+      const currencyRaw = settingsRes?.settings?.currency || "GHS";
+      const currencyCode = currencyRaw.split(" ")[0].toUpperCase() || "GHS";
+      return res.status(200).json({
+        success: true,
+        configured: summary.paystackConfigured,
+        publicKey: summary.paystackPublicKey,
+        mode: summary.paystackMode,
+        source: summary.paystackSource,
+        currency: currencyCode
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "paystack_config_failed",
+        message: err?.message || "Could not load Paystack giving config."
+      });
+    }
+  }
+);
+app.post(
+  "/api/giving/paystack/initialize",
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req, res) => {
+    const parsed = PaystackInitializeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: parsed.error.issues[0]?.message || "Invalid Paystack initialization payload."
+      });
+    }
+    try {
+      const orgId = req.organizationId;
+      const [resolvedKeys, profile, settingsRes] = await Promise.all([
+        platformStore.getResolvedPaystackKeys(orgId),
+        platformStore.getMemberProfileForSession(orgId, req.user.id, req.user.email),
+        platformStore.getSystemSettings(orgId).catch(() => null)
+      ]);
+      const amountMinor = Math.max(100, Math.round(parsed.data.amountGhs * 100));
+      const currencyRaw = settingsRes?.settings?.currency || "GHS";
+      const currencyCode = currencyRaw.split(" ")[0].toUpperCase() || "GHS";
+      const reference = `EKK-${orgId.slice(0, 6).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+      const payerEmail = parsed.data.email || profile?.email || req.user?.email || `giving+${reference.toLowerCase()}@ekklesphere.church`;
+      const personId = profile?.id ? String(profile.id) : req.user.id;
+      const personName = profile ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim() : req.user.name || req.user.email || "Member";
+      const initRes = await initializePaystackTransaction({
+        secretKey: resolvedKeys.secretKey,
+        publicKey: resolvedKeys.publicKey,
+        email: payerEmail,
+        amountMinor,
+        currency: currencyCode,
+        reference,
+        callbackUrl: parsed.data.callbackUrl,
+        channels: parsed.data.provider === "Card" ? ["card"] : ["mobile_money", "card"],
+        metadata: {
+          organizationId: orgId,
+          personId,
+          personName,
+          fundName: parsed.data.fundName,
+          provider: parsed.data.provider
+        }
+      });
+      if (!initRes.ok) {
+        return res.status(initRes.configured ? 502 : 400).json({
+          success: false,
+          configured: initRes.configured,
+          error: initRes.error || "paystack_init_failed",
+          message: initRes.message
+        });
+      }
+      const donation = await platformStore.createDonation(orgId, {
+        personId,
+        personName,
+        fundName: parsed.data.fundName,
+        fundId: parsed.data.fundId,
+        amountMinor,
+        method: parsed.data.provider === "Card" ? "card" : "momo",
+        provider: parsed.data.provider,
+        status: "pending",
+        reference: initRes.reference,
+        gatewayProvider: "paystack"
+      });
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        mode: initRes.mode,
+        publicKey: resolvedKeys.publicKey,
+        authorizationUrl: initRes.authorizationUrl,
+        accessCode: initRes.accessCode,
+        reference: initRes.reference,
+        donation
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "paystack_initialize_error",
+        message: err?.message || "Failed to initialize Paystack giving checkout."
+      });
+    }
+  }
+);
+app.post(
+  "/api/giving/paystack/verify",
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req, res) => {
+    const parsed = PaystackVerifySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: parsed.error.issues[0]?.message || "Paystack transaction reference is required."
+      });
+    }
+    try {
+      const orgId = req.organizationId;
+      const resolvedKeys = await platformStore.getResolvedPaystackKeys(orgId);
+      const verifyRes = await verifyPaystackTransaction({
+        secretKey: resolvedKeys.secretKey,
+        reference: parsed.data.reference
+      });
+      if (!verifyRes.ok) {
+        return res.status(verifyRes.error === "PAYSTACK_NOT_CONFIGURED" ? 400 : 502).json({
+          success: false,
+          verified: false,
+          error: verifyRes.error || "paystack_verify_failed",
+          message: verifyRes.message
+        });
+      }
+      const donation = await platformStore.updateDonationStatusByReference(
+        orgId,
+        verifyRes.reference,
+        verifyRes.status,
+        {
+          paidAt: verifyRes.paidAt || (/* @__PURE__ */ new Date()).toISOString(),
+          gatewayMetadata: {
+            channel: verifyRes.channel,
+            gatewayResponse: verifyRes.gatewayResponse,
+            amountMinor: verifyRes.amountMinor
+          }
+        }
+      );
+      return res.status(200).json({
+        success: true,
+        verified: verifyRes.verified,
+        status: verifyRes.status,
+        reference: verifyRes.reference,
+        donation,
+        message: verifyRes.message
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "paystack_verify_error",
+        message: err?.message || "Failed to verify Paystack transaction."
+      });
+    }
+  }
+);
+app.post(
+  "/api/giving/webhooks/paystack/:organizationId?",
+  async (req, res) => {
+    try {
+      const paramOrg = req.params.organizationId?.trim().toLowerCase();
+      const bodyOrg = typeof req.body?.data?.metadata?.organizationId === "string" ? req.body.data.metadata.organizationId.trim().toLowerCase() : "";
+      const orgId = paramOrg || bodyOrg;
+      if (!orgId) {
+        return res.status(400).json({
+          error: "organization_required",
+          message: "Organization ID is required on webhook path or transaction metadata."
+        });
+      }
+      const resolvedKeys = await platformStore.getResolvedPaystackKeys(orgId);
+      const signature = req.headers["x-paystack-signature"];
+      const rawBody = req.rawBody || JSON.stringify(req.body || {});
+      const sigHeader = Array.isArray(signature) ? signature[0] : signature;
+      if (!resolvedKeys.secretKey || !verifyPaystackWebhookSignature({
+        secretKey: resolvedKeys.secretKey,
+        rawBody,
+        signature: sigHeader
+      })) {
+        return res.status(401).json({
+          error: "invalid_webhook_signature",
+          message: "Invalid Paystack webhook signature."
+        });
+      }
+      const eventType = String(req.body?.event || "").toLowerCase();
+      const reference = String(req.body?.data?.reference || "").trim();
+      if (reference && (eventType === "charge.success" || eventType === "charge.failed")) {
+        const nextStatus = eventType === "charge.success" ? "paid" : "failed";
+        await platformStore.updateDonationStatusByReference(orgId, reference, nextStatus, {
+          paidAt: req.body?.data?.paid_at || (/* @__PURE__ */ new Date()).toISOString(),
+          gatewayMetadata: {
+            webhookEvent: eventType,
+            channel: req.body?.data?.channel
+          }
+        });
+      }
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      return res.status(500).json({
+        error: "webhook_processing_error",
+        message: err?.message || "Error processing Paystack webhook."
+      });
+    }
+  }
+);
 var createFollowupSchema = import_zod2.z.object({
   personId: import_zod2.z.string().trim().min(1, "Member ID is required"),
   personName: import_zod2.z.string().trim().max(150).optional(),
@@ -17263,7 +19363,10 @@ var createFollowupSchema = import_zod2.z.object({
   assignedToMemberId: import_zod2.z.string().trim().max(120).optional(),
   assignedToRole: import_zod2.z.string().trim().max(120).optional(),
   assignedToPhone: import_zod2.z.string().trim().max(40).optional(),
+  assignedToEmail: import_zod2.z.string().trim().max(160).optional(),
   autoAssigned: import_zod2.z.boolean().optional(),
+  serviceEventId: import_zod2.z.string().trim().max(120).optional(),
+  serviceName: import_zod2.z.string().trim().max(200).optional(),
   dueOn: import_zod2.z.string().trim().max(100).optional(),
   notes: import_zod2.z.string().trim().max(1e3).optional()
 });
@@ -17276,9 +19379,17 @@ var updateFollowupSchema = import_zod2.z.object({
   assignedToName: import_zod2.z.string().trim().max(150).optional(),
   notes: import_zod2.z.string().trim().max(1e3).optional()
 });
+var runAbsenceSweepSchema = import_zod2.z.object({
+  eventId: import_zod2.z.string().trim().max(120).optional(),
+  force: import_zod2.z.boolean().optional()
+});
+var sendLeaderRemindersSchema = import_zod2.z.object({
+  taskId: import_zod2.z.string().trim().max(120).optional(),
+  leaderName: import_zod2.z.string().trim().max(160).optional()
+});
 app.get(
   "/api/followup-tasks",
-  requireAuthRole("admin", "pastor", "usher", "group_leader", "super_admin", "creator"),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req, res) => {
     try {
@@ -17294,7 +19405,7 @@ app.get(
 );
 app.post(
   "/api/followup-tasks",
-  requireAuthRole("admin", "pastor", "usher", "group_leader", "super_admin", "creator"),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req, res) => {
     const parsed = createFollowupSchema.safeParse(req.body || {});
@@ -17305,8 +19416,23 @@ app.post(
       });
     }
     try {
-      const task = await platformStore.createFollowupTask(req.organizationId, parsed.data);
-      return res.status(201).json({ task });
+      let task = await platformStore.createFollowupTask(req.organizationId, parsed.data);
+      let reminderDispatches = 0;
+      try {
+        const settingsRes = await platformStore.getSystemSettings(req.organizationId);
+        if (settingsRes.settings.autoSendLeaderCareReminders !== false) {
+          const remRes = await platformStore.sendPendingLeaderCareReminders(req.organizationId, {
+            taskId: task.id,
+            actorName: req.user?.name
+          });
+          reminderDispatches = remRes.sentCount;
+          const updatedTask = remRes.allTasks.find((t) => t.id === task.id);
+          if (updatedTask) task = updatedTask;
+        }
+      } catch (remErr) {
+        console.warn("[Ekklesphere Pastoral Care] Leader reminder dispatch warning:", remErr?.message || remErr);
+      }
+      return res.status(201).json({ task, reminderSent: reminderDispatches > 0 });
     } catch (err) {
       return res.status(err?.status || 500).json({
         error: err?.code || "followup_create_failed",
@@ -17317,7 +19443,7 @@ app.post(
 );
 app.post(
   "/api/followup-tasks/auto-assign-absentees",
-  requireAuthRole("admin", "pastor", "usher", "group_leader", "super_admin", "creator"),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req, res) => {
     const parsed = autoAssignAbsenteesSchema.safeParse(req.body || {});
@@ -17362,7 +19488,7 @@ app.post(
 );
 app.patch(
   "/api/followup-tasks/:id",
-  requireAuthRole("admin", "pastor", "usher", "group_leader", "super_admin", "creator"),
+  requireFollowupAccess,
   requireActiveLicense,
   async (req, res) => {
     const parsed = updateFollowupSchema.safeParse(req.body || {});
@@ -17387,9 +19513,45 @@ app.patch(
     }
   }
 );
+app.post(
+  "/api/followup-tasks/:id/acknowledge",
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const hasOversight = await resolveRequestOversightAccess(req);
+      const isLeaderOrUsher = ["group_leader", "usher"].includes(req.user.role);
+      if (!hasOversight && !isLeaderOrUsher) {
+        const myReminders = await platformStore.listLeaderAssignedReminders(req.organizationId, {
+          userId: req.user.id,
+          name: req.user.name,
+          email: req.user.email
+        });
+        const ownsTask = myReminders.tasks.some((t) => t.id === req.params.id);
+        if (!ownsTask) {
+          return res.status(403).json({
+            error: "forbidden",
+            message: "Access denied. Only the assigned leader or pastoral oversight may acknowledge this care task."
+          });
+        }
+      }
+      const task = await platformStore.acknowledgeLeaderCareTask(req.organizationId, req.params.id, {
+        name: req.user?.name,
+        role: req.user?.role
+      });
+      return res.status(200).json({ success: true, task });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "followup_acknowledge_failed",
+        message: err?.message || "Failed to acknowledge pastoral care reminder."
+      });
+    }
+  }
+);
 app.delete(
   "/api/followup-tasks/:id",
-  requireAuthRole("admin", "pastor", "super_admin", "creator"),
+  requirePastoralOversight,
   requireActiveLicense,
   async (req, res) => {
     try {
@@ -17399,6 +19561,137 @@ app.delete(
       return res.status(err?.status || 500).json({
         error: err?.code || "followup_delete_failed",
         message: err?.message || "Failed to delete follow-up task."
+      });
+    }
+  }
+);
+app.get(
+  "/api/pastoral-care/monitor",
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const monitor = await platformStore.getPastoralCareMonitorSummary(req.organizationId);
+      return res.status(200).json({ success: true, monitor });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "pastoral_monitor_failed",
+        message: err?.message || "Failed to load pastoral care monitor."
+      });
+    }
+  }
+);
+app.post(
+  "/api/pastoral-care/run-absence-sweep",
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req, res) => {
+    const parsed = runAbsenceSweepSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: parsed.error.issues[0]?.message || "Invalid absence sweep parameters."
+      });
+    }
+    try {
+      const result = await platformStore.processServiceAbsenceSweep(req.organizationId, {
+        eventId: parsed.data.eventId || void 0,
+        force: Boolean(parsed.data.force),
+        triggerSource: "manual_monitor_sweep",
+        actorName: req.user?.name
+      });
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || "pastor@ekklesphere.church",
+        actorRole: req.user?.role || "pastor",
+        action: "pastoral_care.absence_sweep",
+        targetType: "events",
+        targetId: result.eventId || req.organizationId,
+        metadata: {
+          eventName: result.eventName,
+          absentMembersCount: result.absentMembersCount,
+          memberMessagesSent: result.memberMessagesSent,
+          tasksCreatedCount: result.tasksCreatedCount,
+          leaderRemindersSent: result.leaderRemindersSent,
+          alreadyProcessed: Boolean(result.alreadyProcessed)
+        },
+        ipAddress: getClientIpKey(req)
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "absence_sweep_failed",
+        message: err?.message || "Failed to run absence sweep."
+      });
+    }
+  }
+);
+app.post(
+  "/api/pastoral-care/send-leader-reminders",
+  requirePastoralOversight,
+  requireActiveLicense,
+  async (req, res) => {
+    const parsed = sendLeaderRemindersSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: parsed.error.issues[0]?.message || "Invalid reminder dispatch payload."
+      });
+    }
+    try {
+      const result = await platformStore.sendPendingLeaderCareReminders(req.organizationId, {
+        taskId: parsed.data.taskId || void 0,
+        leaderName: parsed.data.leaderName || void 0,
+        actorName: req.user?.name
+      });
+      await platformStore.appendAuditLog({
+        organizationId: req.organizationId,
+        actorId: req.user?.id || null,
+        actorEmail: req.user?.email || "pastor@ekklesphere.church",
+        actorRole: req.user?.role || "pastor",
+        action: "pastoral_care.leader_reminders_sent",
+        targetType: "followup_tasks",
+        targetId: parsed.data.taskId || req.organizationId,
+        metadata: {
+          sentCount: result.sentCount,
+          attemptedCount: result.attemptedCount,
+          leaderName: parsed.data.leaderName || null
+        },
+        ipAddress: getClientIpKey(req)
+      });
+      return res.status(200).json({
+        success: true,
+        ...result
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "leader_reminders_failed",
+        message: err?.message || "Failed to send pastoral care reminders."
+      });
+    }
+  }
+);
+app.get(
+  "/api/pastoral-care/my-reminders",
+  requireUser,
+  enforceOrganizationScope,
+  requireActiveLicense,
+  async (req, res) => {
+    try {
+      const reminders = await platformStore.listLeaderAssignedReminders(req.organizationId, {
+        userId: req.user.id,
+        name: req.user.name,
+        email: req.user.email
+      });
+      return res.status(200).json({
+        success: true,
+        ...reminders
+      });
+    } catch (err) {
+      return res.status(err?.status || 500).json({
+        error: err?.code || "my_reminders_failed",
+        message: err?.message || "Failed to load leader pastoral reminders."
       });
     }
   }
@@ -17662,7 +19955,10 @@ app.get(
   requireAuthRole("admin", "pastor", "super_admin", "creator"),
   async (req, res) => {
     try {
-      const users = await platformStore.listOrganizationUsers(req.organizationId);
+      const includeTemporaryPasswords = req.user?.role === "admin" || req.user?.role === "super_admin" || req.user?.role === "creator" || Boolean(req.user?.is_creator);
+      const users = await platformStore.listOrganizationUsers(req.organizationId, {
+        includeTemporaryPasswords
+      });
       return res.status(200).json({ users });
     } catch (err) {
       return res.status(err?.status || 500).json({
@@ -17884,5 +20180,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST && !process.env.VERCE
 0 && (module.exports = {
   app,
   getClientIpKey,
-  requireAuthRole
+  requireAuthRole,
+  requireFollowupAccess,
+  requirePastoralOversight
 });
