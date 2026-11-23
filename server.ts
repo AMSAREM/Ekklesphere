@@ -645,6 +645,88 @@ app.post('/api/auth/change-password', authSessionLimiter, requireUser, async (re
   }
 });
 
+// Public non-secret auth discovery endpoint for browser Supabase Auth initialization
+app.get('/api/auth/public-config', (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const publicConfig = platformStore.getPublicSupabaseAuthConfig();
+  return res.status(200).json({
+    supabaseUrl: publicConfig.supabaseUrl,
+    supabaseAnonKey: publicConfig.supabaseAnonKey,
+    googleOAuthConfigured: publicConfig.googleOAuthConfigured,
+    storageBackend: platformStore.storageBackend,
+  });
+});
+
+// Lightweight popup OAuth callback relay so iframe previews can complete Google OAuth PKCE cleanly
+app.get(['/api/auth/google-callback', '/api/auth/google-callback/'], (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Completing Google Sign-In · Ekklesphere</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #F8F9FD; color: #1D1B3A; padding: 24px; }
+      .card { max-width: 380px; width: 100%; background: #ffffff; border: 1px solid #E3E5F2; border-radius: 16px; padding: 24px; text-align: center; box-shadow: 0 10px 30px rgba(29,27,58,0.08); }
+      h1 { font-size: 16px; margin: 0 0 8px; font-weight: 700; }
+      p { font-size: 13px; margin: 0 0 16px; color: #5B5F7A; line-height: 1.5; }
+      button { appearance: none; border: 0; border-radius: 10px; background: #6D5CF2; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 16px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1 id="status-title">Completing Google Sign-In...</h1>
+      <p id="status-copy">Returning your verified session to Ekklesphere.</p>
+      <button id="close-btn" type="button" onclick="window.close()">Close Window</button>
+    </div>
+    <script>
+      (function () {
+        var search = new URLSearchParams(window.location.search || '');
+        var hashRaw = (window.location.hash || '').replace(/^#/, '');
+        var hash = new URLSearchParams(hashRaw);
+        var payload = {
+          type: 'EKKLESPHERE_GOOGLE_OAUTH_CALLBACK',
+          code: search.get('code') || null,
+          accessToken: hash.get('access_token') || null,
+          refreshToken: hash.get('refresh_token') || null,
+          error: search.get('error') || hash.get('error') || null,
+          errorDescription: search.get('error_description') || hash.get('error_description') || null
+        };
+        var sentToOpener = false;
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(payload, window.location.origin);
+            sentToOpener = true;
+          }
+        } catch (e) {}
+        try {
+          if (typeof BroadcastChannel !== 'undefined') {
+            var ch = new BroadcastChannel('ekklesphere_google_oauth');
+            ch.postMessage(payload);
+            ch.close();
+          }
+        } catch (e) {}
+        if (sentToOpener) {
+          document.getElementById('status-title').textContent = payload.error ? 'Google Sign-In Cancelled' : 'Sign-In Verified';
+          document.getElementById('status-copy').textContent = payload.error
+            ? (payload.errorDescription || payload.error)
+            : 'You can return to Ekklesphere now.';
+          setTimeout(function () {
+            try { window.close(); } catch (e) {}
+          }, 150);
+        } else {
+          var target = '/app' + (window.location.search || '') + (window.location.hash || '');
+          window.location.replace(target);
+        }
+      })();
+    </script>
+  </body>
+</html>`;
+  return res.status(200).send(html);
+});
+
 // Token refresh/exchange endpoint: requires a verified Bearer token (Supabase JWT or session JWT).
 // Role and organization_id ALWAYS come from the verified identity / database membership — NEVER from req.body.
 app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request, res: Response) => {
@@ -668,10 +750,26 @@ app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request
       resolvedOrgId = orgs[0]?.id || '';
     }
 
-    const [sessionTimeoutMinutes, org] = await Promise.all([
+    if (!resolvedOrgId && !creator) {
+      return res.status(403).json({
+        error: 'organization_required',
+        code: 'ORGANIZATION_REQUIRED',
+        message:
+          'No active church workspace was found for this Google account. Start a church trial or ask your church administrator to add your email.',
+      });
+    }
+
+    const [sessionTimeoutMinutes, org, memberProfile] = await Promise.all([
       platformStore.getOrganizationSessionTimeoutMinutes(resolvedOrgId),
       resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null),
+      resolvedOrgId
+        ? platformStore.getMemberProfileForSession(resolvedOrgId, verifiedUser.id, verifiedUser.email)
+        : Promise.resolve(null),
     ]);
+    const resolvedAvatar =
+      (memberProfile?.imageUrl && String(memberProfile.imageUrl).trim()) ||
+      verifiedUser.avatar ||
+      undefined;
     const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
       {
         id: verifiedUser.id,
@@ -681,6 +779,7 @@ app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request
         organization_id: resolvedOrgId,
         tenant_id: resolvedOrgId,
         campus_id: verifiedUser.campus_id,
+        avatar: resolvedAvatar,
         is_creator: creator,
         auth_provider: 'session_jwt',
       },
@@ -711,6 +810,7 @@ app.post('/api/auth/token', authSessionLimiter, requireUser, async (req: Request
         organization_id: resolvedOrgId,
         tenant_id: resolvedOrgId,
         organizationName: org?.name || undefined,
+        avatar: resolvedAvatar,
         is_creator: creator,
       },
     });
@@ -1445,6 +1545,7 @@ app.delete(
 
 const SystemSettingsPatchSchema = z.object({
   churchName: z.string().trim().max(300).optional(),
+  churchLogoUrl: z.string().trim().max(40000).optional(),
   campusName: z.string().trim().max(300).optional(),
   campusAddress: z.string().trim().max(500).optional(),
   campusLatitude: z.number().min(-90).max(90).nullable().optional(),

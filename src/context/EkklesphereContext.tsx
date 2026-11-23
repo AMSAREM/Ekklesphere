@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
-  isSupabaseBrowserConfigured,
+  completeSupabaseOAuthCallback,
+  ensureSupabaseBrowserClient,
+  parseOAuthCallbackParams,
   signInWithSupabaseGoogle,
   signOutSupabaseBrowser,
-  supabaseBrowserClient,
 } from '../lib/supabase';
 import {
   Person,
@@ -78,6 +79,7 @@ export interface ServiceQrCheckInResult {
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   churchName: '',
+  churchLogoUrl: '',
   campusName: '',
   campusAddress: '',
   campusLatitude: null,
@@ -120,6 +122,7 @@ function areSystemSettingsEqual(a: SystemSettings, b: SystemSettings): boolean {
   if (a === b) return true;
   if (
     (a.churchName || '') !== (b.churchName || '') ||
+    (a.churchLogoUrl || '') !== (b.churchLogoUrl || '') ||
     (a.campusName || '') !== (b.campusName || '') ||
     (a.campusAddress || '') !== (b.campusAddress || '') ||
     (a.campusLatitude ?? null) !== (b.campusLatitude ?? null) ||
@@ -272,6 +275,7 @@ interface EkklesphereContextType {
   signInWithGoogle: () => Promise<void>;
   isGoogleAuthLoading: boolean;
   googleAuthError: string | null;
+  googleAuthPopupUrl: string | null;
   clearGoogleAuthError: () => void;
   registerMember: (params: {
     firstName: string;
@@ -1199,8 +1203,16 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [isGoogleAuthLoading, setIsGoogleAuthLoading] = useState(false);
   const [googleAuthError, setGoogleAuthError] = useState<string | null>(null);
+  const [googleAuthPopupUrl, setGoogleAuthPopupUrl] = useState<string | null>(null);
+  const exchangingSupabaseTokenRef = useRef<string | null>(null);
+  const googleAuthPopupRef = useRef<Window | null>(null);
+  const googlePopupPollRef = useRef<number | null>(null);
+  const completingOAuthCallbackRef = useRef(false);
 
-  const clearGoogleAuthError = () => setGoogleAuthError(null);
+  const clearGoogleAuthError = () => {
+    setGoogleAuthError(null);
+    setGoogleAuthPopupUrl(null);
+  };
 
   const buildAuthUserFromServer = (
     payload: {
@@ -1331,55 +1343,125 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const exchangeSupabaseAccessToken = async (accessToken: string): Promise<boolean> => {
-    const res = await fetch('/api/auth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({}),
-    });
-
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (!data?.token || !data?.user) return false;
-
-    if (typeof data.idleTimeoutMinutes === 'number') {
-      setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+    const cleanToken = String(accessToken || '').trim();
+    if (!cleanToken) return false;
+    if (exchangingSupabaseTokenRef.current === cleanToken) {
+      return false;
     }
-    const resolvedOrgName = (data.organization?.name || data.organizationName || data.user?.organizationName || '').trim();
-    if (resolvedOrgName) {
-      setSystemSettings((prev) => {
-        const nextSettings: SystemSettings = { ...prev, churchName: resolvedOrgName };
-        try {
-          localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
-        } catch {}
-        return nextSettings;
+    exchangingSupabaseTokenRef.current = cleanToken;
+
+    try {
+      const res = await fetch('/api/auth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cleanToken}`,
+        },
+        body: JSON.stringify({}),
       });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg =
+          (typeof data?.message === 'string' && data.message.trim()) ||
+          'Google identity could not be verified with Ekklesphere. Ensure your email belongs to an active church or try again.';
+        setGoogleAuthError(msg);
+        showToast(msg);
+        return false;
+      }
+
+      if (!data?.token || !data?.user) {
+        const msg = 'Incomplete authentication response returned by server.';
+        setGoogleAuthError(msg);
+        showToast(msg);
+        return false;
+      }
+
+      setGoogleAuthError(null);
+      setGoogleAuthPopupUrl(null);
+
+      if (typeof data.idleTimeoutMinutes === 'number') {
+        setSessionTimeoutOverrideMinutes(normalizeClientSessionTimeoutMinutes(data.idleTimeoutMinutes));
+      }
+      const resolvedOrgName = (
+        data.organization?.name ||
+        data.organizationName ||
+        data.user?.organizationName ||
+        ''
+      ).trim();
+      if (resolvedOrgName) {
+        setSystemSettings((prev) => {
+          const nextSettings: SystemSettings = { ...prev, churchName: resolvedOrgName };
+          try {
+            localStorage.setItem('ekklesphere_system_settings', JSON.stringify(nextSettings));
+          } catch {}
+          return nextSettings;
+        });
+      }
+      const authUser = buildAuthUserFromServer(data.user, data.token, resolvedOrgName || undefined);
+      login(authUser);
+      showToast(`Signed in as ${authUser.name}`);
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error during Google sign-in.';
+      setGoogleAuthError(msg);
+      showToast(msg);
+      return false;
+    } finally {
+      if (exchangingSupabaseTokenRef.current === cleanToken) {
+        exchangingSupabaseTokenRef.current = null;
+      }
     }
-    const authUser = buildAuthUserFromServer(data.user, data.token, resolvedOrgName || undefined);
-    login(authUser);
-    showToast(`Signed in as ${authUser.name}`);
-    return true;
   };
 
   const signInWithGoogle = async () => {
     setIsGoogleAuthLoading(true);
     setGoogleAuthError(null);
+    setGoogleAuthPopupUrl(null);
+    if (googlePopupPollRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(googlePopupPollRef.current);
+      googlePopupPollRef.current = null;
+    }
+
     try {
-      if (!isSupabaseBrowserConfigured) {
-        const msg =
-          'Google OAuth via Supabase is not configured in this preview environment (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). Sign in using your registered account credentials below.';
-        setGoogleAuthError(msg);
-        showToast(msg);
+      const result = await signInWithSupabaseGoogle();
+      if (result.mode === 'popup_blocked') {
+        setGoogleAuthPopupUrl(result.authUrl);
+        setGoogleAuthError(
+          'Your browser blocked the Google sign-in popup. Click "Open Google Sign-In Window" below to continue.'
+        );
+        setIsGoogleAuthLoading(false);
         return;
       }
-      await signInWithSupabaseGoogle();
+
+      if (result.mode === 'popup' && result.popup && typeof window !== 'undefined') {
+        googleAuthPopupRef.current = result.popup;
+        googlePopupPollRef.current = window.setInterval(() => {
+          const popupWin = googleAuthPopupRef.current;
+          if (!popupWin || popupWin.closed) {
+            if (googlePopupPollRef.current !== null) {
+              window.clearInterval(googlePopupPollRef.current);
+              googlePopupPollRef.current = null;
+            }
+            googleAuthPopupRef.current = null;
+            if (!completingOAuthCallbackRef.current) {
+              setIsGoogleAuthLoading(false);
+            }
+          }
+        }, 450);
+        return;
+      }
+
+      // Redirect mode: top-level navigation is in flight; recover loading state if browser cancels navigation
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          setIsGoogleAuthLoading(false);
+        }, 8000);
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       setGoogleAuthError(errMsg || 'Google OAuth sign-in could not be initiated.');
-      showToast('Google sign-in could not start. Use account credentials below.');
-    } finally {
+      showToast(errMsg || 'Google sign-in could not start.');
       setIsGoogleAuthLoading(false);
     }
   };
@@ -2072,22 +2154,130 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     }
 
-    // 2. Listen for Supabase OAuth redirects / auth state changes and exchange for backend JWT
-    if (!supabaseBrowserClient) {
-      return () => {
-        active = false;
-      };
+    // 2. Process Google OAuth redirect/popup callbacks & listen for Supabase Auth changes
+    let authUnsubscribe: (() => void) | null = null;
+    const handledOAuthKeys = new Set<string>();
+
+    const processOAuthPayload = async (payload: {
+      code?: string | null;
+      accessToken?: string | null;
+      refreshToken?: string | null;
+      error?: string | null;
+      errorDescription?: string | null;
+    }) => {
+      const dedupeKey = `${payload.code || ''}|${payload.accessToken || ''}|${payload.error || ''}`;
+      if (!dedupeKey.replace(/\|/g, '') || handledOAuthKeys.has(dedupeKey)) {
+        return;
+      }
+      handledOAuthKeys.add(dedupeKey);
+      completingOAuthCallbackRef.current = true;
+      setIsGoogleAuthLoading(true);
+      setGoogleAuthError(null);
+      setGoogleAuthPopupUrl(null);
+
+      try {
+        const accessToken = await completeSupabaseOAuthCallback(payload);
+        if (!active) return;
+        if (accessToken) {
+          await exchangeSupabaseAccessToken(accessToken);
+        } else {
+          setGoogleAuthError('Google sign-in returned without an active access token.');
+        }
+      } catch (err: unknown) {
+        if (!active) return;
+        const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
+        setGoogleAuthError(msg);
+        showToast(msg);
+      } finally {
+        completingOAuthCallbackRef.current = false;
+        if (googlePopupPollRef.current !== null && typeof window !== 'undefined') {
+          window.clearInterval(googlePopupPollRef.current);
+          googlePopupPollRef.current = null;
+        }
+        if (active) {
+          setIsGoogleAuthLoading(false);
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      const urlCallback = parseOAuthCallbackParams(window.location.search, window.location.hash);
+      if (urlCallback.hasOAuthParams) {
+        try {
+          const cleanUrl = new URL(window.location.href);
+          ['code', 'error', 'error_code', 'error_description', 'state'].forEach((k) =>
+            cleanUrl.searchParams.delete(k)
+          );
+          if (cleanUrl.hash && /(access_token=|refresh_token=|error=)/.test(cleanUrl.hash)) {
+            cleanUrl.hash = '';
+          }
+          window.history.replaceState(
+            {},
+            '',
+            `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`
+          );
+        } catch {
+          // ignore history errors
+        }
+        void processOAuthPayload(urlCallback);
+      }
     }
 
-    const { data: authSub } = supabaseBrowserClient.auth.onAuthStateChange((_event, session) => {
-      if (active && session?.access_token) {
-        void exchangeSupabaseAccessToken(session.access_token);
+    const handlePopupMessage = (event: MessageEvent) => {
+      if (typeof window !== 'undefined' && event.origin && event.origin !== window.location.origin) {
+        return;
       }
+      const data = event.data;
+      if (data && data.type === 'EKKLESPHERE_GOOGLE_OAUTH_CALLBACK') {
+        void processOAuthPayload(data);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('message', handlePopupMessage);
+    }
+
+    let oauthChannel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        oauthChannel = new BroadcastChannel('ekklesphere_google_oauth');
+        oauthChannel.onmessage = (event) => {
+          const data = event.data;
+          if (data && data.type === 'EKKLESPHERE_GOOGLE_OAUTH_CALLBACK') {
+            void processOAuthPayload(data);
+          }
+        };
+      } catch {
+        oauthChannel = null;
+      }
+    }
+
+    void ensureSupabaseBrowserClient().then((client) => {
+      if (!active || !client) return;
+      const { data: authSub } = client.auth.onAuthStateChange((event, session) => {
+        if (
+          active &&
+          (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') &&
+          session?.access_token &&
+          !completingOAuthCallbackRef.current
+        ) {
+          void exchangeSupabaseAccessToken(session.access_token);
+        }
+      });
+      authUnsubscribe = () => authSub?.subscription?.unsubscribe();
     });
 
     return () => {
       active = false;
-      authSub?.subscription?.unsubscribe();
+      authUnsubscribe?.();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('message', handlePopupMessage);
+        if (googlePopupPollRef.current !== null) {
+          window.clearInterval(googlePopupPollRef.current);
+          googlePopupPollRef.current = null;
+        }
+      }
+      oauthChannel?.close();
     };
   }, []);
 
@@ -6021,6 +6211,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       signInWithGoogle,
       isGoogleAuthLoading,
       googleAuthError,
+      googleAuthPopupUrl,
       clearGoogleAuthError,
       registerMember,
       registerOrganisation,
@@ -6197,6 +6388,7 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       sessionExpiredNotice,
       isGoogleAuthLoading,
       googleAuthError,
+      googleAuthPopupUrl,
       pushPermissionStatus,
       isPushSubscribed,
       pushSubscribersCount,

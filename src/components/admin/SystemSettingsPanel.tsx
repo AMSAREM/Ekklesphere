@@ -11,6 +11,8 @@ import {
 import { getCanonicalMemberId } from '../member/DigitalMemberCard';
 import { MemberAvatar } from '../common/MemberAvatar';
 import { UserManagement } from '../UserManagement';
+import { compressImageFile } from '../../utils/imageCompression';
+import { resolveDisplayImageUrl } from '../../utils/imageUrl';
 import {
   SystemSettings,
   ChurchGroup,
@@ -89,6 +91,7 @@ import {
   EyeOff,
   Copy,
   Lock,
+  Upload,
 } from 'lucide-react';
 
 interface SystemSettingsPanelProps {
@@ -322,6 +325,35 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
   const [showPaystackSecret, setShowPaystackSecret] = useState(false);
   const [isSavingPaystackKeys, setIsSavingPaystackKeys] = useState(false);
   const [isTestingPaystack, setIsTestingPaystack] = useState(false);
+  const [isUploadingChurchLogo, setIsUploadingChurchLogo] = useState(false);
+  const churchLogoFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleChurchLogoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a PNG, JPG, or WebP logo image.');
+      return;
+    }
+    setIsUploadingChurchLogo(true);
+    try {
+      const compressed = await compressImageFile(file, {
+        maxDimension: 256,
+        maxDataUrlBytes: 28000,
+        initialQuality: 0.86,
+        square: false,
+      });
+      hasChangesRef.current = true;
+      setHasChanges(true);
+      setFormData((prev) => ({ ...prev, churchLogoUrl: compressed }));
+      showToast('Church logo ready. Click Save Settings to apply across portals.');
+    } catch {
+      showToast('Could not process the selected logo image.');
+    } finally {
+      setIsUploadingChurchLogo(false);
+      if (churchLogoFileInputRef.current) churchLogoFileInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     if (communicationStatus.paystackPublicKey !== undefined) {
@@ -1891,6 +1923,77 @@ export const SystemSettingsPanel: React.FC<SystemSettingsPanelProps> = ({ onClos
               <p className="text-xs text-[#666A86] dark:text-[#A9ACC8]">
                 These details appear across the Member mobile app, Usher check-in tool, and pastoral broadcast notifications.
               </p>
+            </div>
+
+            <div className="rounded-2xl bg-[#F6F7FC] dark:bg-[#14142E] border border-[#E9EBF5] dark:border-[#2D2D55] p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3.5">
+              <div className="w-14 h-14 rounded-2xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] flex items-center justify-center overflow-hidden shrink-0 p-1 shadow-xs">
+                {resolveDisplayImageUrl(formData.churchLogoUrl, 'thumb') ? (
+                  <img
+                    src={resolveDisplayImageUrl(formData.churchLogoUrl, 'thumb')!}
+                    alt={formData.churchName ? `${formData.churchName} logo` : 'Church logo'}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-contain rounded-xl"
+                  />
+                ) : (
+                  <Building2 className="w-6 h-6 text-[#6D5CF2]" />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="block text-xs font-bold text-[#1D1B3A] dark:text-[#F2F2FA]">
+                      Church Logo / Crest
+                    </span>
+                    <span className="block text-[11px] text-[#666A86] dark:text-[#A9ACC8]">
+                      Shown alongside your church name in the Admin Dashboard and public home page.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <input
+                      ref={churchLogoFileInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                      onChange={handleChurchLogoFileChange}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      disabled={isUploadingChurchLogo}
+                      onClick={() => churchLogoFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5b4be0] text-white text-[11px] font-bold cursor-pointer transition-colors disabled:opacity-60"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isUploadingChurchLogo ? 'Processing...' : 'Upload Logo'}</span>
+                    </button>
+                    {formData.churchLogoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleChange('churchLogoUrl', '')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  type="url"
+                  value={
+                    formData.churchLogoUrl?.startsWith('data:')
+                      ? ''
+                      : formData.churchLogoUrl ?? ''
+                  }
+                  onChange={(e) => handleChange('churchLogoUrl', e.target.value)}
+                  placeholder={
+                    formData.churchLogoUrl?.startsWith('data:')
+                      ? 'Uploaded logo stored (or paste an image URL to replace)'
+                      : 'Or paste logo image URL (https://... or Google Drive share link)'
+                  }
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#1D1D3D] border border-[#E9EBF5] dark:border-[#2D2D55] text-[#1D1B3A] dark:text-[#F2F2FA] outline-none focus:ring-2 focus:ring-[#6D5CF2]"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

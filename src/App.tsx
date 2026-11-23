@@ -12,10 +12,11 @@ import { ChurchHomePage } from './components/home/ChurchHomePage';
 import { CreatorsPanel } from './components/creator/CreatorsPanel';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
 import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
-import { KeyRound } from 'lucide-react';
+import { Download, KeyRound, X } from 'lucide-react';
 import { PublicLandingPage } from './components/landing/PublicLandingPage';
 import { isPublicLandingLocation } from './utils/authRoute';
 import { canMonitorPastoralCare } from './constants/portfolios';
+import { usePWAInstall } from './hooks/usePWAInstall';
 
 const readLocationKey = () =>
   typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
@@ -84,11 +85,13 @@ const EkklesphereMain: React.FC = () => {
 
     if (!isCreatorAllowed) {
       return (
-        <div className="min-h-screen w-full max-w-full overflow-x-hidden flex flex-col bg-[#E6E7F0] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA]">
-          <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8 py-8 flex flex-col items-center justify-center">
-            <div className="max-w-md w-full mb-4 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs text-center font-medium">
-              The Creator Console is restricted to Platform Creators. Please log in with your Creator credentials below.
+        <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#f7f3ec] dark:bg-[#0D0D22] text-[#0b1f33] dark:text-[#F2F2FA]">
+          <div className="w-full px-3 sm:px-6 pt-5 flex justify-center">
+            <div className="max-w-[1060px] w-full p-3.5 rounded-2xl bg-[#fffdf9] dark:bg-[#191938] border border-[#e3ddd2] dark:border-[#2E2E58] text-[#0b1f33] dark:text-[#D9DCF0] text-xs text-center font-medium shadow-xs">
+              The Creator Console is restricted to Platform Creators. Sign in with your Creator credentials below.
             </div>
+          </div>
+          <div className="flex-1 w-full">
             <UnifiedAuthScreen onBackToLanding={() => navigateTo('/')} />
           </div>
         </div>
@@ -185,7 +188,7 @@ const EkklesphereMain: React.FC = () => {
 
       {/* Role-governed portal rendering */}
       {!currentUser ? (
-        <div className="flex-1 w-full px-2 sm:px-4 md:px-6 lg:px-8">
+        <div className="flex-1 w-full">
           <UnifiedAuthScreen onBackToLanding={() => navigateTo('/')} />
         </div>
       ) : (
@@ -270,11 +273,80 @@ class AppErrorBoundary extends React.Component<
   }
 }
 
+const StandaloneInstallBanner: React.FC = () => {
+  const { isInstallable, isInstalled, isInstalling, isInIframe, promptInstall } = usePWAInstall();
+  const [dismissed, setDismissed] = useState(false);
+
+  const hasInstallIntent =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('pwa_install') === '1';
+
+  const clearInstallParam = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('pwa_install')) {
+        url.searchParams.delete('pwa_install');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {
+      // ignore URL cleanup error
+    }
+  }, []);
+
+  if (!hasInstallIntent || dismissed || isInstalled || isInIframe || !isInstallable) {
+    return null;
+  }
+
+  return (
+    <div
+      role="region"
+      aria-label="Install Ekklesphere App"
+      className="fixed bottom-4 right-4 z-[90] max-w-sm w-[calc(100%-32px)] rounded-2xl bg-[#0b1f33] dark:bg-[#19193A] text-white border border-white/15 shadow-2xl p-4 flex items-center justify-between gap-3"
+    >
+      <div className="min-w-0">
+        <p className="text-xs font-bold">Ekklesphere is ready to install</p>
+        <p className="text-[11px] text-white/75 mt-0.5">
+          Tap once to add Ekklesphere to your device.
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          disabled={isInstalling}
+          onClick={async () => {
+            const res = await promptInstall();
+            if (res.outcome === 'accepted') {
+              clearInstallParam();
+            }
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold cursor-pointer whitespace-nowrap disabled:opacity-70"
+        >
+          <Download className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>{isInstalling ? 'Installing...' : 'Install Now'}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDismissed(true);
+            clearInstallParam();
+          }}
+          aria-label="Dismiss install banner"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 cursor-pointer"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   return (
     <AppErrorBoundary>
       <EkklesphereProvider>
         <EkklesphereMain />
+        <StandaloneInstallBanner />
       </EkklesphereProvider>
     </AppErrorBoundary>
   );

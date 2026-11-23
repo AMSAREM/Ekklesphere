@@ -87,6 +87,18 @@ function getLocalIsoDate(d: Date = new Date()): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function getChurchInitials(name: string): string {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0 && !/^(the|of|and|for)$/i.test(w));
+  if (words.length >= 2) {
+    return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  }
+  const clean = name.trim();
+  return clean ? clean.slice(0, 2).toUpperCase() : 'CH';
+}
+
 function formatServiceDate(isoDate?: string, includeYear: boolean = false): string {
   if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate || '';
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -188,6 +200,17 @@ export const AdminDashboard: React.FC = () => {
   const [confirmDeleteCalendarSvcId, setConfirmDeleteCalendarSvcId] = useState<string | null>(null);
   const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
   const [tickNowMs, setTickNowMs] = useState<number>(() => Date.now());
+  const [churchLogoAttemptIndex, setChurchLogoAttemptIndex] = useState(0);
+
+  const churchLogoCandidates = useMemo(
+    () => getImageFallbackUrls(systemSettings.churchLogoUrl, 'thumb'),
+    [systemSettings.churchLogoUrl]
+  );
+  const activeChurchLogoUrl = churchLogoCandidates[churchLogoAttemptIndex] || null;
+
+  useEffect(() => {
+    setChurchLogoAttemptIndex(0);
+  }, [systemSettings.churchLogoUrl]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -669,8 +692,8 @@ export const AdminDashboard: React.FC = () => {
               aria-label="Active Service and Event Command Hero"
               className="bg-[#1D1B3A] dark:bg-[#19193A] text-white rounded-3xl border border-[#2F2D59] p-5 sm:p-6 my-2 sm:my-4"
             >
-              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 pb-4 border-b border-white/10">
-                <div className="min-w-0 flex flex-col gap-0.5">
+              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-white/10">
+                <div className="min-w-0 flex-1 flex items-start sm:items-center gap-3 sm:gap-3.5">
                   {(() => {
                     const tenantName = (
                       systemSettings.churchName ||
@@ -681,28 +704,68 @@ export const AdminDashboard: React.FC = () => {
                     const greeting =
                       hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
                     const rawName = (currentUser?.name || 'Administrator').trim();
-                    return tenantName ? (
+                    const churchInitials = getChurchInitials(tenantName);
+
+                    return (
                       <>
-                        <h2
-                          title={tenantName}
-                          className="text-lg sm:text-xl font-bold tracking-tight text-white truncate"
+                        <button
+                          type="button"
+                          onClick={() => navigateTab('settings')}
+                          title={
+                            activeChurchLogoUrl
+                              ? 'Update church logo in System Settings'
+                              : 'Upload your church logo in System Settings'
+                          }
+                          aria-label={
+                            tenantName ? `${tenantName} logo` : 'Configure church logo in settings'
+                          }
+                          className={`w-11 h-11 sm:w-13 sm:h-13 rounded-2xl shrink-0 overflow-hidden ring-1 ring-white/25 shadow-sm flex items-center justify-center transition-transform hover:scale-[1.03] cursor-pointer ${
+                            activeChurchLogoUrl
+                              ? 'bg-white/95 p-1'
+                              : 'bg-gradient-to-br from-[#6D5CF2] to-[#4F40D6] text-white'
+                          }`}
                         >
-                          {tenantName}
-                        </h2>
-                        <p className="text-xs sm:text-sm font-medium text-[#C4BDFF] truncate">
-                          {greeting}, {rawName}
-                        </p>
+                          {activeChurchLogoUrl ? (
+                            <img
+                              src={activeChurchLogoUrl}
+                              alt={tenantName ? `${tenantName} logo` : 'Church logo'}
+                              referrerPolicy="no-referrer"
+                              decoding="async"
+                              onError={() => setChurchLogoAttemptIndex((prev) => prev + 1)}
+                              className="w-full h-full object-contain rounded-xl"
+                            />
+                          ) : tenantName ? (
+                            <span className="font-display font-bold text-base sm:text-lg tracking-tight select-none">
+                              {churchInitials}
+                            </span>
+                          ) : (
+                            <Building2 className="w-5 h-5" aria-hidden="true" />
+                          )}
+                        </button>
+
+                        <div className="min-w-0 flex-1 flex flex-col gap-0.5 sm:gap-1">
+                          {tenantName ? (
+                            <>
+                              <h2 className="text-base sm:text-xl xl:text-[22px] font-bold tracking-tight text-white leading-snug break-words text-balance">
+                                {tenantName}
+                              </h2>
+                              <p className="text-xs sm:text-sm font-medium text-[#C4BDFF] leading-snug break-words">
+                                {greeting}, {rawName}
+                              </p>
+                            </>
+                          ) : (
+                            <h2 className="text-base sm:text-lg font-semibold tracking-tight text-white leading-snug break-words">
+                              {greeting}, {rawName}
+                            </h2>
+                          )}
+                        </div>
                       </>
-                    ) : (
-                      <h2 className="text-base sm:text-lg font-semibold tracking-tight text-white truncate">
-                        {greeting}, {rawName}
-                      </h2>
                     );
                   })()}
                 </div>
 
                 {/* Operational Hero Controls */}
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0 xl:max-w-[54%] xl:justify-end">
                   {services.length > 0 && (
                     <select
                       aria-label="Switch active service or event"
@@ -713,7 +776,7 @@ export const AdminDashboard: React.FC = () => {
                         const target = services.find((s) => s.id === nextId);
                         if (target?.date) setSelectedDateIso(target.date);
                       }}
-                      className="h-8 bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-lg px-2.5 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-[#8C7DFF] cursor-pointer max-w-[210px] truncate"
+                      className="h-8 bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-lg px-2.5 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-[#8C7DFF] cursor-pointer max-w-full sm:max-w-[220px] truncate"
                     >
                       {services.map((svc) => (
                         <option key={svc.id} value={svc.id} className="bg-[#1D1B3A] text-white">

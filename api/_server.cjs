@@ -2636,6 +2636,7 @@ var DEFAULT_LANDING_CMS = {
 var DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE = "Hello {{firstName}}, we missed you at {{serviceName}} ({{churchName}}) today. You are dearly loved and prayed for. Need prayer or support? Reply or call {{contactPhone}}.";
 var DEFAULT_ORG_SYSTEM_SETTINGS = {
   churchName: "",
+  churchLogoUrl: "",
   campusName: "",
   campusAddress: "",
   campusLatitude: null,
@@ -2833,6 +2834,15 @@ var PlatformStore = class {
   }
   get canVerifyViaSupabaseAuth() {
     return Boolean(this.customSupabaseAuthVerifier || this.supabaseUrl && this.supabaseAuthKey);
+  }
+  getPublicSupabaseAuthConfig(env = process.env) {
+    const supabaseUrl = (env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || this.supabaseUrl || "").trim();
+    const supabaseAnonKey = (env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+    return {
+      supabaseUrl,
+      supabaseAnonKey,
+      googleOAuthConfigured: Boolean(supabaseUrl && supabaseAnonKey)
+    };
   }
   setSupabaseTestHooks(hooks) {
     if (!this.isTestRuntime) {
@@ -3118,21 +3128,44 @@ var PlatformStore = class {
   // ===========================================================================
   async verifySupabaseAccessToken(accessToken) {
     const sb = this.activeSupabase;
-    if (!sb) return null;
-    const { data, error } = await sb.auth.getUser(accessToken);
-    if (error || !data?.user) {
+    let sbUser = null;
+    if (sb) {
+      const { data, error } = await sb.auth.getUser(accessToken);
+      if (error || !data?.user) {
+        return null;
+      }
+      sbUser = data.user;
+    } else if (!this.isTestRuntime && this.supabaseUrl && this.supabaseAuthKey) {
+      try {
+        const res = await fetch(`${this.supabaseUrl.replace(/\/+$/, "")}/auth/v1/user`, {
+          method: "GET",
+          headers: {
+            apikey: this.supabaseAuthKey,
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        if (!res.ok) return null;
+        const payload = await res.json();
+        if (!payload?.id) return null;
+        sbUser = payload;
+      } catch {
+        return null;
+      }
+    } else {
       return null;
     }
-    const sbUser = data.user;
     const email = (sbUser.email || "").toLowerCase();
+    const avatar = typeof sbUser.user_metadata?.avatar_url === "string" && sbUser.user_metadata.avatar_url.trim() || typeof sbUser.user_metadata?.picture === "string" && sbUser.user_metadata.picture.trim() || void 0;
     let isCreator = Boolean(
       sbUser.app_metadata?.creator === true || sbUser.app_metadata?.is_super_admin === true
     );
     let credRow = null;
-    const credOrFilters = [`auth_user_id.eq.${sbUser.id}`];
-    if (email) credOrFilters.push(`email.ilike.${email}`);
-    const { data: matchedCredRow } = await sb.from("account_credentials").select("is_creator, role, status, organization_id").or(credOrFilters.join(",")).limit(1).maybeSingle();
-    credRow = matchedCredRow || null;
+    if (sb) {
+      const credOrFilters = [`auth_user_id.eq.${sbUser.id}`];
+      if (email) credOrFilters.push(`email.ilike.${email}`);
+      const { data: matchedCredRow } = await sb.from("account_credentials").select("is_creator, role, status, organization_id").or(credOrFilters.join(",")).limit(1).maybeSingle();
+      credRow = matchedCredRow || null;
+    }
     if (credRow && credRow.status && credRow.status !== "active") {
       return null;
     }
@@ -3142,26 +3175,33 @@ var PlatformStore = class {
     let resolvedOrgId = credRow?.organization_id && UUID_REGEX2.test(String(credRow.organization_id)) ? String(credRow.organization_id).toLowerCase() : "";
     let resolvedRole = isCreator ? mapCredentialRoleToChurchRole(credRow?.role, true) : "member";
     let resolvedName = typeof sbUser.user_metadata?.full_name === "string" && sbUser.user_metadata.full_name || typeof sbUser.user_metadata?.name === "string" && sbUser.user_metadata.name || email.split("@")[0] || "Ekklesphere User";
-    const { data: memberRow } = await sb.from("members").select("id, organization_id, role, preferred_name, first_name, last_name").or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ""}`).limit(1).maybeSingle();
-    if (memberRow) {
-      if (memberRow.organization_id) {
-        resolvedOrgId = String(memberRow.organization_id).toLowerCase();
+    if (sb) {
+      const { data: memberRow } = await sb.from("members").select("id, organization_id, role, preferred_name, first_name, last_name").or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ""}`).limit(1).maybeSingle();
+      if (memberRow) {
+        if (memberRow.organization_id) {
+          resolvedOrgId = String(memberRow.organization_id).toLowerCase();
+        }
+        if (!isCreator) {
+          resolvedRole = mapSupabaseRoleToChurchRole(memberRow.role);
+        }
+        const dbName = memberRow.preferred_name || `${memberRow.first_name || ""} ${memberRow.last_name || ""}`.trim();
+        if (dbName) resolvedName = dbName;
+      } else {
+        const usersLookup = await this.lookupUserAndRolesByAuthId(sb, sbUser.id);
+        if (usersLookup) {
+          if (usersLookup.organizationId) {
+            resolvedOrgId = usersLookup.organizationId;
+          }
+          if (!isCreator && usersLookup.role) {
+            resolvedRole = usersLookup.role;
+          }
+        }
       }
-      if (!isCreator) {
-        resolvedRole = mapSupabaseRoleToChurchRole(memberRow.role);
-      }
-      const dbName = memberRow.preferred_name || `${memberRow.first_name || ""} ${memberRow.last_name || ""}`.trim();
-      if (dbName) resolvedName = dbName;
     } else {
-      const usersLookup = await this.lookupUserAndRolesByAuthId(sb, sbUser.id);
-      if (usersLookup) {
-        if (usersLookup.organizationId) {
-          resolvedOrgId = usersLookup.organizationId;
-        }
-        if (!isCreator && usersLookup.role) {
-          resolvedRole = usersLookup.role;
-        }
-      }
+      const fallbackMembership = await this.lookupMemberRoleInStore(sbUser.id, email);
+      if (fallbackMembership.organizationId) resolvedOrgId = fallbackMembership.organizationId;
+      if (!isCreator && fallbackMembership.role) resolvedRole = fallbackMembership.role;
+      if (fallbackMembership.name) resolvedName = fallbackMembership.name;
     }
     if (!isCreator && resolvedOrgId) {
       const org = await this.getOrganisationById(resolvedOrgId);
@@ -3181,6 +3221,7 @@ var PlatformStore = class {
       tenant_id: resolvedOrgId,
       campus_id: void 0,
       name: resolvedName,
+      avatar,
       is_creator: isCreator,
       auth_provider: "supabase"
     };
@@ -5427,6 +5468,7 @@ var PlatformStore = class {
         const raw = orgRow.settings && typeof orgRow.settings === "object" ? orgRow.settings : {};
         const settings2 = {
           churchName: String(orgRow.name && String(orgRow.name).trim() || raw.church_name || ""),
+          churchLogoUrl: String(orgRow.logo_url ?? raw.church_logo_url ?? "").trim(),
           campusName: String(activeSite?.name ?? raw.campus_name ?? orgRow.name ?? ""),
           campusAddress: String(activeSite?.address ?? orgRow.premise_address ?? raw.campus_address ?? ""),
           campusLatitude: activeSite ? activeSite.lat : null,
@@ -5509,6 +5551,7 @@ var PlatformStore = class {
       ...DEFAULT_ORG_SYSTEM_SETTINGS,
       ...org ? {
         churchName: org.name,
+        churchLogoUrl: org.logoUrl || "",
         campusName: org.city ? `${org.city} Main Campus` : org.name,
         seniorPastor: org.seniorPastor || "",
         contactEmail: org.contactEmail || "",
@@ -5597,6 +5640,7 @@ var PlatformStore = class {
       ...current,
       ...patch,
       churchName: String(patch.churchName ?? current.churchName ?? "").trim(),
+      churchLogoUrl: String(patch.churchLogoUrl ?? current.churchLogoUrl ?? "").trim(),
       campusName: String(patch.campusName ?? current.campusName ?? "").trim(),
       campusAddress: String(patch.campusAddress ?? current.campusAddress ?? "").trim(),
       seniorPastor: String(patch.seniorPastor ?? current.seniorPastor ?? "").trim(),
@@ -5671,6 +5715,7 @@ var PlatformStore = class {
       const nextSettingsJson = {
         ...existingJson,
         church_name: merged.churchName || existingOrg?.name || "",
+        church_logo_url: merged.churchLogoUrl || "",
         campus_name: merged.campusName,
         campus_address: merged.campusAddress,
         campus_location_accuracy_m: merged.campusLocationAccuracyM ?? null,
@@ -5709,6 +5754,7 @@ var PlatformStore = class {
       };
       const orgUpdate = {
         ...merged.churchName ? { name: merged.churchName } : {},
+        ...patch.churchLogoUrl !== void 0 ? { logo_url: merged.churchLogoUrl || null } : {},
         senior_pastor: merged.seniorPastor || null,
         contact_email: merged.contactEmail || null,
         email: merged.contactEmail || null,
@@ -5761,6 +5807,7 @@ var PlatformStore = class {
       const memOrg = this.orgs.get(orgId);
       if (memOrg) {
         if (merged.churchName) memOrg.name = merged.churchName;
+        if (patch.churchLogoUrl !== void 0) memOrg.logoUrl = merged.churchLogoUrl || void 0;
         memOrg.seniorPastor = merged.seniorPastor;
         memOrg.contactEmail = merged.contactEmail;
         memOrg.contactPhone = merged.contactPhone;
@@ -15666,6 +15713,84 @@ app.post("/api/auth/change-password", authSessionLimiter, requireUser, async (re
     });
   }
 });
+app.get("/api/auth/public-config", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const publicConfig = platformStore.getPublicSupabaseAuthConfig();
+  return res.status(200).json({
+    supabaseUrl: publicConfig.supabaseUrl,
+    supabaseAnonKey: publicConfig.supabaseAnonKey,
+    googleOAuthConfigured: publicConfig.googleOAuthConfigured,
+    storageBackend: platformStore.storageBackend
+  });
+});
+app.get(["/api/auth/google-callback", "/api/auth/google-callback/"], (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Completing Google Sign-In \xB7 Ekklesphere</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #F8F9FD; color: #1D1B3A; padding: 24px; }
+      .card { max-width: 380px; width: 100%; background: #ffffff; border: 1px solid #E3E5F2; border-radius: 16px; padding: 24px; text-align: center; box-shadow: 0 10px 30px rgba(29,27,58,0.08); }
+      h1 { font-size: 16px; margin: 0 0 8px; font-weight: 700; }
+      p { font-size: 13px; margin: 0 0 16px; color: #5B5F7A; line-height: 1.5; }
+      button { appearance: none; border: 0; border-radius: 10px; background: #6D5CF2; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 16px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1 id="status-title">Completing Google Sign-In...</h1>
+      <p id="status-copy">Returning your verified session to Ekklesphere.</p>
+      <button id="close-btn" type="button" onclick="window.close()">Close Window</button>
+    </div>
+    <script>
+      (function () {
+        var search = new URLSearchParams(window.location.search || '');
+        var hashRaw = (window.location.hash || '').replace(/^#/, '');
+        var hash = new URLSearchParams(hashRaw);
+        var payload = {
+          type: 'EKKLESPHERE_GOOGLE_OAUTH_CALLBACK',
+          code: search.get('code') || null,
+          accessToken: hash.get('access_token') || null,
+          refreshToken: hash.get('refresh_token') || null,
+          error: search.get('error') || hash.get('error') || null,
+          errorDescription: search.get('error_description') || hash.get('error_description') || null
+        };
+        var sentToOpener = false;
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(payload, window.location.origin);
+            sentToOpener = true;
+          }
+        } catch (e) {}
+        try {
+          if (typeof BroadcastChannel !== 'undefined') {
+            var ch = new BroadcastChannel('ekklesphere_google_oauth');
+            ch.postMessage(payload);
+            ch.close();
+          }
+        } catch (e) {}
+        if (sentToOpener) {
+          document.getElementById('status-title').textContent = payload.error ? 'Google Sign-In Cancelled' : 'Sign-In Verified';
+          document.getElementById('status-copy').textContent = payload.error
+            ? (payload.errorDescription || payload.error)
+            : 'You can return to Ekklesphere now.';
+          setTimeout(function () {
+            try { window.close(); } catch (e) {}
+          }, 150);
+        } else {
+          var target = '/app' + (window.location.search || '') + (window.location.hash || '');
+          window.location.replace(target);
+        }
+      })();
+    </script>
+  </body>
+</html>`;
+  return res.status(200).send(html);
+});
 app.post("/api/auth/token", authSessionLimiter, requireUser, async (req, res) => {
   try {
     const verifiedUser = req.user;
@@ -15683,10 +15808,19 @@ app.post("/api/auth/token", authSessionLimiter, requireUser, async (req, res) =>
       const orgs = await platformStore.listOrganisations();
       resolvedOrgId = orgs[0]?.id || "";
     }
-    const [sessionTimeoutMinutes, org] = await Promise.all([
+    if (!resolvedOrgId && !creator) {
+      return res.status(403).json({
+        error: "organization_required",
+        code: "ORGANIZATION_REQUIRED",
+        message: "No active church workspace was found for this Google account. Start a church trial or ask your church administrator to add your email."
+      });
+    }
+    const [sessionTimeoutMinutes, org, memberProfile] = await Promise.all([
       platformStore.getOrganizationSessionTimeoutMinutes(resolvedOrgId),
-      resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null)
+      resolvedOrgId ? platformStore.getOrganisationById(resolvedOrgId) : Promise.resolve(null),
+      resolvedOrgId ? platformStore.getMemberProfileForSession(resolvedOrgId, verifiedUser.id, verifiedUser.email) : Promise.resolve(null)
     ]);
+    const resolvedAvatar = memberProfile?.imageUrl && String(memberProfile.imageUrl).trim() || verifiedUser.avatar || void 0;
     const { token, idleTimeoutMinutes, expiresAt } = signSessionToken(
       {
         id: verifiedUser.id,
@@ -15696,6 +15830,7 @@ app.post("/api/auth/token", authSessionLimiter, requireUser, async (req, res) =>
         organization_id: resolvedOrgId,
         tenant_id: resolvedOrgId,
         campus_id: verifiedUser.campus_id,
+        avatar: resolvedAvatar,
         is_creator: creator,
         auth_provider: "session_jwt"
       },
@@ -15723,6 +15858,7 @@ app.post("/api/auth/token", authSessionLimiter, requireUser, async (req, res) =>
         organization_id: resolvedOrgId,
         tenant_id: resolvedOrgId,
         organizationName: org?.name || void 0,
+        avatar: resolvedAvatar,
         is_creator: creator
       }
     });
@@ -16357,6 +16493,7 @@ app.delete(
 );
 var SystemSettingsPatchSchema = import_zod2.z.object({
   churchName: import_zod2.z.string().trim().max(300).optional(),
+  churchLogoUrl: import_zod2.z.string().trim().max(4e4).optional(),
   campusName: import_zod2.z.string().trim().max(300).optional(),
   campusAddress: import_zod2.z.string().trim().max(500).optional(),
   campusLatitude: import_zod2.z.number().min(-90).max(90).nullable().optional(),

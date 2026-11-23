@@ -304,6 +304,7 @@ export const DEFAULT_ABSENT_MEMBER_MESSAGE_TEMPLATE =
 
 export const DEFAULT_ORG_SYSTEM_SETTINGS: SystemSettings = {
   churchName: '',
+  churchLogoUrl: '',
   campusName: '',
   campusAddress: '',
   campusLatitude: null,
@@ -564,6 +565,31 @@ class PlatformStore {
 
   private get canVerifyViaSupabaseAuth(): boolean {
     return Boolean(this.customSupabaseAuthVerifier || (this.supabaseUrl && this.supabaseAuthKey));
+  }
+
+  public getPublicSupabaseAuthConfig(env: NodeJS.ProcessEnv = process.env): {
+    supabaseUrl: string;
+    supabaseAnonKey: string;
+    googleOAuthConfigured: boolean;
+  } {
+    const supabaseUrl = (
+      env.VITE_SUPABASE_URL ||
+      env.SUPABASE_URL ||
+      env.NEXT_PUBLIC_SUPABASE_URL ||
+      this.supabaseUrl ||
+      ''
+    ).trim();
+    const supabaseAnonKey = (
+      env.VITE_SUPABASE_ANON_KEY ||
+      env.SUPABASE_ANON_KEY ||
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      ''
+    ).trim();
+    return {
+      supabaseUrl,
+      supabaseAnonKey,
+      googleOAuthConfigured: Boolean(supabaseUrl && supabaseAnonKey),
+    };
   }
 
   public setSupabaseTestHooks(hooks: {
@@ -885,29 +911,55 @@ class PlatformStore {
 
   public async verifySupabaseAccessToken(accessToken: string): Promise<AuthUserPayload | null> {
     const sb = this.activeSupabase;
-    if (!sb) return null;
+    let sbUser: any = null;
 
-    const { data, error } = await sb.auth.getUser(accessToken);
-    if (error || !data?.user) {
+    if (sb) {
+      const { data, error } = await sb.auth.getUser(accessToken);
+      if (error || !data?.user) {
+        return null;
+      }
+      sbUser = data.user;
+    } else if (!this.isTestRuntime && this.supabaseUrl && this.supabaseAuthKey) {
+      try {
+        const res = await fetch(`${this.supabaseUrl.replace(/\/+$/, '')}/auth/v1/user`, {
+          method: 'GET',
+          headers: {
+            apikey: this.supabaseAuthKey,
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        if (!res.ok) return null;
+        const payload = await res.json();
+        if (!payload?.id) return null;
+        sbUser = payload;
+      } catch {
+        return null;
+      }
+    } else {
       return null;
     }
 
-    const sbUser = data.user;
     const email = (sbUser.email || '').toLowerCase();
+    const avatar =
+      (typeof sbUser.user_metadata?.avatar_url === 'string' && sbUser.user_metadata.avatar_url.trim()) ||
+      (typeof sbUser.user_metadata?.picture === 'string' && sbUser.user_metadata.picture.trim()) ||
+      undefined;
     let isCreator = Boolean(
       sbUser.app_metadata?.creator === true || sbUser.app_metadata?.is_super_admin === true
     );
 
     let credRow: Record<string, any> | null = null;
-    const credOrFilters = [`auth_user_id.eq.${sbUser.id}`];
-    if (email) credOrFilters.push(`email.ilike.${email}`);
-    const { data: matchedCredRow } = await sb
-      .from('account_credentials')
-      .select('is_creator, role, status, organization_id')
-      .or(credOrFilters.join(','))
-      .limit(1)
-      .maybeSingle();
-    credRow = matchedCredRow || null;
+    if (sb) {
+      const credOrFilters = [`auth_user_id.eq.${sbUser.id}`];
+      if (email) credOrFilters.push(`email.ilike.${email}`);
+      const { data: matchedCredRow } = await sb
+        .from('account_credentials')
+        .select('is_creator, role, status, organization_id')
+        .or(credOrFilters.join(','))
+        .limit(1)
+        .maybeSingle();
+      credRow = matchedCredRow || null;
+    }
 
     if (credRow && credRow.status && credRow.status !== 'active') {
       return null;
@@ -934,35 +986,42 @@ class PlatformStore {
       email.split('@')[0] ||
       'Ekklesphere User';
 
-    const { data: memberRow } = await sb
-      .from('members')
-      .select('id, organization_id, role, preferred_name, first_name, last_name')
-      .or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ''}`)
-      .limit(1)
-      .maybeSingle();
+    if (sb) {
+      const { data: memberRow } = await sb
+        .from('members')
+        .select('id, organization_id, role, preferred_name, first_name, last_name')
+        .or(`user_id.eq.${sbUser.id}${email ? `,email.ilike.${email}` : ''}`)
+        .limit(1)
+        .maybeSingle();
 
-    if (memberRow) {
-      if (memberRow.organization_id) {
-        resolvedOrgId = String(memberRow.organization_id).toLowerCase();
+      if (memberRow) {
+        if (memberRow.organization_id) {
+          resolvedOrgId = String(memberRow.organization_id).toLowerCase();
+        }
+        if (!isCreator) {
+          resolvedRole = mapSupabaseRoleToChurchRole(memberRow.role);
+        }
+        const dbName =
+          memberRow.preferred_name ||
+          `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim();
+        if (dbName) resolvedName = dbName;
+      } else {
+        // Fall back to public.users (linked via auth_user_id) + public.user_roles
+        const usersLookup = await this.lookupUserAndRolesByAuthId(sb, sbUser.id);
+        if (usersLookup) {
+          if (usersLookup.organizationId) {
+            resolvedOrgId = usersLookup.organizationId;
+          }
+          if (!isCreator && usersLookup.role) {
+            resolvedRole = usersLookup.role;
+          }
+        }
       }
-      if (!isCreator) {
-        resolvedRole = mapSupabaseRoleToChurchRole(memberRow.role);
-      }
-      const dbName =
-        memberRow.preferred_name ||
-        `${memberRow.first_name || ''} ${memberRow.last_name || ''}`.trim();
-      if (dbName) resolvedName = dbName;
     } else {
-      // Fall back to public.users (linked via auth_user_id) + public.user_roles
-      const usersLookup = await this.lookupUserAndRolesByAuthId(sb, sbUser.id);
-      if (usersLookup) {
-        if (usersLookup.organizationId) {
-          resolvedOrgId = usersLookup.organizationId;
-        }
-        if (!isCreator && usersLookup.role) {
-          resolvedRole = usersLookup.role;
-        }
-      }
+      const fallbackMembership = await this.lookupMemberRoleInStore(sbUser.id, email);
+      if (fallbackMembership.organizationId) resolvedOrgId = fallbackMembership.organizationId;
+      if (!isCreator && fallbackMembership.role) resolvedRole = fallbackMembership.role;
+      if (fallbackMembership.name) resolvedName = fallbackMembership.name;
     }
 
     if (!isCreator && resolvedOrgId) {
@@ -985,6 +1044,7 @@ class PlatformStore {
       tenant_id: resolvedOrgId,
       campus_id: undefined,
       name: resolvedName,
+      avatar,
       is_creator: isCreator,
       auth_provider: 'supabase',
     };
@@ -4030,6 +4090,7 @@ class PlatformStore {
 
         const settings: SystemSettings = {
           churchName: String((orgRow.name && String(orgRow.name).trim()) || raw.church_name || ''),
+          churchLogoUrl: String(orgRow.logo_url ?? raw.church_logo_url ?? '').trim(),
           campusName: String(activeSite?.name ?? raw.campus_name ?? orgRow.name ?? ''),
           campusAddress: String(activeSite?.address ?? orgRow.premise_address ?? raw.campus_address ?? ''),
           campusLatitude: activeSite ? activeSite.lat : null,
@@ -4152,6 +4213,7 @@ class PlatformStore {
       ...(org
         ? {
             churchName: org.name,
+            churchLogoUrl: org.logoUrl || '',
             campusName: org.city ? `${org.city} Main Campus` : org.name,
             seniorPastor: org.seniorPastor || '',
             contactEmail: org.contactEmail || '',
@@ -4265,6 +4327,7 @@ class PlatformStore {
       ...current,
       ...patch,
       churchName: String(patch.churchName ?? current.churchName ?? '').trim(),
+      churchLogoUrl: String(patch.churchLogoUrl ?? current.churchLogoUrl ?? '').trim(),
       campusName: String(patch.campusName ?? current.campusName ?? '').trim(),
       campusAddress: String(patch.campusAddress ?? current.campusAddress ?? '').trim(),
       seniorPastor: String(patch.seniorPastor ?? current.seniorPastor ?? '').trim(),
@@ -4374,6 +4437,7 @@ class PlatformStore {
       const nextSettingsJson: Record<string, unknown> = {
         ...existingJson,
         church_name: merged.churchName || existingOrg?.name || '',
+        church_logo_url: merged.churchLogoUrl || '',
         campus_name: merged.campusName,
         campus_address: merged.campusAddress,
         campus_location_accuracy_m: merged.campusLocationAccuracyM ?? null,
@@ -4413,6 +4477,7 @@ class PlatformStore {
 
       const orgUpdate: Record<string, unknown> = {
         ...(merged.churchName ? { name: merged.churchName } : {}),
+        ...(patch.churchLogoUrl !== undefined ? { logo_url: merged.churchLogoUrl || null } : {}),
         senior_pastor: merged.seniorPastor || null,
         contact_email: merged.contactEmail || null,
         email: merged.contactEmail || null,
@@ -4473,6 +4538,7 @@ class PlatformStore {
       const memOrg = this.orgs.get(orgId);
       if (memOrg) {
         if (merged.churchName) memOrg.name = merged.churchName;
+        if (patch.churchLogoUrl !== undefined) memOrg.logoUrl = merged.churchLogoUrl || undefined;
         memOrg.seniorPastor = merged.seniorPastor;
         memOrg.contactEmail = merged.contactEmail;
         memOrg.contactPhone = merged.contactPhone;

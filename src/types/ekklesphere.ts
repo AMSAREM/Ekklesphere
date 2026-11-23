@@ -461,6 +461,7 @@ export interface AuditLogItem {
 
 export interface SystemSettings {
   churchName: string;
+  churchLogoUrl?: string;
   campusName: string;
   campusAddress: string;
   campusLatitude: number | null;
@@ -606,6 +607,7 @@ export interface TenantChurch {
   id: string;
   name: string;
   slug: string;
+  logoUrl?: string;
   orgType?: OrganisationType;
   campusCode: string;
   city: string;

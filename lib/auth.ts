@@ -27,6 +27,7 @@ export interface AuthUserPayload {
   campus_id?: string;
   name?: string;
   designation?: string;
+  avatar?: string;
   is_creator?: boolean;
   auth_provider?: 'supabase' | 'session_jwt';
   sid?: string;
