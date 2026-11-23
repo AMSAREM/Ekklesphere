@@ -922,6 +922,15 @@ export interface LandingLeadRecord {
   updatedAt: string;
 }
 
+export interface PublicEnrolledChurch {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl?: string;
+  city?: string;
+  country?: string;
+}
+
 export interface PublicLandingOverview {
   landingConfig: LandingPageConfig;
   plans: ConsolePlan[];
@@ -930,6 +939,7 @@ export interface PublicLandingOverview {
     activeSitesCount: number;
     totalCheckinsRecorded: number;
   };
+  activeChurches?: PublicEnrolledChurch[];
 }
 
 export interface ChurchWallPost {

@@ -11,7 +11,12 @@ import { LandingDemoBanner } from './LandingDemoBanner';
 import { LandingFooter } from './LandingFooter';
 import { LandingDemoModal, LandingQuickPanel } from './LandingModals';
 import { isSafeAppRouteTarget } from '../../utils/authRoute';
-import type { ConsolePlan, LandingPageConfig, PublicLandingOverview } from '../../types/ekklesphere';
+import type {
+  ConsolePlan,
+  LandingPageConfig,
+  PublicEnrolledChurch,
+  PublicLandingOverview,
+} from '../../types/ekklesphere';
 
 interface PublicLandingPageProps {
   onNavigate?: (path: string) => void;
@@ -24,6 +29,8 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
   const [landingConfig, setLandingConfig] = useState<LandingPageConfig | null>(null);
   const [plans, setPlans] = useState<ConsolePlan[]>([]);
   const [liveStats, setLiveStats] = useState<PublicLandingOverview['liveStats'] | null>(null);
+  const [activeChurches, setActiveChurches] = useState<PublicEnrolledChurch[]>([]);
+  const [isLoadingOverview, setIsLoadingOverview] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,8 +43,11 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
         if (data.landingConfig) setLandingConfig(data.landingConfig);
         if (Array.isArray(data.plans)) setPlans(data.plans);
         if (data.liveStats) setLiveStats(data.liveStats);
+        if (Array.isArray(data.activeChurches)) setActiveChurches(data.activeChurches);
       } catch {
-        // Fallback gracefully to static copy when offline
+        // Fallback gracefully when offline
+      } finally {
+        if (!cancelled) setIsLoadingOverview(false);
       }
     };
     loadOverview();
@@ -80,7 +90,11 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
           landingConfig={landingConfig}
           liveStats={liveStats}
         />
-        <LandingTrustStrip />
+        <LandingTrustStrip
+          activeChurches={activeChurches}
+          isLoading={isLoadingOverview}
+          onNavigate={handleNavigate}
+        />
         <LandingPlatformSection />
         <LandingMomentsSlider />
         <LandingWorkflowSection onOpenDemo={() => openModal('demo')} />

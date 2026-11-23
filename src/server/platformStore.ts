@@ -80,6 +80,7 @@ import type {
   Person,
   PlatformAnnouncement,
   PlatformFeatureFlag,
+  PublicEnrolledChurch,
   PublicLandingOverview,
   ServiceAbsenceSweepResult,
   SupportGrantSession,
@@ -8667,6 +8668,11 @@ class PlatformStore {
             id: oid,
             name: String(row.name),
             slug: String(row.slug),
+            logoUrl: row.logo_url
+              ? String(row.logo_url)
+              : settings.church_logo_url
+              ? String(settings.church_logo_url)
+              : undefined,
             orgType: (settings.org_type || row.org_type || 'church') as OrganisationType,
             campusCode: settings.campus_code || row.campus_code || String(row.slug).slice(0, 8).toUpperCase(),
             city: settings.city || row.city || 'Accra',
@@ -11081,18 +11087,30 @@ class PlatformStore {
       this.listUsageDaily(undefined, 90),
     ]);
 
-    const activeOrgs = orgs.filter((o) => o.status !== 'archived' && o.status !== 'suspended');
-    const activeSitesCount = activeOrgs.reduce((acc, o) => acc + (o.sitesCount || 0), 0);
+    const enrolledActiveOrgs = orgs.filter(
+      (o) => o.status === 'active' && Boolean(o.name && o.name.trim())
+    );
+    const activeSitesCount = enrolledActiveOrgs.reduce((acc, o) => acc + (o.sitesCount || 0), 0);
     const totalCheckinsRecorded = usage.reduce((acc, u) => acc + (u.checkinsCount || 0), 0);
+
+    const activeChurches: PublicEnrolledChurch[] = enrolledActiveOrgs.map((o) => ({
+      id: o.id,
+      name: o.name.trim(),
+      slug: o.slug,
+      ...(o.logoUrl ? { logoUrl: o.logoUrl } : {}),
+      ...(o.city ? { city: o.city } : {}),
+      ...(o.country ? { country: o.country } : {}),
+    }));
 
     return {
       landingConfig,
       plans: allPlans.filter((p) => p.isActive),
       liveStats: {
-        activeChurchesCount: activeOrgs.length,
+        activeChurchesCount: enrolledActiveOrgs.length,
         activeSitesCount,
         totalCheckinsRecorded,
       },
+      activeChurches,
     };
   }
 

@@ -43,7 +43,7 @@ describe('Landing Page <-> Supabase <-> Creator Console Bridge', () => {
     expect(sql).toContain('landing_cms_config');
   });
 
-  it('serves live CMS copy, commercial plans, and aggregate stats on /api/public/landing-overview without PII', async () => {
+  it('serves live CMS copy, commercial plans, and active enrolled churches on /api/public/landing-overview without PII', async () => {
     const res = await request(app).get('/api/public/landing-overview');
     expect(res.status).toBe(200);
     expect(res.body.landingConfig).toBeTruthy();
@@ -51,14 +51,75 @@ describe('Landing Page <-> Supabase <-> Creator Console Bridge', () => {
     expect(res.body.plans.length).toBeGreaterThanOrEqual(3);
     expect(res.body.liveStats).toBeDefined();
     expect(typeof res.body.liveStats.activeChurchesCount).toBe('number');
+    expect(Array.isArray(res.body.activeChurches)).toBe(true);
+    expect(res.body.activeChurches.length).toBe(res.body.liveStats.activeChurchesCount);
 
     const serialized = JSON.stringify(res.body);
     expect(serialized).not.toContain('passwordHash');
     expect(serialized).not.toContain('phoneE164');
+    expect(serialized).not.toContain('contactEmail');
+    expect(serialized).not.toContain('contactPhone');
 
     const legacyRes = await request(app).get('/api/landing-config');
     expect(legacyRes.status).toBe(200);
     expect(legacyRes.body.landingConfig?.heroTitle).toBe(res.body.landingConfig.heroTitle);
+  });
+
+  it('excludes non-active (trial/suspended/archived) organisations from activeChurches on /api/public/landing-overview', async () => {
+    const signupRes = await request(app).post('/api/auth/register-organisation').send({
+      organizationName: 'Trial Only Chapel',
+      orgType: 'church',
+      city: 'Takoradi',
+      country: 'Ghana',
+      adminFirstName: 'Kwame',
+      adminLastName: 'Mensah',
+      email: 'trial-chapel@example.org',
+      password: 'StrongPassword123!',
+      trialPlan: 'grace_starter',
+    });
+    expect(signupRes.status).toBe(201);
+    const trialOrgId = signupRes.body.organization?.id as string;
+    expect(trialOrgId).toBeTruthy();
+
+    const beforeRes = await request(app).get('/api/public/landing-overview');
+    expect(beforeRes.status).toBe(200);
+    const beforeNames = (beforeRes.body.activeChurches as Array<{ name: string }>).map((c) => c.name);
+    expect(beforeNames).not.toContain('Trial Only Chapel');
+
+    const activateRes = await request(app)
+      .patch(`/api/console/organisations/${trialOrgId}`)
+      .set('Authorization', `Bearer ${creatorToken}`)
+      .send({ status: 'active' });
+    expect(activateRes.status).toBe(200);
+
+    const afterRes = await request(app).get('/api/public/landing-overview');
+    expect(afterRes.status).toBe(200);
+    const activeChurches = afterRes.body.activeChurches as Array<{
+      id: string;
+      name: string;
+      slug: string;
+      city?: string;
+      country?: string;
+      contactEmail?: string;
+    }>;
+    const activated = activeChurches.find((c) => c.id === trialOrgId);
+    expect(activated).toBeDefined();
+    expect(activated?.name).toBe('Trial Only Chapel');
+    expect(activated?.city).toBe('Takoradi');
+    expect(activated?.contactEmail).toBeUndefined();
+
+    const suspendRes = await request(app)
+      .patch(`/api/console/organisations/${trialOrgId}`)
+      .set('Authorization', `Bearer ${creatorToken}`)
+      .send({ status: 'suspended' });
+    expect(suspendRes.status).toBe(200);
+
+    const afterSuspendRes = await request(app).get('/api/public/landing-overview');
+    expect(afterSuspendRes.status).toBe(200);
+    const afterSuspendNames = (afterSuspendRes.body.activeChurches as Array<{ name: string }>).map(
+      (c) => c.name
+    );
+    expect(afterSuspendNames).not.toContain('Trial Only Chapel');
   });
 
   it('reflects Creator Console CMS edits immediately on /api/public/landing-overview', async () => {

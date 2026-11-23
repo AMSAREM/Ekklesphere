@@ -8848,6 +8848,7 @@ var PlatformStore = class {
             id: oid,
             name: String(row.name),
             slug: String(row.slug),
+            logoUrl: row.logo_url ? String(row.logo_url) : settings.church_logo_url ? String(settings.church_logo_url) : void 0,
             orgType: settings.org_type || row.org_type || "church",
             campusCode: settings.campus_code || row.campus_code || String(row.slug).slice(0, 8).toUpperCase(),
             city: settings.city || row.city || "Accra",
@@ -10643,17 +10644,28 @@ var PlatformStore = class {
       this.listOrganisations(),
       this.listUsageDaily(void 0, 90)
     ]);
-    const activeOrgs = orgs.filter((o) => o.status !== "archived" && o.status !== "suspended");
-    const activeSitesCount = activeOrgs.reduce((acc, o) => acc + (o.sitesCount || 0), 0);
+    const enrolledActiveOrgs = orgs.filter(
+      (o) => o.status === "active" && Boolean(o.name && o.name.trim())
+    );
+    const activeSitesCount = enrolledActiveOrgs.reduce((acc, o) => acc + (o.sitesCount || 0), 0);
     const totalCheckinsRecorded = usage.reduce((acc, u) => acc + (u.checkinsCount || 0), 0);
+    const activeChurches = enrolledActiveOrgs.map((o) => ({
+      id: o.id,
+      name: o.name.trim(),
+      slug: o.slug,
+      ...o.logoUrl ? { logoUrl: o.logoUrl } : {},
+      ...o.city ? { city: o.city } : {},
+      ...o.country ? { country: o.country } : {}
+    }));
     return {
       landingConfig,
       plans: allPlans.filter((p) => p.isActive),
       liveStats: {
-        activeChurchesCount: activeOrgs.length,
+        activeChurchesCount: enrolledActiveOrgs.length,
         activeSitesCount,
         totalCheckinsRecorded
-      }
+      },
+      activeChurches
     };
   }
   // ===========================================================================
@@ -16076,7 +16088,8 @@ app.get(["/api/landing-config", "/api/public/landing-overview"], async (_req, re
     return res.status(200).json({
       landingConfig,
       plans: [],
-      liveStats: { activeChurchesCount: 0, activeSitesCount: 0, totalCheckinsRecorded: 0 }
+      liveStats: { activeChurchesCount: 0, activeSitesCount: 0, totalCheckinsRecorded: 0 },
+      activeChurches: []
     });
   }
 });

@@ -1065,6 +1065,7 @@ app.get(['/api/landing-config', '/api/public/landing-overview'], async (_req: Re
       landingConfig,
       plans: [],
       liveStats: { activeChurchesCount: 0, activeSitesCount: 0, totalCheckinsRecorded: 0 },
+      activeChurches: [],
     });
   }
 });
