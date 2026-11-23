@@ -217,10 +217,65 @@ const EkklesphereMain: React.FC = () => {
   );
 };
 
+interface AppErrorBoundaryState {
+  hasError: boolean;
+}
+
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  AppErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): AppErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen w-full flex items-center justify-center bg-[#F8F9FD] dark:bg-[#0D0D22] text-[#1D1B3A] dark:text-[#F2F2FA] p-4">
+          <div className="max-w-md w-full rounded-3xl bg-white dark:bg-[#1C1C3C] border border-[#E3E5F2] dark:border-[#2D2D55] p-6 shadow-xl text-center space-y-4">
+            <h1 className="text-lg font-bold">Something went wrong</h1>
+            <p className="text-xs text-[#5B5F7A] dark:text-[#A9ACC8]">
+              An unexpected display issue interrupted this view. Reloading the portal restores your session cleanly.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="px-4 py-2.5 rounded-xl bg-[#6D5CF2] hover:bg-[#5B4BE0] text-white text-xs font-bold cursor-pointer"
+              >
+                Reload App
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  this.setState({ hasError: false });
+                  window.history.replaceState({}, '', '/app?auth=login');
+                }}
+                className="px-4 py-2.5 rounded-xl border border-[#E3E5F2] dark:border-[#2D2D55] text-xs font-bold cursor-pointer"
+              >
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <EkklesphereProvider>
-      <EkklesphereMain />
-    </EkklesphereProvider>
+    <AppErrorBoundary>
+      <EkklesphereProvider>
+        <EkklesphereMain />
+      </EkklesphereProvider>
+    </AppErrorBoundary>
   );
 }

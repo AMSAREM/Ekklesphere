@@ -223,6 +223,11 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, isSaving, onClose]);
 
+  const autoDemographicPreview = useMemo(
+    () => resolveAutomaticDemographicMinistries({ gender, dateOfBirth }),
+    [gender, dateOfBirth]
+  );
+
   if (!isOpen) return null;
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -324,11 +329,6 @@ export const MemberProfileEditorModal: React.FC<MemberProfileEditorModalProps> =
       setIsSaving(false);
     }
   };
-
-  const autoDemographicPreview = useMemo(
-    () => resolveAutomaticDemographicMinistries({ gender, dateOfBirth }),
-    [gender, dateOfBirth]
-  );
 
   const groupLeadPreview = findMatchingChurchGroup(churchGroups, {
     groupName: homeCellGroup,

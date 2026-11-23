@@ -1,6 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import {
   isSupabaseBrowserConfigured,
   signInWithSupabaseGoogle,
@@ -2963,49 +2961,64 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const refreshMembers = async (): Promise<void> => {
+    const activeUser = currentUserRef.current || currentUser;
     const token =
-      currentUser?.token ||
+      activeUser?.token ||
       (typeof window !== 'undefined' ? localStorage.getItem('ekklesphere_token') : null);
     if (!token) return;
 
+    const effectiveRole = activeUser?.verifiedRole || activeUser?.role;
+    const canListDirectory =
+      Boolean(activeUser?.is_creator) ||
+      effectiveRole === 'admin' ||
+      effectiveRole === 'pastor' ||
+      effectiveRole === 'usher' ||
+      effectiveRole === 'group_leader' ||
+      effectiveRole === 'super_admin' ||
+      effectiveRole === 'creator';
+
     try {
-      const res = await fetch('/api/members', { headers: getAuthHeaders() });
-      if (handleUnauthorizedSession(res.status)) return;
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const normalized = data.map((item) => normalizePersonRecord(item));
-          setMembers(normalized);
-          try {
-            localStorage.setItem('ekklesphere_members', JSON.stringify(normalized));
-          } catch {
-            // ignore
+      if (canListDirectory) {
+        const res = await fetch('/api/members', { headers: getAuthHeaders() });
+        if (handleUnauthorizedSession(res.status)) return;
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            const normalized = data.map((item) => normalizePersonRecord(item));
+            setMembers(normalized);
+            try {
+              localStorage.setItem('ekklesphere_members', JSON.stringify(normalized));
+            } catch {
+              // ignore
+            }
+            return;
           }
-          return;
-        }
-      } else if (res.status === 403) {
-        const selfRes = await fetch('/api/members/me/profile', { headers: getAuthHeaders() });
-        if (handleUnauthorizedSession(selfRes.status)) return;
-        if (selfRes.ok) {
-          const selfData = await selfRes.json().catch(() => null);
-          if (selfData?.profile) {
-            const normalizedSelf = normalizePersonRecord(selfData.profile);
-            setMembers((prev) => {
-              const next = prev.some((m) => m.id === normalizedSelf.id)
-                ? prev.map((m) => (m.id === normalizedSelf.id ? normalizedSelf : m))
-                : [normalizedSelf];
-              try {
-                localStorage.setItem('ekklesphere_members', JSON.stringify(next));
-              } catch {
-                // ignore
-              }
-              return next;
-            });
-          }
+        } else if (res.status !== 403) {
           return;
         }
       }
-    } catch (err) {
+
+      const selfRes = await fetch('/api/members/me/profile', { headers: getAuthHeaders() });
+      if (handleUnauthorizedSession(selfRes.status)) return;
+      if (selfRes.ok) {
+        const selfData = await selfRes.json().catch(() => null);
+        if (selfData?.profile) {
+          const normalizedSelf = normalizePersonRecord(selfData.profile);
+          setMembers((prev) => {
+            const next = prev.some((m) => m.id === normalizedSelf.id)
+              ? prev.map((m) => (m.id === normalizedSelf.id ? normalizedSelf : m))
+              : [normalizedSelf];
+            try {
+              localStorage.setItem('ekklesphere_members', JSON.stringify(next));
+            } catch {
+              // ignore
+            }
+            return next;
+          });
+        }
+        return;
+      }
+    } catch {
       // transient network warning
     }
 
@@ -3101,11 +3114,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         joinedOn: new Date().toISOString().split('T')[0],
       } as Person;
     }
-
-    // Direct write to Firestore as cloud backup
-    try {
-      setDoc(doc(db, 'members', savedPerson.id), savedPerson, { merge: true }).catch(() => {});
-    } catch {}
 
     setMembers((prev) => {
       const updated = [savedPerson!, ...prev.filter((m) => m.id !== savedPerson!.id)];
@@ -3224,11 +3232,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const onboardingCredentials = savedPerson.onboardingCredentials;
     const personForStorage: Person = { ...savedPerson };
     delete personForStorage.onboardingCredentials;
-
-    // Direct write to Firestore as cloud backup
-    try {
-      setDoc(doc(db, 'members', personForStorage.id), personForStorage, { merge: true }).catch(() => {});
-    } catch {}
 
     setMembers((prev) => {
       const updated = [personForStorage, ...prev.filter((m) => m.id !== personForStorage.id)];
@@ -3401,9 +3404,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
           });
           nextMembers.unshift(created);
           importedCount += 1;
-          try {
-            setDoc(doc(db, 'members', created.id), created, { merge: true }).catch(() => {});
-          } catch {}
         } else if (row.action === 'update' && row.matchedMemberId) {
           const idx = nextMembers.findIndex((m) => m.id === row.matchedMemberId);
           if (idx >= 0) {
@@ -3414,9 +3414,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
             });
             nextMembers[idx] = merged;
             updatedCount += 1;
-            try {
-              setDoc(doc(db, 'members', merged.id), merged, { merge: true }).catch(() => {});
-            } catch {}
           }
         } else if (row.action === 'skip') {
           skippedCount += 1;
@@ -3668,11 +3665,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       updatedPerson = normalizePersonRecord(mergedPayload as Person);
     }
 
-    // Direct write to Firestore as cloud backup
-    try {
-      setDoc(doc(db, 'members', updatedPerson.id), updatedPerson, { merge: true }).catch(() => {});
-    } catch {}
-
     upsertMemberLocally(updatedPerson, memberId);
     syncCurrentUserWithUpdatedMember(updatedPerson, memberId);
 
@@ -3710,11 +3702,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       showToast('Network error deleting member from database.');
       return;
     }
-
-    // Delete from Firestore mirror if configured
-    try {
-      deleteDoc(doc(db, 'members', memberId)).catch(() => {});
-    } catch {}
 
     setMembers((prev) => {
       const updated = prev.filter((m) => m.id !== memberId);
@@ -4249,25 +4236,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       };
     }
 
-    // Direct write to Firestore as cloud backup
-    try {
-      setDoc(doc(db, 'events', created.id), {
-        id: created.id,
-        serviceId: created.serviceId,
-        campusId: created.campusId,
-        name: created.name,
-        date: created.date,
-        startsAt: created.startsAt,
-        endsAt: created.endsAt,
-        startTimeIso: created.startTimeIso || localStart.toISOString(),
-        endTimeIso: created.endTimeIso || localEnd.toISOString(),
-        status: created.status,
-        expectedAttendance: created.expectedAttendance,
-        dwellMinutes: allowanceMinutes,
-        createdAt: new Date().toISOString(),
-      }, { merge: true }).catch(() => {});
-    } catch {}
-
     setServiceClockMs(Date.now());
     setRawServices((prev) => {
       const withoutPlaceholder = prev.filter((s) => !isPlaceholderServiceId(s.id));
@@ -4419,26 +4387,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
       nowMs: Date.now(),
     });
 
-    try {
-      setDoc(
-        doc(db, 'events', mappedUpdated.id),
-        {
-          id: mappedUpdated.id,
-          name: mappedUpdated.name,
-          date: mappedUpdated.date,
-          startsAt: mappedUpdated.startsAt,
-          endsAt: mappedUpdated.endsAt,
-          startTimeIso: mappedUpdated.startTimeIso,
-          endTimeIso: mappedUpdated.endTimeIso,
-          dwellMinutes: allowanceMinutes,
-          status: updatedBinaryStatus === 'live' ? 'open' : 'closed',
-          expectedAttendance: mappedUpdated.expectedAttendance,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ).catch(() => {});
-    } catch {}
-
     setServiceClockMs(Date.now());
     setRawServices((prev) => {
       const hasOriginal = prev.some((s) => s.id === serviceId);
@@ -4509,10 +4457,6 @@ export const EkklesphereProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return;
       }
     }
-
-    try {
-      deleteDoc(doc(db, 'events', serviceId)).catch(() => {});
-    } catch {}
 
     setRawServices((prev) => {
       const updated = prev.filter((s) => s.id !== serviceId);
